@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sigma fp Bridge — Test Panel</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "PingFang TC", sans-serif;
+    margin: 0; padding: 24px;
+    background: #1a1a1a; color: #e0e0e0;
+  }
+  h1 { font-size: 20px; margin: 0 0 8px; color: #fff; }
+  h2 { font-size: 14px; margin: 24px 0 8px; color: #ccc; text-transform: uppercase; letter-spacing: 0.05em; }
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  .panel {
+    background: #252525;
+    border: 1px solid #333;
+    border-radius: 8px;
+    padding: 16px;
+  }
+  .status {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 12px;
+    margin-left: 8px;
+  }
+  .status.ok { background: #1e5e2e; color: #d0ffd6; }
+  .status.bad { background: #5e1e1e; color: #ffd0d0; }
+  .status.idle { background: #3a3a3a; color: #b0b0b0; }
+  .status.moving { background: #5e4e1e; color: #fffbd0; }
+  .liveview {
+    width: 100%;
+    aspect-ratio: 3/2;
+    background: #000;
+    border-radius: 4px;
+    object-fit: contain;
+  }
+  .field {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 0;
+    border-bottom: 1px solid #333;
+    font-size: 13px;
+  }
+  .field:last-child { border-bottom: none; }
+  .field span:first-child { color: #888; }
+  .field span:last-child { color: #fff; font-family: SF Mono, monospace; }
+  button {
+    background: #444;
+    color: #fff;
+    border: none;
+    padding: 8px 14px;
+    border-radius: 4px;
+    font-size: 13px;
+    cursor: pointer;
+    margin: 4px 4px 4px 0;
+  }
+  button:hover { background: #555; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  button.primary { background: #2563eb; }
+  button.primary:hover { background: #1d4ed8; }
+  button.danger { background: #7f1d1d; }
+  input[type="number"], input[type="text"] {
+    background: #1a1a1a;
+    color: #fff;
+    border: 1px solid #444;
+    padding: 6px 8px;
+    border-radius: 4px;
+    font-size: 13px;
+    font-family: SF Mono, monospace;
+    width: 100px;
+  }
+  input[type="range"] {
+    width: 100%;
+    accent-color: #2563eb;
+  }
+  .log {
+    background: #111;
+    border: 1px solid #333;
+    border-radius: 4px;
+    padding: 8px;
+    font-family: SF Mono, monospace;
+    font-size: 11px;
+    height: 180px;
+    overflow-y: auto;
+    color: #999;
+  }
+  .log .row {
+    padding: 2px 0;
+    border-bottom: 1px solid #1a1a1a;
+  }
+  .log .row.send { color: #88c8ff; }
+  .log .row.recv { color: #aaeeaa; }
+  .log .row.err { color: #ff8888; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th, td { padding: 4px 8px; text-align: left; border-bottom: 1px solid #333; }
+  th { color: #888; }
+</style>
+</head>
+<body>
+<div class="grid">
+
+  <!-- 左：Live view + Focus -->
+  <div>
+    <h1>Sigma fp Bridge<span id="conn-status" class="status idle">connecting…</span></h1>
+    <img id="liveview" class="liveview" src="/liveview.mjpeg" alt="Live view">
+
+    <div class="panel" style="margin-top:16px">
+      <h2>Camera Status</h2>
+      <div class="field"><span>Focus Position</span><span id="f-pos">—</span></div>
+      <div class="field"><span>Focus State</span><span id="f-state">—</span></div>
+      <div class="field"><span>Focus Mode</span><span id="f-mode">—</span></div>
+      <div class="field"><span>Focal Length</span><span id="f-len">—</span></div>
+      <div class="field"><span>Active Lens ID</span><span id="f-lens">—</span></div>
+      <div class="field"><span>Calibration Points</span><span id="f-cal">—</span></div>
+    </div>
+  </div>
+
+  <!-- 右：控制 -->
+  <div>
+    <div class="panel">
+      <h2>Set Focus Position (raw)</h2>
+      <div style="font-size:12px; color:#888; margin-bottom:6px">
+        Camera 當前: <span id="pos-current" style="color:#aaeeaa">—</span>　|
+        你的目標: <span id="pos-target" style="color:#88c8ff">—</span>
+      </div>
+      <div style="display:flex; gap:8px; align-items:center">
+        <input type="number" id="pos-input" value="500" step="10"
+               oninput="markInputUsed(); syncTarget()"
+               onfocus="markInputUsed()">
+        <button class="primary" onclick="setPos()">Set</button>
+        <button onclick="syncFromCamera()" title="從相機抓當前值">↓ from cam</button>
+      </div>
+      <input type="range" id="pos-slider" min="0" max="2000" value="500" step="10" style="margin-top:12px"
+             oninput="markSliderUsed(); document.getElementById('pos-input').value=this.value; syncTarget()"
+             onmousedown="markSliderUsed()"
+             ontouchstart="markSliderUsed()"
+             onchange="markSliderUsed(); setPos()">
+      <div style="margin-top:8px">
+        <button onclick="step(-10)">−10</button>
+        <button onclick="step(-100)">−100</button>
+        <button onclick="step(100)">+100</button>
+        <button onclick="step(10)">+10</button>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:16px">
+      <h2>Set By Distance (uses calibration)</h2>
+      <div style="display:flex; gap:8px; align-items:center">
+        <input type="number" id="dist-input" value="2.0" step="0.1">
+        <span>m</span>
+        <button class="primary" onclick="setDistance()">Focus</button>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:16px">
+      <h2>Calibration</h2>
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px">
+        <input type="text" id="lens-id" placeholder="鏡頭 ID（如 17mm_dgdn）" style="width:200px">
+        <button onclick="setLens()">Switch</button>
+      </div>
+      <table id="cal-table">
+        <thead><tr><th>距離 (m)</th><th>Position</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div style="margin-top:8px; display:flex; gap:8px; align-items:center">
+        <input type="number" id="cal-dist" placeholder="距離" step="0.1" style="width:80px">
+        <input type="number" id="cal-pos" placeholder="當前 pos" style="width:100px">
+        <button onclick="useCurrentPos()">↑ 用當前位置</button>
+        <button class="primary" onclick="addCal()">+ Add</button>
+        <button class="danger" onclick="clearCal()">Clear All</button>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:16px">
+      <h2>WebSocket Log</h2>
+      <div id="log" class="log"></div>
+    </div>
+  </div>
+
+</div>
+
+<script>
+let ws = null;
+const log = document.getElementById('log');
+
+function logRow(text, cls = '') {
+  const row = document.createElement('div');
+  row.className = 'row ' + cls;
+  row.textContent = `[${new Date().toLocaleTimeString()}] ${text}`;
+  log.appendChild(row);
+  log.scrollTop = log.scrollHeight;
+  while (log.children.length > 200) log.removeChild(log.firstChild);
+}
+
+function connectWS() {
+  const url = `ws://${location.host}/ws`;
+  ws = new WebSocket(url);
+  ws.onopen = () => {
+    logRow('WS connected', 'recv');
+    setConn(true);
+    send({cmd: 'calibration_get'});
+  };
+  ws.onclose = () => {
+    logRow('WS disconnected, retrying in 2s…', 'err');
+    setConn(false);
+    setTimeout(connectWS, 2000);
+  };
+  ws.onerror = (e) => logRow('WS error', 'err');
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'state') {
+      updateState(msg);
+    } else if (msg.type === 'calibration') {
+      renderCalibration(msg);
+    } else if (msg.type === 'ack') {
+      logRow('ack: ' + JSON.stringify(msg), 'recv');
+    } else if (msg.type === 'error') {
+      logRow('err: ' + msg.error, 'err');
+    } else {
+      logRow('recv: ' + e.data, 'recv');
+    }
+  };
+}
+
+function send(obj) {
+  if (!ws || ws.readyState !== WebSocket.OPEN) {
+    logRow('WS not ready', 'err');
+    return;
+  }
+  obj.id = Math.floor(Math.random() * 1e6);
+  ws.send(JSON.stringify(obj));
+  logRow('send: ' + JSON.stringify(obj), 'send');
+}
+
+function setConn(ok) {
+  const el = document.getElementById('conn-status');
+  if (ok) { el.textContent = 'connected'; el.className = 'status ok'; }
+  else { el.textContent = 'disconnected'; el.className = 'status bad'; }
+}
+
+// 追蹤使用者有沒有正在跟 slider 互動
+let userInteractingSlider = false;
+let userInteractingInput = false;
+const slider = () => document.getElementById('pos-slider');
+const input = () => document.getElementById('pos-input');
+
+// 自動成長 slider max
+function maybeGrowSliderMax(observed) {
+  const s = slider();
+  const headroom = 1000;
+  if (observed > parseInt(s.max) - headroom) {
+    s.max = Math.ceil((observed + headroom) / 1000) * 1000;
+  }
+  // 也讓 min 可以是負（極少數情況）
+  if (observed < parseInt(s.min)) {
+    s.min = Math.floor(observed / 1000) * 1000;
+  }
+}
+
+function updateState(msg) {
+  document.getElementById('f-pos').textContent = msg.focus_position ?? '—';
+  document.getElementById('f-state').textContent =
+    msg.focus_state === 0 ? 'Idle' : msg.focus_state === 1 ? 'Moving' : '—';
+  document.getElementById('f-mode').textContent = msg.focus_mode ?? '—';
+  const stateEl = document.getElementById('f-state');
+  stateEl.className = msg.focus_state === 1 ? 'status moving' : 'status idle';
+  document.getElementById('f-len').textContent = msg.focal_length_mm ? msg.focal_length_mm + ' mm' : '—';
+  document.getElementById('f-lens').textContent = msg.active_lens_id ?? '—';
+  document.getElementById('f-cal').textContent = msg.calibration_points ?? '—';
+  document.getElementById('pos-current').textContent = msg.focus_position ?? '—';
+
+  if (msg.focus_position != null) {
+    maybeGrowSliderMax(msg.focus_position);
+    // 只有「使用者沒在拖 slider / 沒在打 input」時才同步
+    if (!userInteractingSlider && !userInteractingInput) {
+      slider().value = msg.focus_position;
+      input().value = msg.focus_position;
+      syncTarget();
+    }
+  }
+}
+
+function syncTarget() {
+  document.getElementById('pos-target').textContent = input().value;
+}
+
+function syncFromCamera() {
+  const cur = document.getElementById('pos-current').textContent;
+  if (cur && cur !== '—') {
+    input().value = cur;
+    slider().value = cur;
+    syncTarget();
+  }
+}
+
+// 使用者一旦碰 slider/input 就標記，5 秒後解除
+let inputIdleTimer = null;
+function markInputUsed() {
+  userInteractingInput = true;
+  clearTimeout(inputIdleTimer);
+  inputIdleTimer = setTimeout(() => { userInteractingInput = false; }, 5000);
+}
+let sliderIdleTimer = null;
+function markSliderUsed() {
+  userInteractingSlider = true;
+  clearTimeout(sliderIdleTimer);
+  sliderIdleTimer = setTimeout(() => { userInteractingSlider = false; }, 5000);
+}
+
+function renderCalibration(msg) {
+  document.getElementById('f-lens').textContent = msg.active_lens_id;
+  const tbody = document.querySelector('#cal-table tbody');
+  tbody.innerHTML = '';
+  for (const [d, p] of msg.table || []) {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${d}</td><td>${p}</td><td></td>`;
+    tbody.appendChild(tr);
+  }
+}
+
+function setPos() {
+  const pos = parseInt(document.getElementById('pos-input').value);
+  send({cmd: 'set_position', position: pos});
+}
+
+function step(delta) {
+  const cur = parseInt(document.getElementById('pos-input').value) || 0;
+  document.getElementById('pos-input').value = cur + delta;
+  document.getElementById('pos-slider').value = cur + delta;
+  setPos();
+}
+
+function setDistance() {
+  const d = parseFloat(document.getElementById('dist-input').value);
+  send({cmd: 'set_distance', distance: d});
+}
+
+function useCurrentPos() {
+  const cur = document.getElementById('f-pos').textContent;
+  if (cur !== '—') document.getElementById('cal-pos').value = cur;
+}
+
+function addCal() {
+  const d = parseFloat(document.getElementById('cal-dist').value);
+  const p = parseInt(document.getElementById('cal-pos').value);
+  if (isNaN(d) || isNaN(p)) { alert('需要填距離跟 position'); return; }
+  send({cmd: 'calibration_add', distance: d, position: p});
+  document.getElementById('cal-dist').value = '';
+  document.getElementById('cal-pos').value = '';
+  setTimeout(() => send({cmd: 'calibration_get'}), 200);
+}
+
+function clearCal() {
+  if (!confirm('確定清空目前鏡頭的校準表？')) return;
+  send({cmd: 'calibration_clear'});
+  setTimeout(() => send({cmd: 'calibration_get'}), 200);
+}
+
+function setLens() {
+  const id = document.getElementById('lens-id').value.trim();
+  if (!id) return;
+  send({cmd: 'set_active_lens', lens_id: id});
+  setTimeout(() => send({cmd: 'calibration_get'}), 200);
+}
+
+connectWS();
+</script>
+</body>
+</html>

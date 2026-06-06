@@ -1,0 +1,4 @@
+sigma-ptpy @ git+https://github.com/makanikai/sigma-ptpy.git
+aiohttp>=3.9
+zeroconf>=0.131
+pyusb>=1.2
