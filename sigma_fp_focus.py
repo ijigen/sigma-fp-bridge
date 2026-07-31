@@ -15,6 +15,7 @@ Sigma fp / fp L 鏡頭焦點位置控制 PoC
   sudo python3 sigma_fp_focus.py        # Linux 需要 sudo（USB raw access）
   python3 sigma_fp_focus.py             # macOS / Windows 通常不用
   python3 sigma_fp_focus.py --dump-info5  # dump CanSetInfo5 原始 bytes（找焦點範圍用）
+  python3 sigma_fp_focus.py --dump-movie  # dump DataGroupMovie（找錄影格式用，需切到 CINE）
 
 注意事項：
   - 不確定 Focus Position 範圍時，先用 dry_run() 探索
@@ -455,6 +456,72 @@ def dump_info5(cam: SigmaPTPy) -> None:
         )
 
 
+def read_movie_group_raw(cam: SigmaPTPy) -> bytes:
+    """發 SigmaGetCamDataGroupMovie (0x9033)，取回原始 payload。
+
+    sigma-ptpy 定義了這個 opcode，但既沒有對應的 schema class 也沒有高階
+    方法 —— 跟當初 FocusPosition 的處境一樣。這裡自己組 Container 送，
+    拿回 IFD 原始 bytes 交給 ifd.py 解析。
+
+    錄影相關的設定（RecordFormat / CinemaDNG 畫質 / 解析度 / FrameRate）
+    很可能就在這個 DataGroup 裡，但它內部的 tag 編號是未知的 —— 不會跟
+    CanSetInfo5 一樣（對照組：DataGroupFocus 用 tag 1/2/81，CanSetInfo5
+    的同一批項目卻編成 600/601/612）。所以得先 dump 出來看。
+
+    只讀不寫。
+    """
+    from construct import Container
+
+    ptp = Container(
+        OperationCode="SigmaGetCamDataGroupMovie",
+        SessionID=cam._session,
+        TransactionID=cam._transaction,
+        Parameter=[],
+    )
+    response = cam.recv(ptp)
+    return bytes(response.Data)
+
+
+def dump_movie_group(cam: SigmaPTPy) -> None:
+    """把 DataGroupMovie 的原始 bytes 與解析結果印出來。
+
+    這是探勘工具，用途跟 --dump-info5 一樣：先看清楚相機回什麼，
+    才有辦法寫 setter。
+    """
+    print("=" * 70)
+    print("CamDataGroupMovie raw dump (opcode 0x9033)")
+    print("=" * 70)
+
+    try:
+        raw = read_movie_group_raw(cam)
+    except Exception as e:
+        print(f"讀取失敗：{type(e).__name__}: {e}")
+        print()
+        print("如果是 OperationNotSupported，代表這台機身 / 韌體不支援這個指令。")
+        print("如果 payload 是空的，試試把機身撥桿切到 CINE 再跑一次 ——")
+        print("CanSetInfo5 的錄影相關 tag 在 STILL 模式下也是空的。")
+        return
+
+    if not raw:
+        print("相機回了空的 payload。")
+        print("把機身撥桿切到 CINE 再跑一次 —— 錄影設定在 STILL 模式下不存在。")
+        return
+
+    try:
+        ifd = parse_ifd(raw)
+    except IFDParseError as e:
+        print(f"⚠ 不是 IFD 結構（{e}），印原始 bytes：")
+        from ifd import hexdump
+        print(hexdump(raw))
+        return
+
+    print(format_ifd(ifd))
+    print()
+    print("-" * 70)
+    print("這些 tag 的意義還未知。要判讀的話：改一項機身設定（例如幀率或")
+    print("錄影格式）再跑一次，比對哪個 tag 的值跟著變 —— 那就是它。")
+
+
 def get_focus_state(cam: SigmaPTPy) -> CamDataGroupFocusExt:
     """讀目前焦點狀態。
 
@@ -609,8 +676,8 @@ def demo_set_focus(cam: SigmaPTPy):
         time.sleep(0.5)
 
 
-def _main_dump_info5() -> int:
-    """--dump-info5 的進入點。只讀不寫，不會動到馬達。"""
+def _main_dump(which: str) -> int:
+    """--dump-info5 / --dump-movie 的共用進入點。只讀不寫，不會動到馬達。"""
     import logging
     import os
 
@@ -633,7 +700,10 @@ def _main_dump_info5() -> int:
         print("     才需要 SIGSTOP 那組 daemon（見 README Gotcha 4）。")
         return 1
     try:
-        dump_info5(cam)
+        if which == "movie":
+            dump_movie_group(cam)
+        else:
+            dump_info5(cam)
     except Exception as e:
         import traceback
         traceback.print_exc()
@@ -652,7 +722,10 @@ if __name__ == '__main__':
         sys.exit(0)
 
     if '--dump-info5' in args:
-        sys.exit(_main_dump_info5())
+        sys.exit(_main_dump("info5"))
+
+    if '--dump-movie' in args:
+        sys.exit(_main_dump("movie"))
 
     print("Sigma fp Focus Position PoC")
     print("---------------------------")

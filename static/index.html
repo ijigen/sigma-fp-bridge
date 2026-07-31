@@ -193,6 +193,15 @@
         <button id="btn-acquire" class="primary" onclick="send({cmd:'acquire'})">Acquire</button>
         <button onclick="send({cmd:'get_settings'})">↻ Reload</button>
       </div>
+      <div style="display:flex; gap:8px; align-items:center; margin-bottom:10px;
+                  padding-bottom:10px; border-bottom:1px solid #333">
+        <span style="font-size:12px; color:#888">Shutter as</span>
+        <button id="btn-shutter-time" onclick="setShutterUnit('time')">Time</button>
+        <button id="btn-shutter-angle" onclick="setShutterUnit('angle')">Angle</button>
+        <span style="font-size:12px; color:#888; margin-left:8px">fps</span>
+        <input type="number" id="fps-input" value="24" step="0.001" style="width:80px"
+               onchange="send({cmd:'set_frame_rate', frame_rate: parseFloat(this.value)})">
+      </div>
       <div id="settings-grid"></div>
     </div>
 
@@ -241,6 +250,7 @@ function connectWS() {
       renderCalibration(msg);
     } else if (msg.type === 'settings_schema') {
       settingsSchema = msg.settings;
+      if (msg.frame_rate) document.getElementById('fps-input').value = msg.frame_rate;
       renderSettings();
     } else if (msg.type === 'settings') {
       settingsValues = msg.settings;
@@ -248,6 +258,10 @@ function connectWS() {
     } else if (msg.type === 'ack') {
       if (msg.settings) { settingsValues = msg.settings; renderSettings(); }
       if (msg.released !== undefined) setTimeout(() => send({cmd: 'get_settings'}), 300);
+      if (msg.frame_rate !== undefined) setTimeout(() => send({cmd: 'get_settings'}), 100);
+      if (msg.shutter_angle !== undefined && msg.requested === undefined) {
+        logRow(`快門角度實際設為 ${msg.shutter_angle}°`, 'recv');
+      }
       if (msg.clamped) {
         logRow(`⚠ ${msg.requested} 超出合法範圍，已修正為 ${msg.position}`, 'err');
       } else {
@@ -391,22 +405,36 @@ function markSliderUsed() {
 let settingsSchema = null;
 let settingsValues = {};
 
+// 快門顯示成秒數還是角度。角度是電影圈的習慣：180° = 曝光佔一個影格的一半。
+let shutterUnit = 'time';
+
+function setShutterUnit(unit) {
+  shutterUnit = unit;
+  document.getElementById('btn-shutter-time').className = unit === 'time' ? 'primary' : '';
+  document.getElementById('btn-shutter-angle').className = unit === 'angle' ? 'primary' : '';
+  renderSettings(true);
+}
+
 function fmtChoice(v, unit) {
   if (unit === 's' && typeof v === 'number' && v > 0 && v < 1) return '1/' + Math.round(1 / v);
   if (unit === 'f') return 'f/' + v;
+  if (unit === 'deg') return v + '°';
   return String(v);
 }
 
-function renderSettings() {
+function renderSettings(force) {
   if (!settingsSchema) return;
   const grid = document.getElementById('settings-grid');
   // 記住焦點，免得 10Hz 狀態更新把使用者正在操作的控制項重繪掉
   const active = document.activeElement && document.activeElement.dataset
     ? document.activeElement.dataset.setting : null;
-  if (active) return;
+  if (active && !force) return;
 
   grid.innerHTML = '';
   for (const s of settingsSchema) {
+    // 快門秒數與角度是同一件事的兩種表示，一次只顯示一個
+    if (s.name === 'shutter_speed' && shutterUnit === 'angle') continue;
+    if (s.name === 'shutter_angle' && shutterUnit !== 'angle') continue;
     const row = document.createElement('div');
     row.className = 'field';
     const label = document.createElement('span');
@@ -519,6 +547,7 @@ function setLens() {
   setTimeout(() => send({cmd: 'calibration_get'}), 200);
 }
 
+setShutterUnit('time');
 connectWS();
 </script>
 </body>

@@ -107,6 +107,60 @@ class SettingError(ValueError):
 
 
 # ─────────────────────────────────────────────────────────────────────
+# 快門角度
+#
+# 電影圈習慣用角度而不是秒數，因為角度跟幀率綁在一起才有意義：
+# 180° 表示「曝光時間佔一個影格的一半」，換到任何幀率都維持同樣的動態模糊。
+#
+#     角度 = 360 × 曝光秒數 × 幀率
+#     秒數 = 角度 / (360 × 幀率)
+#
+# 協定裡沒有獨立的「快門角度」欄位可寫（CanSetInfo5 的 tag 214 ShutterAngle
+# 只是能力回報）。所以這裡把角度換算成秒數，再走一般的 ShutterSpeed 欄位 ——
+# 對相機來說沒有差別，對使用者來說是他習慣的單位。
+#
+# 因此角度**一定要有幀率**才有意義。幀率目前由呼叫端提供（機身的實際幀率
+# 在 DataGroupMovie 裡，但那個 DataGroup 的 tag 編號還沒解出來）。
+# ─────────────────────────────────────────────────────────────────────
+
+#: 電影 / 影片常見的快門角度
+COMMON_SHUTTER_ANGLES = (11.25, 22.5, 45, 90, 120, 144, 172.8, 180, 270, 360)
+
+DEFAULT_FRAME_RATE = 24.0
+
+
+def angle_to_seconds(angle: float, frame_rate: float) -> float:
+    """快門角度 → 曝光秒數。"""
+    if frame_rate <= 0:
+        raise SettingError(f"幀率必須大於 0，收到 {frame_rate}")
+    if not 0 < angle <= 360:
+        raise SettingError(f"快門角度要在 0–360 之間，收到 {angle}")
+    return angle / (360.0 * frame_rate)
+
+
+def seconds_to_angle(seconds: float, frame_rate: float) -> float:
+    """曝光秒數 → 快門角度。超過 360°（曝光比一個影格還長）會夾在 360。"""
+    if frame_rate <= 0 or not seconds:
+        raise SettingError("幀率與快門秒數都必須大於 0")
+    return min(360.0, round(360.0 * seconds * frame_rate, 1))
+
+
+def nearest_shutter_angle(angle: float, frame_rate: float) -> tuple[float, float]:
+    """把想要的角度對到相機真的做得到的快門值。
+
+    快門是離散的（APEX 表），所以不是每個角度都做得出來。這裡先換成秒數、
+    對到最近的合法快門，再換回角度 —— 回傳 (實際角度, 實際秒數)，
+    讓呼叫端能誠實告訴使用者拿到的是什麼，而不是假裝設成了 180.0。
+    """
+    wanted = angle_to_seconds(angle, frame_rate)
+    code = SHUTTER.encode_uint8(wanted)
+    actual = SHUTTER.decode_uint8(code)
+    if actual is None:
+        raise SettingError(f"快門角度 {angle}° @ {frame_rate}fps 換算不出合法的快門值")
+    return seconds_to_angle(actual, frame_rate), actual
+
+
+# ─────────────────────────────────────────────────────────────────────
 # 編碼 / 解碼
 # ─────────────────────────────────────────────────────────────────────
 
@@ -175,7 +229,10 @@ def encode_value(setting: Setting, value) -> Any:
 # ─────────────────────────────────────────────────────────────────────
 
 
-def read_settings(cam) -> dict[str, Any]:
+SHUTTER_ANGLE = "shutter_angle"
+
+
+def read_settings(cam, frame_rate: float | None = None) -> dict[str, Any]:
     """讀回全部設定（人看得懂的值）。
 
     某個 DataGroup 讀失敗不會拖垮其他組 —— 該組的欄位留 None。
@@ -199,11 +256,22 @@ def read_settings(cam) -> dict[str, Any]:
         except Exception:
             result[setting.name] = None
 
+    # 衍生值：由快門秒數與幀率算出來，不是相機的獨立欄位
+    seconds = result.get("shutter_speed")
+    if seconds and frame_rate:
+        try:
+            result[SHUTTER_ANGLE] = seconds_to_angle(seconds, frame_rate)
+        except SettingError:
+            result[SHUTTER_ANGLE] = None
+    else:
+        result[SHUTTER_ANGLE] = None
+
     return result
 
 
 def apply_settings(cam, changes: dict[str, Any],
-                   capabilities: dict | None = None) -> dict[str, Any]:
+                   capabilities: dict | None = None,
+                   frame_rate: float | None = None) -> dict[str, Any]:
     """套用一批設定變更。
 
     同一個 DataGroup 的欄位會合併成一次寫入 —— 除了少一趟 USB，更重要的是
@@ -215,6 +283,26 @@ def apply_settings(cam, changes: dict[str, Any],
     """
     if not changes:
         return {}
+
+    changes = dict(changes)
+
+    # shutter_angle 沒有對應的相機欄位 —— 換算成 shutter_speed 再照一般流程走
+    if SHUTTER_ANGLE in changes:
+        if "shutter_speed" in changes:
+            raise SettingError("shutter_angle 與 shutter_speed 不能同時指定，它們是同一件事")
+        if not frame_rate:
+            raise SettingError(
+                "設定 shutter_angle 需要幀率 —— 角度要有幀率才有意義"
+            )
+        angle = changes.pop(SHUTTER_ANGLE)
+        try:
+            actual_angle, seconds = nearest_shutter_angle(float(angle), frame_rate)
+        except (TypeError, ValueError) as e:
+            raise SettingError(f"快門角度不合法：{angle!r}") from e
+        changes["shutter_speed"] = seconds
+        applied_angle = actual_angle
+    else:
+        applied_angle = None
 
     unknown = set(changes) - set(BY_NAME)
     if unknown:
@@ -235,7 +323,11 @@ def apply_settings(cam, changes: dict[str, Any],
         payload = GROUP_CLASSES[number](**fields)
         getattr(cam, f"set_cam_data_group{number}")(payload)
 
-    return {name: changes[name] for name in changes}
+    result = {name: changes[name] for name in changes}
+    if applied_angle is not None:
+        # 誠實回報實際拿到的角度：快門是離散的，要的 180° 未必做得出來
+        result[SHUTTER_ANGLE] = applied_angle
+    return result
 
 
 def check_within_capabilities(name: str, value, capabilities: dict | None) -> None:
@@ -296,4 +388,16 @@ def describe(capabilities: dict | None = None) -> list[dict[str, Any]]:
                 entry["range"] = {"min": lo, "max": hi}
             entry["choices"] = values
         out.append(entry)
+
+    # 衍生設定：沒有對應的相機欄位，由 shutter_speed + 幀率換算
+    out.append({
+        "name": SHUTTER_ANGLE,
+        "kind": "derived",
+        "unit": "deg",
+        "group": 1,
+        "writable": True,
+        "note": "電影用的快門表示法。需要幀率才有意義；實際角度受限於"
+                "相機的離散快門值，回應會告訴你真正拿到的角度。",
+        "choices": list(COMMON_SHUTTER_ANGLES),
+    })
     return out

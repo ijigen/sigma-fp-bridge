@@ -156,6 +156,66 @@ def test_describe_filters_choices_by_capabilities():
     print(f"✓ UI 選項依相機能力過濾（ISO {len(iso)} 項，未過濾為 {len(unfiltered['iso']['choices'])} 項）")
 
 
+def test_shutter_angle_conversion():
+    """180° 表示曝光佔一個影格的一半，換到任何幀率都該保持這個關係。"""
+    assert CS.angle_to_seconds(180, 24) == 1 / 48
+    assert CS.angle_to_seconds(360, 24) == 1 / 24
+    assert CS.seconds_to_angle(1 / 48, 24) == 180.0
+    assert CS.seconds_to_angle(1 / 50, 25) == 180.0
+    print("✓ 快門角度 ↔ 秒數換算")
+
+
+def test_shutter_angle_reports_what_it_actually_got():
+    """快門是離散的，180° @ 24fps 做不出來（1/48 不在 1/3 級表裡）。
+
+    這種時候必須回報真正拿到的角度，不能假裝設成了 180 —— 使用者要能
+    決定是否接受這個誤差。
+    """
+    angle, seconds = CS.nearest_shutter_angle(180, 24)
+    assert seconds == 1 / 50, seconds
+    assert angle == 172.8, angle
+    # 25fps 剛好對得上
+    angle25, seconds25 = CS.nearest_shutter_angle(180, 25)
+    assert seconds25 == 1 / 50 and angle25 == 180.0
+    print(f"✓ 誠實回報實際角度（180°@24fps → {angle}°，180°@25fps → {angle25}°）")
+
+
+def test_shutter_angle_applies_through_shutter_speed():
+    cam = fake_camera.FakeCamera()
+    applied = CS.apply_settings(cam, {"shutter_angle": 180}, frame_rate=25)
+    assert applied["shutter_angle"] == 180.0, applied
+    assert cam.groups[1]["ShutterSpeed"] == CS.SHUTTER.encode_uint8(1 / 50)
+    got = CS.read_settings(cam, frame_rate=25)
+    assert got["shutter_angle"] == 180.0, got
+    print("✓ 快門角度經由 shutter_speed 欄位套用並讀回")
+
+
+def test_shutter_angle_needs_frame_rate():
+    cam = fake_camera.FakeCamera()
+    try:
+        CS.apply_settings(cam, {"shutter_angle": 180})
+    except CS.SettingError as e:
+        assert "幀率" in str(e)
+        assert cam.set_group_log == []
+        print("✓ 沒有幀率時拒絕設定快門角度")
+    else:
+        raise AssertionError("應該要丟 SettingError")
+
+
+def test_shutter_angle_and_speed_conflict_rejected():
+    """兩者是同一件事，同時給會互相矛盾。"""
+    cam = fake_camera.FakeCamera()
+    try:
+        CS.apply_settings(cam, {"shutter_angle": 180, "shutter_speed": 1 / 100},
+                          frame_rate=24)
+    except CS.SettingError as e:
+        assert "同時" in str(e)
+        assert cam.set_group_log == []
+        print("✓ 同時指定角度與秒數被擋下")
+    else:
+        raise AssertionError("應該要丟 SettingError")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

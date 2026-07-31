@@ -140,6 +140,9 @@ class BridgeState:
     # 相機實際接受的數值範圍（ISO、曝光補償…）。APEX 換算表涵蓋的範圍遠大於
     # 任何一台實機，不靠這個過濾的話 UI 會列出一堆設了會失敗的值。
     capabilities: dict = field(default_factory=dict)
+    # 快門角度換算用的幀率。機身實際幀率在 DataGroupMovie 裡，但那個
+    # DataGroup 的 tag 編號還沒解出來，所以先由使用者指定。
+    frame_rate: float = 24.0
     camera_connected: bool = False
     # True = 使用者主動交還相機，自動重連要停手，否則放開的下一秒就被搶回去
     released_by_user: bool = False
@@ -537,14 +540,16 @@ async def cam_wait_idle(timeout_s: float = 2.0, poll_interval_s: float = 0.05) -
 
 async def cam_read_settings() -> dict:
     return await worker.call(
-        lambda: read_settings(state.camera), priority=Priority.STATUS
+        lambda: read_settings(state.camera, state.frame_rate),
+        priority=Priority.STATUS,
     )
 
 
 async def cam_apply_settings(changes: dict) -> dict:
     """套用設定變更。整批一起驗證，不會出現一半成功的狀態。"""
     return await worker.call(
-        lambda: apply_settings(state.camera, changes, state.capabilities),
+        lambda: apply_settings(state.camera, changes, state.capabilities,
+                               state.frame_rate),
         priority=Priority.CONTROL,
     )
 
@@ -686,6 +691,7 @@ async def broadcast_state(extra: dict | None = None) -> None:
         "focus_mode": state.last_focus_mode,
         "focal_length_mm": state.last_lens_focal_mm,
         "focus_range": list(state.focus_range) if state.focus_range else None,
+        "frame_rate": state.frame_rate,
         "active_lens_id": state.active_lens_id,
         "calibration_points": len(state.calibration),
     }
@@ -784,7 +790,8 @@ async def handle_ws_command(req: dict) -> dict | None:
     request_id = req.get("id")
 
     # 這幾個在沒相機時也要能用：查狀態、看有哪些設定、以及重新取得控制權
-    ALWAYS_ALLOWED = {"get_state", "describe_settings", "acquire", "release"}
+    ALWAYS_ALLOWED = {"get_state", "describe_settings", "acquire", "release",
+                      "set_frame_rate"}
 
     if not state.camera_connected and cmd not in ALWAYS_ALLOWED:
         return {"type": "error", "id": request_id, "error": "camera not connected"}
@@ -803,7 +810,19 @@ async def handle_ws_command(req: dict) -> dict | None:
             "id": request_id,
             "settings": describe(state.capabilities),
             "capabilities": state.capabilities,
+            "frame_rate": state.frame_rate,
         }
+
+    if cmd == "set_frame_rate":
+        try:
+            fps = float(req["frame_rate"])
+        except (KeyError, TypeError, ValueError):
+            return {"type": "error", "id": request_id, "error": "frame_rate 必須是數值"}
+        if fps <= 0:
+            return {"type": "error", "id": request_id, "error": "frame_rate 必須大於 0"}
+        state.frame_rate = fps
+        log.info(f"快門角度換算幀率設為 {fps}")
+        return {"type": "ack", "id": request_id, "frame_rate": fps}
 
     if cmd == "get_settings":
         return {

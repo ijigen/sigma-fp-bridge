@@ -537,6 +537,35 @@ share a `DataGroup` are written in a single transaction.
 | Format | `image_quality` (DNG/JPEG), `dng_quality` (12/14-bit), `resolution`, `aspect_ratio` |
 | Look | `color_mode`, `color_space`, `tone_effect` |
 | Drive | `drive_mode` |
+| Cinema | `shutter_angle` (needs a frame rate — see below) |
+
+#### Shutter angle
+
+Cinema work thinks in shutter angle, not seconds: 180° means the exposure covers
+half of each frame, which keeps motion blur consistent across frame rates.
+
+    angle = 360 × exposure_seconds × frame_rate
+
+There is no writable shutter-angle field in the protocol — `CanSetInfo5` tag 214
+`ShutterAngle` is a capability report only — so the bridge converts the angle to
+a shutter time and writes the ordinary `shutter_speed` field. Identical result
+for the camera, familiar units for you.
+
+Set the frame rate first (`set_frame_rate` over WebSocket, or the fps box in the
+UI). An angle without a frame rate is meaningless and is rejected rather than
+guessed at.
+
+**Shutter speeds are discrete, so not every angle is reachable.** The response
+always reports the angle you actually got:
+
+| Requested | Frame rate | Actual |
+|---|---|---|
+| 180° | 24 fps | **172.8°** (1/50s — 1/48 isn't on the ⅓-stop scale) |
+| 180° | 25 fps | 180.0° (1/50s) |
+| 180° | 30 fps | 180.0° (1/60s) |
+
+`shutter_angle` and `shutter_speed` are two views of one setting, so sending both
+in the same request is rejected.
 
 **Not settable over PTP:**
 
@@ -544,11 +573,23 @@ share a `DataGroup` are written in a single transaction.
   movie/still setting "is synchronized with the switch status", and while
   `CanSetInfo5` reports a `StillMovieSwitch` capability, no `DataGroup` exposes a
   writable field for it.
-- **Movie record format (CinemaDNG, movie resolution).** The camera reports
-  `RecordFormat`, `CinemaDNGImageQuality` and `MovieResolution` in `CanSetInfo5`,
-  but sigma-ptpy has no setter for them. Note these come back with `Count=0` while
-  the body is in stills mode — the settable set changes with the switch position,
-  so investigating this needs the switch on CINE first.
+- **Movie record format (CinemaDNG, movie resolution) — not yet, but reachable.**
+  sigma-ptpy defines the opcodes `SigmaGetCamDataGroupMovie` (0x9033) and
+  `SigmaSetCamDataGroupMovie` (0x9034) but ships no schema class or method for
+  them — the same gap that hid `FocusPosition`. `--dump-movie` issues the read
+  opcode directly and prints the IFD, which is the first step to writing a setter.
+
+  The tag numbers inside `DataGroupMovie` are still unknown and will not match
+  `CanSetInfo5`'s: compare `DataGroupFocus`, which uses tags 1/2/81 for items
+  `CanSetInfo5` numbers 600/601/612. They have to be read off the camera.
+
+  ```bash
+  # switch the body to CINE first — movie settings do not exist in stills mode
+  sudo .venv/bin/python sigma_fp_focus.py --dump-movie
+  ```
+
+  Change one setting on the body (frame rate, record format), dump again, and
+  whichever tag moved is that setting.
 
 ### Live view
 
