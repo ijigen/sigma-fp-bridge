@@ -510,6 +510,22 @@ protocol's 8-bit APEX codes are converted for you (`aperture: 2.8`, not `32`).
 `GET /api/settings/schema` lists every setting with its allowed values, so a UI
 can build itself.
 
+**The allowed values come from the camera, not from a static table.** The APEX
+conversion tables span far more than any real body accepts — ISO 6 to 102400 —
+while an fp reports ISO 100–25600. `CanSetInfo5` carries the real limits as
+fixed-point values scaled by 256:
+
+| tag | meaning | example (fp, 40mm lens) |
+|---|---|---|
+| 215 | ISO range (APEX Sv, `Sv 5 = ISO 100`) | `(5.0, 13.0, 1.0, 0.33)` → ISO 100–25600, ⅓ stop |
+| 216 | Auto ISO range | `(5.0, 11.0, …)` → ISO 100–6400 |
+| 217 | Exposure compensation range (EV) | `(-5.0, 5.0, 0.33)` → ±5 EV, ⅓ stop |
+| 658 | Focus position range | `(5974, 11116)` |
+
+Values outside the reported range are rejected with an explanatory error rather
+than sent and silently ignored by the camera. The ranges are re-read whenever the
+lens or focal length changes.
+
 Changes are validated as a batch before anything is sent: one bad value rejects
 the whole request rather than leaving the camera half-configured. Settings that
 share a `DataGroup` are written in a single transaction.

@@ -202,7 +202,8 @@ def read_settings(cam) -> dict[str, Any]:
     return result
 
 
-def apply_settings(cam, changes: dict[str, Any]) -> dict[str, Any]:
+def apply_settings(cam, changes: dict[str, Any],
+                   capabilities: dict | None = None) -> dict[str, Any]:
     """套用一批設定變更。
 
     同一個 DataGroup 的欄位會合併成一次寫入 —— 除了少一趟 USB，更重要的是
@@ -226,6 +227,7 @@ def apply_settings(cam, changes: dict[str, Any]) -> dict[str, Any]:
     by_group: dict[int, dict[str, Any]] = {}
     for name, value in changes.items():
         setting = BY_NAME[name]
+        check_within_capabilities(name, value, capabilities)
         encoded = encode_value(setting, value)
         by_group.setdefault(setting.group, {})[setting.field] = encoded
 
@@ -236,8 +238,42 @@ def apply_settings(cam, changes: dict[str, Any]) -> dict[str, Any]:
     return {name: changes[name] for name in changes}
 
 
-def describe() -> list[dict[str, Any]]:
-    """所有設定的中繼資料，給 UI 生控制項用。"""
+def check_within_capabilities(name: str, value, capabilities: dict | None) -> None:
+    """拿相機回報的實際範圍驗證數值。
+
+    APEX 換算表涵蓋的範圍遠大於任何一台實機接受的範圍（ISO 表從 6 到
+    102400，但 fp 只吃 100–25600）。不擋的話，選到範圍外的值就是送出去
+    被相機默默拒絕 —— 使用者只會看到「設了沒反應」。
+
+    Raises:
+        SettingError: 超出相機回報的範圍。
+    """
+    if not capabilities:
+        return
+    limits = capabilities.get(name)
+    if not limits:
+        return
+    lo, hi = limits.get("min"), limits.get("max")
+    if lo is None or hi is None:
+        return
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return
+    if not (lo <= numeric <= hi):
+        raise SettingError(
+            f"{name}={value} 超出相機回報的範圍 {lo}–{hi}"
+        )
+
+
+def describe(capabilities: dict | None = None) -> list[dict[str, Any]]:
+    """所有設定的中繼資料，給 UI 生控制項用。
+
+    Args:
+        capabilities: sigma_fp_focus.read_capabilities() 的結果。給了的話，
+            數值型選項會依相機實際接受的範圍過濾 —— UI 才不會列出一堆
+            按下去只會失敗的值。
+    """
     out = []
     for setting in SETTINGS:
         entry: dict[str, Any] = {
@@ -251,8 +287,13 @@ def describe() -> list[dict[str, Any]]:
         if setting.kind == "enum":
             entry["choices"] = [m.name for m in setting.enum_cls]
         elif setting.kind == "apex":
-            # 換算表就是相機接受的離散值清單，直接給 UI 當選項
+            # 換算表是這個型別「理論上」的所有值
             values = sorted({v for _, v in setting.converter._ApexConverter__dectable})
+            limits = (capabilities or {}).get(setting.name)
+            if limits and limits.get("min") is not None and limits.get("max") is not None:
+                lo, hi = limits["min"], limits["max"]
+                values = [v for v in values if lo <= v <= hi]
+                entry["range"] = {"min": lo, "max": hi}
             entry["choices"] = values
         out.append(entry)
     return out

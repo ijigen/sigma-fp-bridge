@@ -121,6 +121,41 @@ def test_describe_gives_ui_choices():
     print(f"✓ describe() 提供 {len(schema)} 項設定的 UI 選項")
 
 
+def test_capabilities_reject_out_of_range_iso():
+    """實機 ISO 只到 25600，但 APEX 換算表到 102400。
+
+    不擋的話，UI 會列出 51200 / 102400，使用者選了送出去被相機默默拒絕，
+    畫面上只看到「設了沒反應」。這正是實測踩到的狀況。
+    """
+    cam = fake_camera.FakeCamera()
+    caps = {"iso": {"min": 100, "max": 25600}}
+    for bad in (51200, 102400, 50, 6):
+        try:
+            CS.apply_settings(cam, {"iso": bad}, caps)
+        except CS.SettingError as e:
+            assert "25600" in str(e), e
+        else:
+            raise AssertionError(f"ISO {bad} 應該被擋下")
+    assert cam.set_group_log == [], "被擋下的值不該送到相機"
+    CS.apply_settings(cam, {"iso": 6400}, caps)   # 範圍內要放行
+    assert cam.groups[1]["ISOSpeed"] == 80
+    print("✓ 超出相機 ISO 範圍的值被擋下，範圍內正常放行")
+
+
+def test_describe_filters_choices_by_capabilities():
+    caps = {"iso": {"min": 100, "max": 25600},
+            "exposure_compensation": {"min": -5.0, "max": 5.0}}
+    schema = {d["name"]: d for d in CS.describe(caps)}
+    iso = schema["iso"]["choices"]
+    assert min(iso) >= 100 and max(iso) <= 25600, (min(iso), max(iso))
+    assert 102400 not in iso and 6 not in iso
+    ec = schema["exposure_compensation"]["choices"]
+    assert min(ec) >= -5.0 and max(ec) <= 5.0
+    unfiltered = {d["name"]: d for d in CS.describe()}
+    assert 102400 in unfiltered["iso"]["choices"], "沒給 capabilities 時不該過濾"
+    print(f"✓ UI 選項依相機能力過濾（ISO {len(iso)} 項，未過濾為 {len(unfiltered['iso']['choices'])} 項）")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

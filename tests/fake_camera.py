@@ -37,6 +37,12 @@ class FakeCamera:
         self.focus_range: tuple[int, int] | None = (5974, 11116)
         self.focal_length = 28
         self.api_mode = True
+        # 照實機回報：ISO 100–25600、曝光補償 ±5EV
+        self.capabilities = {
+            "iso": {"min": 100, "max": 25600, "step_ev": 0.333},
+            "iso_auto": {"min": 100, "max": 6400, "step_ev": 0.333},
+            "exposure_compensation": {"min": -5.0, "max": 5.0, "step": 0.333},
+        }
         self.set_group_log: list = []
         self.groups: dict[int, dict] = self._default_groups()
 
@@ -75,6 +81,11 @@ class FakeCamera:
         self.focus_range = (5974, 11116)
         self.focal_length = 28
         self.api_mode = True
+        self.capabilities = {
+            "iso": {"min": 100, "max": 25600, "step_ev": 0.333},
+            "iso_auto": {"min": 100, "max": 6400, "step_ev": 0.333},
+            "exposure_compensation": {"min": -5.0, "max": 5.0, "step": 0.333},
+        }
         self.set_group_log.clear()
         self.groups = self._default_groups()
 
@@ -153,6 +164,13 @@ def install(camera: FakeCamera | None = None) -> FakeCamera:
         c.position = position
         c.set_log.append(position)
 
+    def read_capabilities(c):
+        c._tick("capabilities")
+        caps = dict(c.capabilities)
+        if c.focus_range:
+            caps["focus_position"] = {"min": c.focus_range[0], "max": c.focus_range[1]}
+        return caps
+
     def get_focus_range(c):
         c._tick("range")
         if c.focus_range is None:
@@ -170,6 +188,7 @@ def install(camera: FakeCamera | None = None) -> FakeCamera:
     mod.close_camera = close_camera
     mod.get_focus_state = get_focus_state
     mod.get_focus_range = get_focus_range
+    mod.read_capabilities = read_capabilities
     mod.set_focus_position = set_focus_position
     mod.distance_to_position = lambda table, d: int(d * 2000)  # 3.0m -> 6000，在範圍內
     mod.CamDataGroupFocusExt = FakeFocusState

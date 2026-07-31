@@ -175,6 +175,59 @@ _RAW_CAPTURE_CLASS = _install_raw_capture()
 FOCUS_RANGE_TAG_CANDIDATES = (658, 1624)
 
 
+# CanSetInfo5 裡以「定點數 / 256」表示的範圍。解讀方式是實機 dump 反推出來的：
+#
+#   tag 215 = [1280, 3328, 256, 85] → /256 → (5.0, 13.0, 1.0, 0.333)
+#
+# 後兩個是「整級」與「最小級距」，前兩個是上下限。ISO 用 APEX 的 Sv 值
+# （Sv 5 = ISO 100），所以 Sv 13 = ISO 25600 —— 正好是 fp 的原生 ISO 上限，
+# 而 tag 216 的 Sv 11 = ISO 6400 正好是 Auto ISO 的預設上限。曝光補償
+# 那個 tag 直接就是 EV，±5.0 也對得上機身選單。
+FIXED_POINT_SCALE = 256
+RANGE_TAGS = {
+    215: ("iso", "sv"),
+    216: ("iso_auto", "sv"),
+    217: ("exposure_compensation", "ev"),
+}
+
+
+def _sv_to_iso(sv: float) -> int:
+    """APEX 感光度值 → ISO。Sv 5 = ISO 100。"""
+    return int(round(100 * (2 ** (sv - 5))))
+
+
+def read_capabilities(cam: SigmaPTPy) -> dict:
+    """讀相機當下實際接受的數值範圍。
+
+    這不是靜態表 —— 隨鏡頭、機身模式、ISO 擴展開關而變，所以要跟相機問。
+    讀不到的項目不會出現在回傳值裡（呼叫端要能接受缺項）。
+    """
+    caps: dict[str, dict] = {}
+    try:
+        ifd = parse_ifd(read_info5_raw(cam))
+    except Exception:
+        return caps
+
+    for tag, (name, kind) in RANGE_TAGS.items():
+        entry = find_tag(ifd, tag)
+        if entry is None or not entry.values or len(entry.values) < 2:
+            continue
+        lo, hi = (v / FIXED_POINT_SCALE for v in entry.values[:2])
+        step = (entry.values[3] if len(entry.values) > 3 else entry.values[2]) / FIXED_POINT_SCALE
+        if kind == "sv":
+            caps[name] = {"min": _sv_to_iso(lo), "max": _sv_to_iso(hi), "step_ev": round(step, 3)}
+        else:
+            caps[name] = {"min": round(lo, 2), "max": round(hi, 2), "step": round(step, 3)}
+
+    try:
+        lo, hi = get_focus_range(cam)
+        caps["focus_position"] = {"min": lo, "max": hi}
+    except Exception:
+        pass
+
+    return caps
+
+
 # =============================================================================
 # 高階 API
 # =============================================================================

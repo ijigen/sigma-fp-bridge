@@ -50,6 +50,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from camera_settings import SettingError, apply_settings, describe, read_settings
 from sigma_fp_focus import (
     open_camera,
+    read_capabilities,
     close_camera,
     get_focus_range,
     get_focus_state,
@@ -136,6 +137,9 @@ class BridgeState:
     # CanSetInfo5 tag 658 回報的 (min, max)。隨鏡頭與變焦位置而變，
     # 讀不到時是 None（UI 會退回自己長 slider 的舊行為）。
     focus_range: tuple[int, int] | None = None
+    # 相機實際接受的數值範圍（ISO、曝光補償…）。APEX 換算表涵蓋的範圍遠大於
+    # 任何一台實機，不靠這個過濾的話 UI 會列出一堆設了會失敗的值。
+    capabilities: dict = field(default_factory=dict)
     camera_connected: bool = False
     # True = 使用者主動交還相機，自動重連要停手，否則放開的下一秒就被搶回去
     released_by_user: bool = False
@@ -434,6 +438,25 @@ async def refresh_focus_range() -> None:
     state.focus_range = (lo, hi)
 
 
+async def refresh_capabilities() -> None:
+    """重讀相機接受的數值範圍。鏡頭 / 模式改變時要跟著更新。"""
+    try:
+        caps = await worker.call(
+            lambda: read_capabilities(state.camera), priority=Priority.STATUS
+        )
+    except CameraUnavailable:
+        return
+    except Exception as e:
+        log.warning(f"讀取相機能力失敗：{e}")
+        return
+    if caps != state.capabilities:
+        summary = ", ".join(
+            f"{k} {v.get('min')}–{v.get('max')}" for k, v in sorted(caps.items())
+        )
+        log.info(f"相機接受範圍：{summary}")
+    state.capabilities = caps
+
+
 @dataclass
 class SetPositionResult:
     """cam_set_position() 的結果。"""
@@ -521,7 +544,8 @@ async def cam_read_settings() -> dict:
 async def cam_apply_settings(changes: dict) -> dict:
     """套用設定變更。整批一起驗證，不會出現一半成功的狀態。"""
     return await worker.call(
-        lambda: apply_settings(state.camera, changes), priority=Priority.CONTROL
+        lambda: apply_settings(state.camera, changes, state.capabilities),
+        priority=Priority.CONTROL,
     )
 
 
@@ -552,6 +576,7 @@ async def try_connect_camera() -> bool:
     state.camera_connected = True
     log.info("相機已連線")
     await refresh_focus_range()
+    await refresh_capabilities()
     await broadcast_state({"event": "camera_connected"})
     return True
 
@@ -577,6 +602,7 @@ async def release_camera() -> None:
     state.camera = None
     state.camera_connected = False
     state.focus_range = None
+    state.capabilities = {}
     if cam is not None:
         with suppress(Exception):
             await worker.call(lambda: close_camera(cam), needs_camera=False)
@@ -689,8 +715,9 @@ async def state_polling_loop():
                     focal = g1.CurrentLensFocalLength
                     if focal != state.last_lens_focal_mm:
                         state.last_lens_focal_mm = focal
-                        # 焦點範圍會隨變焦位置改變（或是換了鏡頭），要重讀
+                        # 焦點範圍與可用 ISO 等都可能隨鏡頭 / 模式改變，一併重讀
                         await refresh_focus_range()
+                        await refresh_capabilities()
                 await broadcast_state()
             except CameraUnavailable:
                 mark_disconnected()
@@ -771,7 +798,12 @@ async def handle_ws_command(req: dict) -> dict | None:
         return {"type": "ack", "id": request_id, "released": not ok, "connected": ok}
 
     if cmd == "describe_settings":
-        return {"type": "settings_schema", "id": request_id, "settings": describe()}
+        return {
+            "type": "settings_schema",
+            "id": request_id,
+            "settings": describe(state.capabilities),
+            "capabilities": state.capabilities,
+        }
 
     if cmd == "get_settings":
         return {
@@ -935,7 +967,10 @@ async def handle_distance_post(request: web.Request) -> web.Response:
 
 async def handle_settings_schema(request: web.Request) -> web.Response:
     """所有可設定項目的中繼資料。不需要相機。"""
-    return web.json_response({"settings": describe()})
+    return web.json_response({
+        "settings": describe(state.capabilities),
+        "capabilities": state.capabilities,
+    })
 
 
 async def handle_settings_get(request: web.Request) -> web.Response:
