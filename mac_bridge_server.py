@@ -30,12 +30,14 @@ import asyncio
 import json
 import logging
 import os
+import pwd
 import socket
 import sys
 import time
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
+from enum import IntEnum
 from pathlib import Path
 
 import aiohttp
@@ -48,27 +50,70 @@ sys.path.insert(0, str(Path(__file__).parent))
 from sigma_fp_focus import (
     open_camera,
     close_camera,
+    get_focus_range,
     get_focus_state,
     set_focus_position,
-    wait_focus_idle,
     distance_to_position,
     CamDataGroupFocusExt,
 )
-from sigma_ptpy.enum import FocusMode
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 設定
 # ─────────────────────────────────────────────────────────────────────────────
 
+log = logging.getLogger("sigma-bridge")
+
 PORT = 8765
 SERVICE_TYPE = "_sigmafp._tcp.local."
 SERVICE_NAME = "Sigma fp Bridge"
-STATE_DIR = Path.home() / ".sigma_fp_bridge"
-CALIBRATION_FILE = STATE_DIR / "calibration.json"
-LIVE_VIEW_INTERVAL_S = 0.04  # ~25fps live view stream
-STATE_BROADCAST_INTERVAL_S = 0.1  # 10Hz state push to clients
 
-log = logging.getLogger("sigma-bridge")
+
+def _resolve_state_dir() -> Path:
+    """校準檔要放**真正使用者**的家目錄，不是 root 的。
+
+    macOS 上要從 ptpcamerad 手中搶到相機必須是 root，所以 bridge 平常都是
+    sudo 跑的 —— 而 sudo 下 Path.home() 會變成 /var/root。照著寫的話校準表
+    會存進 root 的家目錄：使用者原本的資料看不見，之後不用 sudo 跑又換一份，
+    兩邊永遠對不起來。用 SUDO_USER 還原成真正的使用者。
+
+    可用 SIGMA_BRIDGE_STATE_DIR 覆寫（測試用）。
+    """
+    override = os.environ.get("SIGMA_BRIDGE_STATE_DIR")
+    if override:
+        return Path(override)
+
+    sudo_user = os.environ.get("SUDO_USER")
+    if sudo_user:
+        try:
+            return Path(pwd.getpwnam(sudo_user).pw_dir) / ".sigma_fp_bridge"
+        except KeyError:
+            log.warning(f"SUDO_USER={sudo_user} 查不到，改用 {Path.home()}")
+
+    return Path.home() / ".sigma_fp_bridge"
+
+
+def _restore_ownership(path: Path) -> None:
+    """把 root 建出來的檔案還給原使用者。
+
+    不還的話，之後不用 sudo 跑就會因為 root 擁有而寫不進去。
+    """
+    sudo_user = os.environ.get("SUDO_USER")
+    if not sudo_user or os.geteuid() != 0:
+        return
+    try:
+        entry = pwd.getpwnam(sudo_user)
+        os.chown(path, entry.pw_uid, entry.pw_gid)
+    except (KeyError, OSError) as e:
+        log.debug(f"還原 {path} 擁有者失敗：{e}")
+
+
+STATE_DIR = _resolve_state_dir()
+CALIBRATION_FILE = STATE_DIR / "calibration.json"
+LIVE_VIEW_INTERVAL_S = 0.04  # live view 目標間隔（~25fps 上限，實際看相機跟得上多少）
+STATE_BROADCAST_INTERVAL_S = 0.1  # 10Hz state push to clients
+LIVE_VIEW_STALE_S = 0.25  # 影格請求排隊超過這個時間就放棄——舊畫面沒有播的價值
+MJPEG_IDLE_CHECK_S = 1.0  # 沒有新影格時，每隔這麼久確認一次 client 還在不在
+FOCAL_POLL_EVERY = 10  # 每 N 次狀態輪詢才讀一次焦距（焦距很少變，不值得 10Hz 打 USB）
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -80,7 +125,6 @@ class BridgeState:
     """中央 server 狀態。"""
 
     camera: object | None = None
-    camera_lock: asyncio.Lock = None  # 改在 main() 內初始化（避開 module-load 時沒 event loop）
     ws_clients: set[web.WebSocketResponse] = field(default_factory=set)
     mjpeg_clients: set[web.StreamResponse] = field(default_factory=set)
     calibration: list[tuple[float, int]] = field(default_factory=list)
@@ -88,6 +132,9 @@ class BridgeState:
     last_focus_position: int | None = None
     last_focus_state: int | None = None
     last_lens_focal_mm: int | None = None
+    # CanSetInfo5 tag 658 回報的 (min, max)。隨鏡頭與變焦位置而變，
+    # 讀不到時是 None（UI 會退回自己長 slider 的舊行為）。
+    focus_range: tuple[int, int] | None = None
     camera_connected: bool = False
     reconnect_task: asyncio.Task | None = None
     last_focus_mode: str | None = None  # 顯示 AF/MF/AF_S 等狀態
@@ -114,6 +161,9 @@ def load_calibration() -> dict[str, list[list]]:
 def save_calibration(all_tables: dict[str, list[list]]) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     CALIBRATION_FILE.write_text(json.dumps(all_tables, indent=2))
+    # bridge 通常是 sudo 跑的；不把擁有者還回去的話，之後不用 sudo 跑會寫不進去
+    _restore_ownership(STATE_DIR)
+    _restore_ownership(CALIBRATION_FILE)
 
 
 def get_active_calibration() -> list[tuple[float, int]]:
@@ -128,70 +178,371 @@ def set_active_calibration(table: list[tuple[float, int]]) -> None:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 相機操作（包成 async wrapper 以便配合 asyncio）
+# 相機 worker
+#
+# USB PTP 一次只能跑一個 transaction，所以相機存取一定要序列化。以前是所有
+# 呼叫端各自去搶同一把 asyncio.Lock，那有三個問題：
+#
+#   1. asyncio.Lock 是先到先服務。使用者的控焦指令會排在已經在等的一堆
+#      live view 影格請求後面 —— 最該即時的東西反而最慢。
+#   2. 每個 MJPEG client 各自去抓影格。開兩個瀏覽器分頁就是兩倍 USB 流量，
+#      抓回來的還是同一張圖。
+#   3. 會長時間持鎖的操作（例如輪詢等馬達停止）在放開之前，把 live view
+#      跟狀態更新整個凍住。
+#
+# 改成：單一 worker task 獨佔相機，所有存取變成投進優先權佇列的 job。
+# 控焦 > 狀態 > live view。live view 由單一 producer 抓、扇出給所有 client。
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def run_in_executor(fn, *args, **kwargs):
-    """sigma-ptpy 是同步 API，包成 executor 才不會擋 event loop。"""
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, lambda: fn(*args, **kwargs))
+
+class Priority(IntEnum):
+    """數字小的先做。"""
+
+    CONTROL = 0    # 使用者的控焦指令 / 連線管理 —— 絕對優先
+    STATUS = 1     # 狀態輪詢
+    LIVEVIEW = 2   # 影格抓取 —— 掉了就掉了，不值得卡住別人
+
+
+class CameraUnavailable(RuntimeError):
+    """相機沒連上時，需要相機的 job 會拿到這個。"""
+
+
+@dataclass
+class JobSkipped:
+    """worker 沒有真的把這個 job 送到 USB 上。
+
+    reason 是 "superseded"（被更新的同類指令蓋過）或 "expired"（排太久已無意義）。
+    """
+
+    reason: str
+
+
+@dataclass
+class CameraJob:
+    priority: int
+    seq: int
+    fn: Callable[[], object]
+    future: asyncio.Future
+    needs_camera: bool = True
+    coalesce_key: str | None = None
+    expires_at: float | None = None
+
+
+class CameraWorker:
+    """序列化所有相機存取的單一 owner。
+
+    只有 worker 這個 task 會碰 state.camera，也只有它會丟東西給 executor，
+    所以相機同時間永遠只有一個 in-flight transaction —— 不需要額外的鎖。
+    """
+
+    def __init__(self) -> None:
+        # 注意：這裡刻意不建 asyncio.PriorityQueue。Python 3.9 的 asyncio.Queue
+        # 在 __init__ 就把自己綁到「當下的」event loop，而這個物件是 module
+        # 層級建立的 —— 那時候還沒有 asyncio.run() 的那個 loop。綁錯 loop 的話
+        # put_nowait() 喚醒的 getter future 屬於一個永遠不會再跑的 loop，
+        # worker 會靜靜地卡死。改在 start() 裡建（那時已經在正確的 loop 內）。
+        self._queue: asyncio.PriorityQueue | None = None
+        self._seq = 0
+        self._newest: dict[str, int] = {}  # coalesce_key -> 目前最新的 seq
+        self._task: asyncio.Task | None = None
+
+    # -- 生命週期 ---------------------------------------------------------
+
+    def start(self) -> None:
+        self._queue = asyncio.PriorityQueue()
+        self._task = asyncio.create_task(self._run(), name="camera-worker")
+
+    async def stop(self) -> None:
+        if self._task is None:
+            return
+        self._task.cancel()
+        with suppress(asyncio.CancelledError):
+            await self._task
+        self._task = None
+
+    # -- 提交 -------------------------------------------------------------
+
+    def submit(
+        self,
+        fn: Callable[[], object],
+        *,
+        priority: Priority = Priority.CONTROL,
+        needs_camera: bool = True,
+        coalesce_key: str | None = None,
+        ttl: float | None = None,
+    ) -> asyncio.Future:
+        """把一個同步的相機操作排進佇列，回傳等結果用的 future。
+
+        Args:
+            fn: 零參數的同步 callable，會在 executor 裡跑。刻意設計成零參數
+                ——想拿 state.camera 就在 fn 內部讀，這樣重連換掉相機物件之後
+                排在佇列裡的 job 不會抓到舊的。
+            coalesce_key: 同一個 key 只有最新的那個會真的執行，先前排隊的
+                直接以 JobSkipped("superseded") 收場。適用於「絕對值設定」
+                這種語意 —— 例如焦點位置，只有最後一個目標值有意義。
+            ttl: 秒。超過就不執行，回 JobSkipped("expired")。
+        """
+        if self._queue is None:
+            raise RuntimeError("CameraWorker 還沒 start()")
+        loop = asyncio.get_running_loop()
+        self._seq += 1
+        job = CameraJob(
+            priority=int(priority),
+            seq=self._seq,
+            fn=fn,
+            future=loop.create_future(),
+            needs_camera=needs_camera,
+            coalesce_key=coalesce_key,
+            expires_at=(time.monotonic() + ttl) if ttl is not None else None,
+        )
+        if coalesce_key is not None:
+            self._newest[coalesce_key] = job.seq
+        # seq 放在 tuple 裡當 tie-breaker，這樣同優先權時是 FIFO，
+        # 而且比較永遠不會比到 CameraJob 本身（它不可比較）。
+        self._queue.put_nowait((job.priority, job.seq, job))
+        return job.future
+
+    async def call(self, fn: Callable[[], object], **kwargs):
+        """submit() 之後直接等結果。"""
+        return await self.submit(fn, **kwargs)
+
+    # -- worker 本體 ------------------------------------------------------
+
+    async def _run(self) -> None:
+        loop = asyncio.get_running_loop()
+        while True:
+            _, _, job = await self._queue.get()
+            try:
+                if job.future.cancelled():
+                    continue
+
+                if (
+                    job.coalesce_key is not None
+                    and self._newest.get(job.coalesce_key) != job.seq
+                ):
+                    # 已經有更新的同類指令進來了，這個不用送 USB
+                    job.future.set_result(JobSkipped("superseded"))
+                    continue
+
+                if job.expires_at is not None and time.monotonic() > job.expires_at:
+                    job.future.set_result(JobSkipped("expired"))
+                    continue
+
+                if job.needs_camera and state.camera is None:
+                    job.future.set_exception(CameraUnavailable("camera not connected"))
+                    continue
+
+                result = await loop.run_in_executor(None, job.fn)
+            except asyncio.CancelledError:
+                if not job.future.done():
+                    job.future.cancel()
+                raise
+            except Exception as e:
+                if not job.future.done():
+                    job.future.set_exception(e)
+            else:
+                if not job.future.done():
+                    job.future.set_result(result)
+            finally:
+                self._queue.task_done()
+
+
+worker = CameraWorker()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Live view 影格扇出
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class FrameHub:
+    """單一 producer 抓影格，所有 MJPEG client 共享。
+
+    跟不上的 client 會直接跳過中間的影格拿最新的一張，不會回壓到相機。
+    以前每個 client 各自抓，client 數量直接等於 USB 負載倍數。
+    """
+
+    def __init__(self) -> None:
+        self.frame: bytes | None = None
+        self.seq = 0
+        self._event: asyncio.Event | None = None
+
+    def _get_event(self) -> asyncio.Event:
+        # 跟 CameraWorker._queue 同一個理由：Python 3.9 的 asyncio.Event 在
+        # __init__ 就綁定 event loop，而這個物件是 module 層級建立的。
+        # 延後到第一次使用（此時已在正確的 loop 內）才建。
+        if self._event is None:
+            self._event = asyncio.Event()
+        return self._event
+
+    def publish(self, jpeg: bytes) -> None:
+        self.frame = jpeg
+        self.seq += 1
+        # set() 會叫醒所有等待者，緊接著 clear() 讓下一輪重新等。
+        # 已經被叫醒的不會因為 clear() 而失效。
+        event = self._get_event()
+        event.set()
+        event.clear()
+
+    async def wait_for_next(self, last_seq: int) -> tuple[int, bytes]:
+        """等到有一張比 last_seq 新的影格。忙碌中的 client 會直接拿到最新的。"""
+        event = self._get_event()
+        while self.seq == last_seq or self.frame is None:
+            await event.wait()
+        return self.seq, self.frame
+
+
+frames = FrameHub()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 相機操作（都走 worker）
+# ─────────────────────────────────────────────────────────────────────────────
 
 
 async def cam_get_focus() -> CamDataGroupFocusExt:
-    async with state.camera_lock:
-        return await run_in_executor(get_focus_state, state.camera)
+    return await worker.call(
+        lambda: get_focus_state(state.camera), priority=Priority.STATUS
+    )
 
 
-async def cam_set_position(position: int) -> None:
-    """設定焦點位置並 readback 確認。DEBUG 模式會印詳細狀態。"""
-    async with state.camera_lock:
-        await run_in_executor(set_focus_position, state.camera, position)
-        # 寫入後立刻 readback 看相機接到什麼狀態
+async def refresh_focus_range() -> None:
+    """讀當下鏡頭的合法焦點位置範圍。
+
+    讀不到不算錯 —— 有些鏡頭 / 韌體不回報，這時 state.focus_range 留 None，
+    UI 會退回原本自己長 slider 上限的行為。
+    """
+    try:
+        lo, hi = await worker.call(
+            lambda: get_focus_range(state.camera), priority=Priority.STATUS
+        )
+    except CameraUnavailable:
+        return
+    except LookupError as e:
+        state.focus_range = None
+        log.warning(f"相機沒回報焦點範圍：{e}")
+        return
+    except Exception as e:
+        state.focus_range = None
+        log.warning(f"讀焦點範圍失敗：{e}")
+        return
+    if state.focus_range != (lo, hi):
+        log.info(f"焦點位置範圍：{lo} ~ {hi}")
+    state.focus_range = (lo, hi)
+
+
+@dataclass
+class SetPositionResult:
+    """cam_set_position() 的結果。"""
+
+    requested: int          # 呼叫端本來要的值
+    position: int           # 實際送到相機的值（可能被 clamp）
+    applied: bool           # False = 還沒送出就被更新的指令取代
+    clamped: bool           # True = 超出合法範圍，已修到邊界
+
+
+def clamp_to_range(position: int) -> tuple[int, bool]:
+    """把位置限制在相機回報的合法範圍內。不知道範圍就原樣放行。"""
+    if state.focus_range is None:
+        return position, False
+    lo, hi = state.focus_range
+    clamped = max(lo, min(hi, position))
+    return clamped, clamped != position
+
+
+def _set_and_readback(position: int):
+    """在 executor 裡跑：設定位置，然後立刻讀回來。
+
+    兩個動作放同一個 job，中間不會被別的 transaction 插進來，
+    readback 讀到的就確實是這次寫入的結果。
+    """
+    set_focus_position(state.camera, position)
+    try:
+        return get_focus_state(state.camera)
+    except Exception as e:  # readback 失敗不該讓整個 set 算失敗
+        log.warning(f"set 後 readback 失敗：{e}")
+        return None
+
+
+async def cam_set_position(position: int) -> SetPositionResult:
+    """設定焦點位置。
+
+    coalesce：焦點位置是絕對值而不是增量，所以拖 slider 或 iOS 端高頻餵
+    目標值時，排隊中的舊值直接丟掉只送最新的，是正確也是想要的行為。
+    """
+    target, clamped = clamp_to_range(position)
+    if clamped:
+        log.warning(f"位置 {position} 超出範圍 {state.focus_range}，修正為 {target}")
+
+    result = await worker.call(
+        lambda: _set_and_readback(target),
+        priority=Priority.CONTROL,
+        coalesce_key="set_position",
+    )
+    if isinstance(result, JobSkipped):
+        log.debug(f"set_position({target}) 被較新的指令取代")
+        return SetPositionResult(position, target, applied=False, clamped=clamped)
+    if result is not None:
+        log.info(
+            f"set_position({target}) → readback: "
+            f"FocusMode={result.FocusMode}, FocusPosition={result.FocusPosition}, "
+            f"FocusState={result.FocusState}"
+        )
+    return SetPositionResult(position, target, applied=True, clamped=clamped)
+
+
+async def cam_wait_idle(timeout_s: float = 2.0, poll_interval_s: float = 0.05) -> bool:
+    """等馬達停下來。
+
+    刻意用「一次一個短 job」而不是把整段輪詢丟進一個 job —— 後者會獨佔
+    相機好幾秒，live view 跟狀態更新全部卡死。
+    """
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
         try:
-            f = await run_in_executor(get_focus_state, state.camera)
-            log.info(
-                f"set_position({position}) → readback: "
-                f"FocusMode={f.FocusMode}, FocusPosition={f.FocusPosition}, "
-                f"FocusState={f.FocusState}"
-            )
-        except Exception as e:
-            log.warning(f"set 後 readback 失敗：{e}")
+            f = await cam_get_focus()
+        except CameraUnavailable:
+            return False
+        if f.FocusState == 0:  # Idle
+            return True
+        await asyncio.sleep(poll_interval_s)
+    return False
 
 
-async def cam_wait_idle(timeout_s: float = 2.0) -> bool:
-    async with state.camera_lock:
-        return await run_in_executor(wait_focus_idle, state.camera, timeout_s, 0.05)
-
-
-async def cam_get_view_frame() -> bytes | None:
-    """JPEG live view 影格。sigma-ptpy 回傳 ViewFrame 物件，要取 .Data。"""
-    async with state.camera_lock:
-        try:
-            frame = await run_in_executor(state.camera.get_view_frame)
-            return frame.Data if frame is not None else None
-        except Exception as e:
-            log.debug(f"live view 取得失敗：{e}")
-            return None
-
-
-async def cam_get_datagroup1():
-    async with state.camera_lock:
-        return await run_in_executor(state.camera.get_cam_data_group1)
+def _grab_view_frame() -> bytes | None:
+    """在 executor 裡跑：sigma-ptpy 回傳 ViewFrame 物件，要取 .Data。"""
+    frame = state.camera.get_view_frame()
+    return frame.Data if frame is not None else None
 
 
 async def try_connect_camera() -> bool:
     """嘗試連線到相機，成功回 True。"""
+    # 開相機也走 worker，免得跟進行中的 transaction 撞在一起
+    old = state.camera
+    if old is not None:
+        state.camera = None
+        with suppress(Exception):
+            await worker.call(lambda: close_camera(old), needs_camera=False)
+
     try:
-        state.camera = await run_in_executor(open_camera)
-        state.camera_connected = True
-        log.info("相機已連線")
-        await broadcast_state({"event": "camera_connected"})
-        return True
+        cam = await worker.call(open_camera, needs_camera=False)
     except Exception as e:
         log.warning(f"連不上相機：{e}")
         state.camera = None
         state.camera_connected = False
         return False
+
+    state.camera = cam
+    state.camera_connected = True
+    log.info("相機已連線")
+    await refresh_focus_range()
+    await broadcast_state({"event": "camera_connected"})
+    return True
+
+
+def mark_disconnected() -> None:
+    """標記相機掉線，讓 reconnect_loop 接手。"""
+    state.camera_connected = False
 
 
 async def reconnect_loop():
@@ -202,6 +553,38 @@ async def reconnect_loop():
         await asyncio.sleep(3)
 
 
+async def liveview_loop():
+    """背景任務：唯一的 live view producer。
+
+    每次都等上一張抓完才送下一個請求，所以佇列裡最多只會有一個影格 job
+    —— 這就是回壓機制。相機只能給 8fps 的話，就自然變 8fps，
+    而不是堆出一串永遠追不上的請求。
+    """
+    while True:
+        if not state.camera_connected or not state.mjpeg_clients:
+            await asyncio.sleep(0.2)
+            continue
+        try:
+            result = await worker.call(
+                _grab_view_frame,
+                priority=Priority.LIVEVIEW,
+                ttl=LIVE_VIEW_STALE_S,
+            )
+        except CameraUnavailable:
+            await asyncio.sleep(0.2)
+            continue
+        except Exception as e:
+            log.debug(f"live view 取得失敗：{e}")
+            await asyncio.sleep(0.2)
+            continue
+
+        if isinstance(result, JobSkipped):
+            continue  # 排太久，直接抓下一張新的
+        if result:
+            frames.publish(result)
+        await asyncio.sleep(LIVE_VIEW_INTERVAL_S)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 廣播給所有 WS clients
 # ─────────────────────────────────────────────────────────────────────────────
@@ -209,10 +592,13 @@ async def reconnect_loop():
 async def broadcast(message: dict) -> None:
     payload = json.dumps(message)
     dead = []
-    for ws in state.ws_clients:
+    for ws in list(state.ws_clients):
         try:
             await ws.send_str(payload)
-        except ConnectionResetError:
+        except Exception:
+            # 任何送不出去的都當 client 已死。以前只接 ConnectionResetError，
+            # 其他例外會往上炸掉呼叫端的迴圈（通常是狀態輪詢），
+            # 結果一個壞掉的 WS client 就害整台 bridge 誤判相機斷線。
             dead.append(ws)
     for ws in dead:
         state.ws_clients.discard(ws)
@@ -227,6 +613,7 @@ async def broadcast_state(extra: dict | None = None) -> None:
         "focus_state": state.last_focus_state,
         "focus_mode": state.last_focus_mode,
         "focal_length_mm": state.last_lens_focal_mm,
+        "focus_range": list(state.focus_range) if state.focus_range else None,
         "active_lens_id": state.active_lens_id,
         "calibration_points": len(state.calibration),
     }
@@ -237,6 +624,7 @@ async def broadcast_state(extra: dict | None = None) -> None:
 
 async def state_polling_loop():
     """背景任務：定期讀相機狀態廣播給所有 client。"""
+    tick = 0
     while True:
         if state.camera_connected:
             try:
@@ -246,13 +634,25 @@ async def state_polling_loop():
                 state.last_focus_mode = (
                     f.FocusMode.name if f.FocusMode is not None else None
                 )
-                g1 = await cam_get_datagroup1()
-                state.last_lens_focal_mm = g1.CurrentLensFocalLength
+                # 焦距只有換鏡頭 / 轉變焦環才會變，用不著跟焦點狀態一樣 10Hz 打 USB
+                if tick % FOCAL_POLL_EVERY == 0:
+                    g1 = await worker.call(
+                        lambda: state.camera.get_cam_data_group1(),
+                        priority=Priority.STATUS,
+                    )
+                    focal = g1.CurrentLensFocalLength
+                    if focal != state.last_lens_focal_mm:
+                        state.last_lens_focal_mm = focal
+                        # 焦點範圍會隨變焦位置改變（或是換了鏡頭），要重讀
+                        await refresh_focus_range()
                 await broadcast_state()
+            except CameraUnavailable:
+                mark_disconnected()
             except Exception as e:
                 log.warning(f"狀態讀取失敗：{e}")
-                state.camera_connected = False
+                mark_disconnected()
                 await broadcast_state({"event": "camera_disconnected"})
+        tick += 1
         await asyncio.sleep(STATE_BROADCAST_INTERVAL_S)
 
 
@@ -272,6 +672,7 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
         "server": "sigma-fp-bridge/0.1",
         "connected": state.camera_connected,
         "active_lens_id": state.active_lens_id,
+        "focus_range": list(state.focus_range) if state.focus_range else None,
     }))
 
     try:
@@ -313,17 +714,30 @@ async def handle_ws_command(req: dict) -> dict | None:
         return {"type": "error", "id": request_id, "error": "camera not connected"}
 
     if cmd == "set_position":
-        pos = int(req["position"])
-        await cam_set_position(pos)
-        return {"type": "ack", "id": request_id, "position": pos}
+        result = await cam_set_position(int(req["position"]))
+        return {
+            "type": "ack",
+            "id": request_id,
+            "position": result.position,
+            "requested": result.requested,
+            "applied": result.applied,
+            "clamped": result.clamped,
+        }
 
     if cmd == "set_distance":
         if not state.calibration:
             return {"type": "error", "id": request_id, "error": "no calibration"}
         d = float(req["distance"])
-        pos = distance_to_position(state.calibration, d)
-        await cam_set_position(pos)
-        return {"type": "ack", "id": request_id, "distance": d, "position": pos}
+        result = await cam_set_position(distance_to_position(state.calibration, d))
+        return {
+            "type": "ack",
+            "id": request_id,
+            "distance": d,
+            "position": result.position,
+            "requested": result.requested,
+            "applied": result.applied,
+            "clamped": result.clamped,
+        }
 
     if cmd == "get_state":
         f = await cam_get_focus() if state.camera_connected else None
@@ -387,6 +801,7 @@ async def handle_status(request: web.Request) -> web.Response:
         "focus_position": state.last_focus_position,
         "focus_state": state.last_focus_state,
         "focal_length_mm": state.last_lens_focal_mm,
+        "focus_range": list(state.focus_range) if state.focus_range else None,
         "active_lens_id": state.active_lens_id,
         "calibration_points": len(state.calibration),
         "ws_clients": len(state.ws_clients),
@@ -408,9 +823,14 @@ async def handle_focus_post(request: web.Request) -> web.Response:
     if not state.camera_connected:
         return web.json_response({"error": "not connected"}, status=503)
     data = await request.json()
-    pos = int(data["position"])
-    await cam_set_position(pos)
-    return web.json_response({"ok": True, "position": pos})
+    result = await cam_set_position(int(data["position"]))
+    return web.json_response({
+        "ok": True,
+        "position": result.position,
+        "requested": result.requested,
+        "applied": result.applied,
+        "clamped": result.clamped,
+    })
 
 
 async def handle_distance_post(request: web.Request) -> web.Response:
@@ -420,9 +840,15 @@ async def handle_distance_post(request: web.Request) -> web.Response:
         return web.json_response({"error": "no calibration"}, status=400)
     data = await request.json()
     d = float(data["distance"])
-    pos = distance_to_position(state.calibration, d)
-    await cam_set_position(pos)
-    return web.json_response({"ok": True, "distance": d, "position": pos})
+    result = await cam_set_position(distance_to_position(state.calibration, d))
+    return web.json_response({
+        "ok": True,
+        "distance": d,
+        "position": result.position,
+        "requested": result.requested,
+        "applied": result.applied,
+        "clamped": result.clamped,
+    })
 
 
 async def handle_calibration_get(request: web.Request) -> web.Response:
@@ -459,23 +885,39 @@ async def handle_liveview(request: web.Request) -> web.StreamResponse:
     state.mjpeg_clients.add(resp)
     log.info(f"MJPEG client 連入（共 {len(state.mjpeg_clients)}）")
 
+    def peer_gone() -> bool:
+        return request.transport is None or request.transport.is_closing()
+
+    # 從目前這張開始等下一張，不重播已經發過的影格
+    last_seq = frames.seq
     try:
         while True:
-            if not state.camera_connected:
-                await asyncio.sleep(0.5)
-                continue
-            jpeg = await cam_get_view_frame()
-            if jpeg:
-                chunk = (
-                    f"--{boundary}\r\n"
-                    f"Content-Type: image/jpeg\r\n"
-                    f"Content-Length: {len(jpeg)}\r\n\r\n"
-                ).encode() + jpeg + b"\r\n"
-                try:
-                    await resp.write(chunk)
-                except ConnectionResetError:
+            try:
+                last_seq, jpeg = await asyncio.wait_for(
+                    frames.wait_for_next(last_seq), timeout=MJPEG_IDLE_CHECK_S
+                )
+            except asyncio.TimeoutError:
+                # 沒有新影格（相機斷線、或還沒接上）。這條路上不會有寫入，
+                # 也就不會靠寫入失敗發現對方已經走了 —— 得主動檢查，
+                # 否則這個 handler 會變成永遠不結束的幽靈，
+                # 害 mjpeg_clients 一直不歸零、關機時也收不掉。
+                if peer_gone():
                     break
-            await asyncio.sleep(LIVE_VIEW_INTERVAL_S)
+                continue
+            if peer_gone():
+                break
+            chunk = (
+                f"--{boundary}\r\n"
+                f"Content-Type: image/jpeg\r\n"
+                f"Content-Length: {len(jpeg)}\r\n\r\n"
+            ).encode() + jpeg + b"\r\n"
+            await resp.write(chunk)
+            # 寫入期間 producer 可能已經又發了好幾張；下一輪 wait_for_next
+            # 會直接拿最新的那張，中間的自動跳過。
+    except (ConnectionResetError, asyncio.CancelledError):
+        pass
+    except Exception as e:
+        log.debug(f"MJPEG client 寫入失敗：{e}")
     finally:
         state.mjpeg_clients.discard(resp)
         log.info(f"MJPEG client 離開（剩 {len(state.mjpeg_clients)}）")
@@ -522,8 +964,21 @@ async def advertise_bonjour() -> tuple[AsyncZeroconf, ServiceInfo]:
 # Application factory + main
 # ─────────────────────────────────────────────────────────────────────────────
 
+@web.middleware
+async def camera_unavailable_middleware(request: web.Request, handler):
+    """相機在請求處理到一半掉線時，回 503 而不是 500。
+
+    handler 開頭雖然有檢查 camera_connected，但那之後到 job 真正執行之間
+    還是有空窗，斷線剛好落在裡面時就靠這層兜住。
+    """
+    try:
+        return await handler(request)
+    except CameraUnavailable as e:
+        return web.json_response({"error": str(e)}, status=503)
+
+
 def make_app() -> web.Application:
-    app = web.Application()
+    app = web.Application(middlewares=[camera_unavailable_middleware])
     app.router.add_get("/", handle_index)
     app.router.add_get("/ws", handle_ws)
     app.router.add_get("/api/status", handle_status)
@@ -542,9 +997,6 @@ async def main() -> None:
         format="%(asctime)s %(levelname)-7s %(name)s | %(message)s",
     )
 
-    # 在 event loop 內建 lock，避免「Future attached to different loop」
-    state.camera_lock = asyncio.Lock()
-
     # 把 ptpy 那堆 EvtPolling timeout 噪音降級為 DEBUG（不顯示）
     logging.getLogger("ptpy.transports.usb").setLevel(logging.CRITICAL)
 
@@ -553,10 +1005,13 @@ async def main() -> None:
     state.calibration = [tuple(x) for x in all_tables.get(state.active_lens_id, [])]
     log.info(f"已載入 {len(state.calibration)} 個校準點（鏡頭 ID: {state.active_lens_id}）")
 
-    # 試連相機
+    # worker 必須先起來——連相機本身也是一個 job
+    worker.start()
+
     await try_connect_camera()
     state.reconnect_task = asyncio.create_task(reconnect_loop())
     polling_task = asyncio.create_task(state_polling_loop())
+    liveview_task = asyncio.create_task(liveview_loop())
 
     # Bonjour
     zc, info = await advertise_bonjour()
@@ -581,11 +1036,13 @@ async def main() -> None:
     except (KeyboardInterrupt, asyncio.CancelledError):
         log.info("收到中斷信號，準備關閉…")
     finally:
-        polling_task.cancel()
-        state.reconnect_task.cancel()
-        for t in (polling_task, state.reconnect_task):
+        # 先停掉會餵 job 的迴圈，再停 worker，最後才關相機
+        for t in (polling_task, liveview_task, state.reconnect_task):
+            t.cancel()
+        for t in (polling_task, liveview_task, state.reconnect_task):
             with suppress(asyncio.CancelledError):
                 await t
+        await worker.stop()
         await zc.async_unregister_service(info)
         await zc.async_close()
         if state.camera:
