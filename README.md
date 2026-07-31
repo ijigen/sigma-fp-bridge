@@ -59,9 +59,19 @@ If you test other configurations, please open an issue or PR.
 ### 1. Prerequisites
 
 ```bash
-brew install libusb python@3.9
-xcode-select --install  # for git
+xcode-select --install  # for git + system python3
 ```
+
+**Homebrew is not required.** `requirements.txt` pulls in
+[`libusb-package`](https://pypi.org/project/libusb-package/), which bundles a
+libusb binary; the bridge falls back to it whenever the system libusb isn't
+found. `brew install libusb` still works if you prefer a system one.
+
+> This fallback matters more than it looks: **`sudo` strips `DYLD_*` environment
+> variables**, so the `DYLD_FALLBACK_LIBRARY_PATH` that `run_mac.sh` exports to
+> locate a Homebrew libusb is silently discarded under root — and root is exactly
+> what you need to claim the camera. The bundled library is loaded by absolute
+> path, so it survives.
 
 ### 2. Clone + setup
 
@@ -82,24 +92,31 @@ python3 -m venv .venv
 - Set the camera to **CINE** (movie) mode
 - **Lens physical AF/MF switch → AF** (counter-intuitive, see below)
 
-### 4. macOS PTP daemon workaround
+### 4. Run as root
 
-> ⚠️ **This pollutes your macOS environment temporarily.** Read the warning at the end before proceeding.
-
-```bash
-# Pause macOS's PTP daemons so libusb can claim the camera
-sudo killall -STOP ptpcamerad cameracaptured mscamerad-xpc
-
-# Plug in your fp NOW (after STOP, before running the bridge)
-```
-
-### 5. Run
+macOS binds PTP-class cameras to `ptpcamerad` at USB enumeration. Detaching that
+binding uses IOKit's device-capture API, **which requires root** — so just run
+with `sudo`:
 
 ```bash
-./run_mac.sh
+sudo ./run_mac.sh
 ```
 
-You should see:
+That's it. The system daemons keep running; Photos, Image Capture, and iPhone
+backup all keep working. If root still can't claim the device, see
+[Gotcha 4](#gotcha-4-macos-binds-ptp-cameras-at-enumeration) for the fallback.
+
+### 5. Verify
+
+```bash
+sudo .venv/bin/python sigma_fp_focus.py --dump-info5
+```
+
+Read-only — it never drives the motor. Prints the mounted lens, current focus
+state, and the focus position range. Good first check that everything is wired
+up before starting the bridge.
+
+Then start the bridge. You should see:
 
 ```
 INFO sigma-bridge | 相機已連線
@@ -108,12 +125,7 @@ INFO sigma-bridge | 瀏覽器測試: http://192.168.x.x:8765/
 
 Open `http://localhost:8765/` and drag the focus slider. The lens should move in real-time.
 
-### 6. When you're done
-
-```bash
-sudo killall -CONT ptpcamerad cameracaptured mscamerad-xpc
-# Or just restart your Mac to fully reset macOS PTP behavior.
-```
+Nothing to undo afterwards — no system state was changed.
 
 ---
 
@@ -155,31 +167,49 @@ This one is genuinely backwards from intuition:
 
 So: leave the physical switch on **AF** at all times, and let PTP handle the "MF" mode switching in software.
 
-### Gotcha 4: macOS aggressively blocks raw USB to PTP cameras
+### Gotcha 4: macOS binds PTP cameras at enumeration
 
-When you plug in any PTP-class USB camera, macOS launches three daemons that claim the device's IOKit interface:
+When you plug in any PTP-class USB camera, macOS binds it to system daemons that
+claim the device's IOKit interface:
 
 - `/usr/libexec/ptpcamerad`
 - `/usr/libexec/cameracaptured`
 - `mscamerad-xpc` (Image Capture XPC service)
 
-While they hold the device, `libusb_detach_kernel_driver()` fails and the bridge can't acquire the camera. Three things to know:
+While they hold the device, an unprivileged `libusb_detach_kernel_driver()` fails
+and the bridge can't acquire the camera.
 
-1. **`launchctl disable` doesn't stick** on SIP-enabled macOS for these system services.
-2. **`killall ptpcamerad` doesn't help** either — launchd respawns it instantly on the next USB hotplug.
-3. **`SIGSTOP` works** — pausing the process leaves launchd thinking it's alive (so no respawn), but the process can't claim USB while paused.
+**The fix is just `sudo`.** On macOS, libusb implements detach via IOKit's device
+capture API (`USBDeviceReEnumerate` with the capture mask), and **that API
+requires root**. An unprivileged detach failing is expected behaviour, not macOS
+blocking you. Verified on macOS Sequoia with all three daemons running normally
+(libusb 1.0.30) — root claimed the camera without touching them.
+
+Two things that do *not* work, in case you're tempted:
+
+1. **`launchctl disable` doesn't stick** on SIP-enabled macOS for these services.
+2. **`killall ptpcamerad` doesn't help** — launchd respawns it instantly on the
+   next USB hotplug.
+
+<details>
+<summary>Fallback: pausing the daemons (only if root still fails)</summary>
+
+`SIGSTOP` works where `killall` doesn't — pausing leaves launchd thinking the
+process is alive (so no respawn), but a paused process can't claim USB.
 
 ```bash
 sudo killall -STOP ptpcamerad cameracaptured mscamerad-xpc
 ```
 
-**You must run this BEFORE plugging in the camera**, or unplug-replug after running it. The kernel IOKit binding happens during USB enumeration.
+**Run this BEFORE plugging in the camera**, or unplug-replug afterwards — the
+IOKit binding happens during USB enumeration.
 
-> ### 🚨 Environment pollution warning
->
-> While the daemons are stopped, **macOS Photos / Image Capture / Finder / iCloud import all stop recognizing your camera**. iPhone backup over USB also breaks.
->
-> Always run `sudo killall -CONT ptpcamerad cameracaptured mscamerad-xpc` when you finish, or restart your Mac. Don't leave your machine in this state.
+> 🚨 **This pollutes your macOS environment.** While the daemons are stopped,
+> Photos / Image Capture / Finder / iCloud import all stop recognizing your
+> camera, and iPhone backup over USB breaks. Always restore with
+> `sudo killall -CONT ptpcamerad cameracaptured mscamerad-xpc` when you finish.
+
+</details>
 
 ---
 
@@ -245,6 +275,43 @@ with cam.session():
     print(state.FocusPosition, state.FocusState)  # current pos, 0=Idle 1=Moving
 ```
 
+### Focus position range — `CanSetInfo5` tag 658
+
+Valid `FocusPosition` values differ per lens and per zoom position. The camera
+reports the range in `CanSetInfo5`, but sigma-ptpy only decodes the tags it
+already knows about and discards the raw payload — so we patch `decode()` to
+keep the bytes and parse them ourselves (`ifd.py`).
+
+```bash
+sudo .venv/bin/python sigma_fp_focus.py --dump-info5
+```
+
+Read-only; it never drives the motor. Prints the mounted lens and current focus
+state, then a hex dump and every directory entry, with tags in **both decimal and
+hex** so you can cross-reference the SDK PDF either way.
+
+**The tag is decimal `658`** — [Gotcha 1](#gotcha-1-sdk-doc-tags-are-decimal-not-hex)
+again. The SDK doc writes it `0658`; hex `0x658` (= 1624) does not exist in the
+payload. Two `UInt16`s, `(min, max)`. This matches how every other range in
+`CanSetInfo5` is encoded — e.g. tag 340 is `(-50/10, 50/10, 2/10)`, i.e.
+exposure compensation −5.0…+5.0 in 0.2 steps.
+
+`get_focus_range(cam)` returns `(min, max)` and cross-checks the current position
+against it.
+
+**Measured ranges — please add yours:**
+
+| Lens | Reported focal length | Focus position range |
+|---|---|---|
+| (unidentified, needs confirming) | 40.0 mm | 5974 – 11116 |
+
+Confirmed on that lens by parking focus at the end of travel and reading back
+`FocusPosition` — it returned exactly `11116`, the reported maximum.
+
+If you run the dump, please open an issue with the output. The header block
+identifies which lens the numbers belong to, so the whole dump is
+self-describing.
+
 ---
 
 ## Lens compatibility (help wanted)
@@ -255,6 +322,7 @@ Sigma's official SDK supports Focus Position in principle, but the actual lens m
 |---|---|---|
 | Sigma 28mm F1.4 DG DN Art | ✅ Working | HLA motor |
 | Sigma 17mm F4 DG DN Contemporary | ❓ Uncertain | May depend on AF/MF switch state |
+| Unidentified, reports 40.0 mm | ✅ Reports range | 5974 – 11116; motor drive not yet retested |
 
 **If you have an L-mount AF lens, please test and PR your result.**
 
@@ -273,6 +341,7 @@ Quick test:
         ┌─────────────────────────────────────────┐
         │  Python (aiohttp)                       │
         │  ├─ sigma-ptpy + monkey-patch           │
+        │  ├─ camera worker (priority queue)      │
         │  ├─ WebSocket /ws    (real-time control)│
         │  ├─ REST /api/*      (one-shot HTTP)    │
         │  ├─ MJPEG /liveview.mjpeg (live view)   │
@@ -292,20 +361,55 @@ Quick test:
         └─────────────────────────────────────────┘
 ```
 
+### Camera worker
+
+USB PTP runs one transaction at a time, so camera access has to be serialized.
+A single worker task owns the camera; everything else submits jobs to a priority
+queue — **control > status > live view**. This matters because a plain lock is
+first-come-first-served, which puts your focus command behind however many live
+view frame requests happen to be queued.
+
+Three consequences worth knowing:
+
+- **Focus commands preempt live view.** Frame grabs never delay a focus move.
+- **Rapid setpoints coalesce.** Drag a slider (or drive focus from ARKit at 30 Hz)
+  and only the newest position is sent; the superseded ones are dropped before
+  they reach USB. Focus position is absolute state, not an increment, so this is
+  lossless in the sense that matters. Responses carry `"applied": false` when a
+  command was superseded.
+- **Live view is fanned out, not per-client.** One producer grabs each frame and
+  publishes it to every MJPEG client. Two browser tabs cost one frame grab, not
+  two. Clients that can't keep up skip to the newest frame instead of applying
+  backpressure to the camera.
+
 ## File layout
 
 ```
 .
 ├── sigma_fp_focus.py       Low-level: sigma-ptpy patch + helpers
 ├── mac_bridge_server.py    HTTP / WebSocket / MJPEG server
+├── ifd.py                  Sigma PTP IFD parser (no sigma-ptpy dependency)
 ├── static/
 │   └── index.html          Browser test UI
 ├── debug_encode.py         Standalone IFD encoder sanity test
 ├── diagnose.py             Dump all camera state for troubleshooting
+├── tests/                  Runs against a fake camera — no hardware needed
 ├── run_mac.sh              One-shot launcher (auto-creates venv)
 ├── requirements.txt
 └── README.md
 ```
+
+### Tests
+
+```bash
+python3 tests/test_ifd.py      # IFD parser, pure data
+python3 tests/test_bridge.py   # camera worker + HTTP/WS/MJPEG, fake camera
+```
+
+Both run without a Sigma fp attached. `tests/test_bridge.py` pins the properties
+that concurrency bugs quietly break: focus commands preempting queued live view
+frames, rapid setpoints coalescing into one USB write, MJPEG clients sharing one
+frame stream, and live view surviving a motor-settle wait.
 
 ## API reference
 
@@ -320,7 +424,20 @@ ws.send(JSON.stringify({cmd: "calibration_clear"}));
 ws.send(JSON.stringify({cmd: "set_active_lens", lens_id: "28mm_art"}));
 ```
 
-Server pushes a `state` message at ~10 Hz with current focus position / state / mode.
+Server pushes a `state` message at ~10 Hz with current focus position / state /
+mode, plus `focus_range` — the `(min, max)` the camera reports for the mounted
+lens, or `null` if it doesn't report one. The `hello` message carries it too, so
+a client knows the valid bounds before the first state push.
+
+Positions outside the range are clamped to the nearest bound rather than sent to
+the camera. Acks report what happened:
+
+```json
+{"type": "ack", "requested": 100, "position": 5974, "applied": true, "clamped": true}
+```
+
+`applied: false` means the command was superseded by a newer one before it
+reached USB (see [camera worker](#camera-worker)).
 
 ### REST
 
