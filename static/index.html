@@ -120,6 +120,7 @@
       <div class="field"><span>Focus State</span><span id="f-state">—</span></div>
       <div class="field"><span>Focus Mode</span><span id="f-mode">—</span></div>
       <div class="field"><span>Focal Length</span><span id="f-len">—</span></div>
+      <div class="field"><span>Focus Range</span><span id="f-range">—</span></div>
       <div class="field"><span>Active Lens ID</span><span id="f-lens">—</span></div>
       <div class="field"><span>Calibration Points</span><span id="f-cal">—</span></div>
     </div>
@@ -223,7 +224,14 @@ function connectWS() {
     } else if (msg.type === 'calibration') {
       renderCalibration(msg);
     } else if (msg.type === 'ack') {
-      logRow('ack: ' + JSON.stringify(msg), 'recv');
+      if (msg.clamped) {
+        logRow(`⚠ ${msg.requested} 超出合法範圍，已修正為 ${msg.position}`, 'err');
+      } else {
+        logRow('ack: ' + JSON.stringify(msg), 'recv');
+      }
+    } else if (msg.type === 'hello') {
+      if (msg.focus_range) applyFocusRange(msg.focus_range);
+      logRow('recv: ' + e.data, 'recv');
     } else if (msg.type === 'error') {
       logRow('err: ' + msg.error, 'err');
     } else {
@@ -254,7 +262,38 @@ let userInteractingInput = false;
 const slider = () => document.getElementById('pos-slider');
 const input = () => document.getElementById('pos-input');
 
-// 自動成長 slider max
+// 相機回報的合法範圍（CanSetInfo5 tag 658）。null = 相機沒給，退回自己長。
+let focusRange = null;
+let rangeApplied = false;
+
+function applyFocusRange(range) {
+  const [lo, hi] = range;
+  if (focusRange && focusRange[0] === lo && focusRange[1] === hi) return;
+  focusRange = range;
+  const s = slider();
+  s.min = lo;
+  s.max = hi;
+  // 步進取範圍的千分之一，讓拖曳手感跟範圍大小無關
+  s.step = Math.max(1, Math.round((hi - lo) / 1000));
+  document.getElementById('f-range').textContent = `${lo} – ${hi}`;
+  input().step = s.step;
+  logRow(`focus range ${lo}–${hi}（step ${s.step}）`, 'recv');
+
+  // 第一次拿到範圍時，把預設值（寫死的 500）拉進合法區間，
+  // 否則按 Set 會送出一個相機根本不接受的位置
+  if (!rangeApplied) {
+    rangeApplied = true;
+    const cur = parseInt(input().value);
+    if (isNaN(cur) || cur < lo || cur > hi) {
+      const snap = Math.round((lo + hi) / 2);
+      input().value = snap;
+      s.value = snap;
+      syncTarget();
+    }
+  }
+}
+
+// 相機沒回報範圍時的後備：跟著觀測值把上限往外長
 function maybeGrowSliderMax(observed) {
   const s = slider();
   const headroom = 1000;
@@ -279,8 +318,14 @@ function updateState(msg) {
   document.getElementById('f-cal').textContent = msg.calibration_points ?? '—';
   document.getElementById('pos-current').textContent = msg.focus_position ?? '—';
 
+  if (msg.focus_range) {
+    applyFocusRange(msg.focus_range);
+  } else {
+    document.getElementById('f-range').textContent = '相機未回報';
+  }
+
   if (msg.focus_position != null) {
-    maybeGrowSliderMax(msg.focus_position);
+    if (!msg.focus_range) maybeGrowSliderMax(msg.focus_position);
     // 只有「使用者沒在拖 slider / 沒在打 input」時才同步
     if (!userInteractingSlider && !userInteractingInput) {
       slider().value = msg.focus_position;
@@ -335,8 +380,12 @@ function setPos() {
 
 function step(delta) {
   const cur = parseInt(document.getElementById('pos-input').value) || 0;
-  document.getElementById('pos-input').value = cur + delta;
-  document.getElementById('pos-slider').value = cur + delta;
+  let next = cur + delta;
+  // 先在前端夾住，這樣顯示的數字就是真正會送出去的數字
+  if (focusRange) next = Math.max(focusRange[0], Math.min(focusRange[1], next));
+  document.getElementById('pos-input').value = next;
+  document.getElementById('pos-slider').value = next;
+  syncTarget();
   setPos();
 }
 
