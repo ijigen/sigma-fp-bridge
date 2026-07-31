@@ -104,7 +104,7 @@ sudo ./run_mac.sh
 
 That's it. The system daemons keep running; Photos, Image Capture, and iPhone
 backup all keep working. If root still can't claim the device, see
-[Gotcha 4](#gotcha-4-macos-binds-ptp-cameras-at-enumeration) for the fallback.
+[Gotcha 5](#gotcha-5-macos-binds-ptp-cameras-at-enumeration) for the fallback.
 
 ### 5. Verify
 
@@ -129,7 +129,7 @@ Nothing to undo afterwards — no system state was changed.
 
 ---
 
-## The four gotchas
+## The five gotchas
 
 Things that cost hours to figure out. Sharing so you don't have to repeat them.
 
@@ -167,7 +167,33 @@ This one is genuinely backwards from intuition:
 
 So: leave the physical switch on **AF** at all times, and let PTP handle the "MF" mode switching in software.
 
-### Gotcha 4: macOS binds PTP cameras at enumeration
+### Gotcha 4: the camera body locks up while the bridge is connected
+
+This one is by design, and it surprises everyone. From Sigma's own SDK
+documentation for `sgm_ConfigApi` — the first command any API client must send:
+
+> When this function is executed, API resets the camera setting to the default.
+> (When API connection is closed, the camera setting returns to the setting value
+> which the user specified before using API.) **Furthermore, API does not accept
+> any operation other than the power-off operation.**
+
+So while the bridge holds the camera, **every physical control on the body stops
+responding** — dials, buttons, touchscreen, the lot. Only the power switch works.
+There is no way around this: it's the cost of entering API control mode, not
+something the bridge chooses.
+
+Two consequences worth internalising:
+
+- **Your camera settings are reset to defaults** on connect, and only restored
+  when the API connection is closed *properly*.
+- **Closing the PTP session is not enough.** The camera leaves API mode on
+  `sgm_CloseApplication` (or a USB disconnect). `close_camera()` sends it before
+  closing the session — if you write your own client, don't skip it, or the only
+  way to get the body back is unplugging the cable or power-cycling.
+
+Shut the bridge down with Ctrl+C and control returns cleanly.
+
+### Gotcha 5: macOS binds PTP cameras at enumeration
 
 When you plug in any PTP-class USB camera, macOS binds it to system daemons that
 claim the device's IOKit interface:
@@ -404,6 +430,7 @@ Three consequences worth knowing:
 ```bash
 python3 tests/test_ifd.py      # IFD parser, pure data
 python3 tests/test_bridge.py   # camera worker + HTTP/WS/MJPEG, fake camera
+python3 tests/test_session.py  # camera session lifecycle
 ```
 
 Both run without a Sigma fp attached. `tests/test_bridge.py` pins the properties

@@ -247,7 +247,27 @@ def open_camera(serial_no: str | None = None) -> SigmaPTPy:
 
 
 def close_camera(cam: SigmaPTPy) -> None:
-    """關閉 PTP session（建議在 bridge 結束時呼叫）。"""
+    """退出 API 模式並關閉 PTP session。
+
+    一定要送 CloseApplication，不能只關 session。config_api() 會讓相機進入
+    API 控制模式，SDK 文件寫得很明白：
+
+        「API does not accept any operation other than the power-off operation.」
+
+    也就是機身除了關機以外所有實體按鍵都被鎖住，直到 USB 斷開或收到
+    sgm_CloseApplication。而且 config_api() 進入時會把相機設定重置為預設值，
+    要等 API 連線正常關閉才會還原成使用者原本的設定。
+
+    少送這一步的話，使用者拿回相機的唯一辦法就是拔線或關機 —— 設定也回不來。
+    """
+    try:
+        cam.close_application()
+    except Exception as e:
+        # 這個指令的 payload 在 sigma-ptpy 裡是註明「undocumented」的，
+        # 不同韌體有可能不吃。失敗不該擋住 session 關閉。
+        print(f"警告：CloseApplication 失敗（相機可能仍鎖在 API 模式）：{e}",
+              file=sys.stderr)
+
     cm = getattr(cam, "_bridge_session_cm", None)
     if cm is not None:
         try:
@@ -614,5 +634,7 @@ if __name__ == '__main__':
                 p = distance_to_position(table, d)
                 print(f"  {d}m → ~{p}")
     finally:
-        cam.__exit__(None, None, None)
-        print("\n相機已斷開。")
+        # 必須走 close_camera()：它會送 CloseApplication 讓相機退出 API 模式。
+        # 直接 cam.__exit__() 只關 session，機身按鍵會一直鎖著。
+        close_camera(cam)
+        print("\n相機已斷開，機身操作已交還。")
