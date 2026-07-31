@@ -14,6 +14,7 @@ Sigma fp / fp L 鏡頭焦點位置控制 PoC
 執行：
   sudo python3 sigma_fp_focus.py        # Linux 需要 sudo（USB raw access）
   python3 sigma_fp_focus.py             # macOS / Windows 通常不用
+  python3 sigma_fp_focus.py --dump-info5  # dump CanSetInfo5 原始 bytes（找焦點範圍用）
 
 注意事項：
   - 不確定 Focus Position 範圍時，先用 dry_run() 探索
@@ -25,6 +26,11 @@ from __future__ import annotations
 import sys
 import time
 import struct
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+
+from ifd import parse_ifd, format_ifd, find_tag, IFDParseError
 from sigma_ptpy import SigmaPTPy
 from sigma_ptpy.schema import CamDataGroupFocus, DirectoryType
 from sigma_ptpy.enum import FocusMode, PreConstAF, AFLock
@@ -107,8 +113,121 @@ _install_focus_patch()
 
 
 # =============================================================================
+# Patch 2: 攔截 CanSetInfo5 的原始 bytes。
+#
+# 焦點位置的合法範圍藏在 CanSetInfo5 裡，但 sigma-ptpy 只解它認得的 tag，
+# 解完就把 rawdata 丟掉，我們拿不到那個 tag。這裡在 decode() 外面包一層，
+# 把原始 bytes 留下來自己解（用 ifd.py）。
+#
+# 跟 focus patch 不同的是這裡不換掉 class，只包 method —— 這樣不管
+# sigma-ptpy 內部是從哪個 module 參考到這個 class 都攔得到。
+# =============================================================================
+
+# 最近一次收到的原始 payload，key 是資料群組名稱。
+_LAST_RAW: dict[str, bytes] = {}
+
+
+def _find_canset_info5_class():
+    """找出 sigma-ptpy 裡代表 CanSetInfo5 的 class。
+
+    版本之間命名可能不同，所以先試已知名稱，再退回掃描整個 schema module。
+    """
+    for name in ("CamCanSetInfo5", "CanSetInfo5"):
+        cls = getattr(_sigma_schema_module, name, None)
+        if isinstance(cls, type):
+            return name, cls
+    for name in dir(_sigma_schema_module):
+        if "CanSetInfo5" in name:
+            cls = getattr(_sigma_schema_module, name)
+            if isinstance(cls, type):
+                return name, cls
+    return None, None
+
+
+def _install_raw_capture() -> str | None:
+    """把 CanSetInfo5.decode() 包一層以留下原始 bytes。回傳被 patch 的 class 名稱。"""
+    name, cls = _find_canset_info5_class()
+    if cls is None or not hasattr(cls, "decode"):
+        return None
+    if getattr(cls, "_bridge_raw_capture", False):
+        return name  # 已經包過了，別疊第二層
+
+    original_decode = cls.decode
+
+    def decode(self, rawdata, *args, **kwargs):
+        try:
+            _LAST_RAW["CanSetInfo5"] = bytes(rawdata)
+        except Exception:
+            pass  # 純屬側錄，絕不能影響正常解碼
+        return original_decode(self, rawdata, *args, **kwargs)
+
+    cls.decode = decode
+    cls._bridge_raw_capture = True
+    return name
+
+
+_RAW_CAPTURE_CLASS = _install_raw_capture()
+
+
+# SDK 文件把焦點範圍的 tag 寫成 "0658"。依照 Gotcha 1（文件裡的 tag 是十進位、
+# 不是 hex），它應該是十進位 658；但舊註解當成 hex 0x658 = 1624。手上沒有實機
+# dump 可以定案，所以兩個都當候選試，dump 報告也會把兩個都標出來。
+FOCUS_RANGE_TAG_CANDIDATES = (658, 1624)
+
+
+# =============================================================================
 # 高階 API
 # =============================================================================
+
+_usb_backend_patched = False
+
+
+def ensure_usb_backend() -> str | None:
+    """確保 pyusb 找得到 libusb，回傳用的是哪一個（找不到回 None）。
+
+    pyusb 預設靠 ctypes.util.find_library("usb-1.0") 找 libusb，在兩種很常見的
+    狀況下會找不到而丟 NoBackendError：
+
+      1. 機器上沒有 Homebrew / 沒裝 libusb。
+      2. 用 sudo 跑的時候 —— dyld 會把 DYLD_* 環境變數整組剝掉，
+         run_mac.sh 辛苦設的 DYLD_FALLBACK_LIBRARY_PATH 完全失效。
+         而 macOS 上要 detach kernel driver 偏偏就需要 root。
+
+    系統本來就找得到的話就不插手；否則退回用 libusb-package 附帶的 dylib
+    （以絕對路徑 load，不受 DYLD_* 影響），並把它設成 usb.core.find 的預設
+    backend —— ptpy 呼叫 find() 時不會自己傳 backend，所以只能從這裡塞。
+    """
+    global _usb_backend_patched
+
+    import usb.backend.libusb1
+    import usb.core
+
+    if usb.backend.libusb1.get_backend() is not None:
+        return "system libusb"
+
+    if _usb_backend_patched:
+        return "libusb-package"
+
+    try:
+        import libusb_package
+    except ImportError:
+        return None
+
+    backend = libusb_package.get_libusb1_backend()
+    if backend is None:
+        return None
+
+    original_find = usb.core.find
+
+    def find_with_backend(*args, **kwargs):
+        if kwargs.get("backend") is None:
+            kwargs["backend"] = backend
+        return original_find(*args, **kwargs)
+
+    usb.core.find = find_with_backend
+    _usb_backend_patched = True
+    return f"libusb-package ({libusb_package.get_library_path()})"
+
 
 def open_camera(serial_no: str | None = None) -> SigmaPTPy:
     """連到 fp，如果只有一台就不用指定 serial。
@@ -118,6 +237,7 @@ def open_camera(serial_no: str | None = None) -> SigmaPTPy:
     我們手動 enter 然後把 session 物件掛在 cam 上，
     這樣 bridge shutdown 時能正確 close。
     """
+    ensure_usb_backend()
     cam = SigmaPTPy()
     session_cm = cam.session()
     session_cm.__enter__()
@@ -136,18 +256,130 @@ def close_camera(cam: SigmaPTPy) -> None:
             pass
 
 
+def read_info5_raw(cam: SigmaPTPy) -> bytes:
+    """跟相機要 CanSetInfo5，回傳它的原始 payload bytes。
+
+    真正的擷取發生在 _install_raw_capture() 包的那層 decode()。
+
+    Raises:
+        RuntimeError: patch 沒掛上，或這台相機根本沒回 CanSetInfo5。
+    """
+    if _RAW_CAPTURE_CLASS is None:
+        raise RuntimeError(
+            "找不到 sigma-ptpy 的 CanSetInfo5 class，raw capture patch 沒掛上。"
+            "可能是 sigma-ptpy 改了命名，檢查 _find_canset_info5_class()。"
+        )
+    _LAST_RAW.pop("CanSetInfo5", None)  # 清掉舊的，免得相機沒回卻拿到上一次的
+    cam.get_cam_can_set_info5()
+    raw = _LAST_RAW.get("CanSetInfo5")
+    if raw is None:
+        raise RuntimeError(
+            f"呼叫 get_cam_can_set_info5() 之後沒攔到原始 bytes"
+            f"（已 patch {_RAW_CAPTURE_CLASS}.decode）。"
+            "可能是 sigma-ptpy 走了別條解碼路徑。"
+        )
+    return raw
+
+
 def get_focus_range(cam: SigmaPTPy) -> tuple[int, int]:
     """從 CanSetInfo5 讀焦點位置有效範圍。
 
     Returns:
-        (min, max): SHORT 範圍。每顆鏡頭 / 變焦位置不同。
+        (min, max): SHORT 範圍。每顆鏡頭 / 變焦位置都不一樣。
+
+    Raises:
+        LookupError: CanSetInfo5 裡沒有任何一個候選 tag。錯誤訊息會列出實際
+            有哪些 tag，方便直接判斷該用哪一個。
     """
-    info5 = cam.get_cam_can_set_info5()
-    # CanSetInfo5 tag 0x0658 = Focus Position range
-    # sigma-ptpy 也沒原生支援，要從 raw 資料拿
-    # TODO: 第一次跑時用 cam.get_last_command_data() dump 出來分析
-    raise NotImplementedError(
-        "首次執行請先看 cam.get_last_command_data() 的內容，找 tag 0x0658 解碼方式")
+    raw = read_info5_raw(cam)
+    ifd = parse_ifd(raw)
+    for tag in FOCUS_RANGE_TAG_CANDIDATES:
+        entry = find_tag(ifd, tag)
+        if entry is not None and entry.values and len(entry.values) >= 2:
+            lo, hi = int(entry.values[0]), int(entry.values[1])
+            return (lo, hi) if lo <= hi else (hi, lo)
+
+    found = ", ".join(str(e.tag) for e in ifd.entries) or "（一個都沒有）"
+    raise LookupError(
+        f"CanSetInfo5 裡找不到焦點範圍。試過的候選 tag: "
+        f"{FOCUS_RANGE_TAG_CANDIDATES}；實際有的 tag: {found}。\n"
+        f"請跑 `python3 sigma_fp_focus.py --dump-info5` 把完整輸出貼出來。"
+    )
+
+
+def dump_info5(cam: SigmaPTPy) -> None:
+    """把 CanSetInfo5 的原始 bytes 跟解析結果印出來。
+
+    這是給「還不知道焦點範圍藏在哪個 tag」用的探勘工具。裝不同鏡頭、
+    變焦推到不同位置各跑一次，比對哪些數字會跟著變，就能認出範圍那個 tag。
+    """
+    print("=" * 70)
+    print("CanSetInfo5 raw dump")
+    print("=" * 70)
+    print(f"raw capture patch: {_RAW_CAPTURE_CLASS or '未掛上 ⚠'}")
+
+    # 焦點範圍是「當下這顆鏡頭、當下這個變焦位置」的值，所以 dump 一定要
+    # 附上是哪顆鏡頭 —— 不然貼到 issue 上沒人知道這組數字屬於誰。
+    print()
+    print("-" * 70)
+    print("當下狀態（焦點範圍隨鏡頭 / 變焦位置而變，回報時請一起附上）")
+    try:
+        g1 = cam.get_cam_data_group1()
+        print(f"  鏡頭焦距: {g1.CurrentLensFocalLength} mm")
+        # 這三個是 Sigma 的原始編碼值，不是 f/、ISO、秒數，別直接當人類單位讀
+        print(f"  光圈/ISO/快門（原始編碼值）: "
+              f"{g1.Aperture} / {g1.ISOSpeed} / {g1.ShutterSpeed}")
+    except Exception as e:
+        print(f"  DataGroup1 讀取失敗: {e}")
+    try:
+        f = get_focus_state(cam)
+        print(f"  FocusMode: {f.FocusMode}")
+        print(f"  FocusPosition: {f.FocusPosition}")
+        print(f"  FocusState: {f.FocusState} (0=Idle, 1=Moving)")
+    except Exception as e:
+        print(f"  DataGroupFocus 讀取失敗: {e}")
+    print("-" * 70)
+    print()
+
+    raw = read_info5_raw(cam)
+    try:
+        ifd = parse_ifd(raw)
+    except IFDParseError as e:
+        print(f"⚠ IFD 解析失敗：{e}")
+        print("原始 bytes：")
+        from ifd import hexdump
+        print(hexdump(raw))
+        return
+
+    print(format_ifd(ifd, highlight_tags=FOCUS_RANGE_TAG_CANDIDATES))
+    print()
+
+    print("-" * 70)
+    for tag in FOCUS_RANGE_TAG_CANDIDATES:
+        entry = find_tag(ifd, tag)
+        if entry is None:
+            print(f"候選 tag {tag} (0x{tag:04x}): 不存在")
+        else:
+            print(f"候選 tag {tag} (0x{tag:04x}): 有！values={entry.values}")
+
+    try:
+        lo, hi = get_focus_range(cam)
+        print(f"\n✓ 解出焦點範圍：{lo} ~ {hi}")
+        try:
+            current = get_focus_state(cam).FocusPosition
+        except Exception:
+            current = None
+        if current is not None:
+            inside = lo <= current <= hi
+            print(f"  目前位置 {current} {'落在範圍內 ✓' if inside else '不在範圍內 ⚠'}")
+            if not inside:
+                print("  ⚠ 目前位置不在解出來的範圍內，代表這個 tag 可能不是焦點範圍。")
+                print("    請把整份輸出回報。")
+    except LookupError:
+        print(
+            "\n✗ 兩個候選 tag 都沒中。請把上面整份輸出貼出來 ——\n"
+            "  裝不同鏡頭各跑一次，會跟著變的那個 tag 就是我們要找的。"
+        )
 
 
 def get_focus_state(cam: SigmaPTPy) -> CamDataGroupFocusExt:
@@ -304,10 +536,50 @@ def demo_set_focus(cam: SigmaPTPy):
         time.sleep(0.5)
 
 
+def _main_dump_info5() -> int:
+    """--dump-info5 的進入點。只讀不寫，不會動到馬達。"""
+    import logging
+    import os
+
+    # ptpy 的背景 EvtPolling thread 會固定噴 timeout，跟我們無關，只是噪音
+    logging.getLogger("ptpy.transports.usb").setLevel(logging.CRITICAL)
+
+    backend = ensure_usb_backend()
+    print(f"USB backend: {backend or '找不到 libusb ⚠'}")
+    print(f"以 {'root' if os.geteuid() == 0 else '一般使用者'} 身分執行")
+    print()
+    try:
+        cam = open_camera()
+    except Exception as e:
+        print(f"連不上相機：{e}")
+        print()
+        print("檢查順序：")
+        print("  1. USB 線、相機 USB Mode 要設成 PTP")
+        print("  2. 上面若出現 'Could not detach kernel driver'，是 macOS 的")
+        print("     ptpcamerad 佔住了裝置。先試 sudo 跑這支程式；還是不行的話")
+        print("     才需要 SIGSTOP 那組 daemon（見 README Gotcha 4）。")
+        return 1
+    try:
+        dump_info5(cam)
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        print(f"\ndump 失敗：{type(e).__name__}: {e}")
+        return 1
+    finally:
+        close_camera(cam)
+    return 0
+
+
 if __name__ == '__main__':
-    if len(sys.argv) > 1 and sys.argv[1] == '--help':
+    args = sys.argv[1:]
+
+    if '--help' in args or '-h' in args:
         print(__doc__)
         sys.exit(0)
+
+    if '--dump-info5' in args:
+        sys.exit(_main_dump_info5())
 
     print("Sigma fp Focus Position PoC")
     print("---------------------------")
