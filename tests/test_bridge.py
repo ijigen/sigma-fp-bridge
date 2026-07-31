@@ -43,6 +43,7 @@ def reset():
     # 預設不啟用夾值，想測範圍的測試自己呼叫 refresh_focus_range()
     B.state.focus_range = None
     B.state.last_lens_focal_mm = None
+    B.state.released_by_user = False
 
 
 @contextlib.asynccontextmanager
@@ -117,6 +118,43 @@ async def test_state_dir_follows_sudo_user():
     assert resolved == Path(me.pw_dir) / ".sigma_fp_bridge", resolved
     assert "/var/root" not in str(resolved), resolved
     print(f"✓ sudo 下校準目錄指向使用者家目錄 ({resolved})")
+
+
+async def test_release_returns_body_control_and_blocks_reconnect():
+    """release 必須真的退出 API 模式，而且自動重連不能馬上搶回去。"""
+    reset()
+    async with running_worker():
+        assert B.state.camera_connected
+        reconnect = asyncio.create_task(B.reconnect_loop())
+        try:
+            await B.release_camera()
+            assert not B.state.camera_connected
+            assert B.state.released_by_user
+            assert CAM.count("close_application") == 1, "沒送 CloseApplication，機身還是鎖著"
+
+            # 給自動重連幾輪機會偷偷搶回去
+            await asyncio.sleep(0.4)
+            assert not B.state.camera_connected, "release 後自動重連不該接管"
+
+            await B.acquire_camera()
+            assert B.state.camera_connected and not B.state.released_by_user
+        finally:
+            reconnect.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await reconnect
+    print("✓ release 交還機身控制且擋住自動重連，acquire 收回")
+
+
+async def test_settings_roundtrip_through_bridge():
+    reset()
+    async with running_worker():
+        got = await B.cam_read_settings()
+        assert got["aperture"] == 2.0 and got["iso"] == 6400, got
+        await B.cam_apply_settings({"aperture": 2.8, "exposure_mode": "AperturePriority"})
+        got = await B.cam_read_settings()
+        assert got["aperture"] == 2.8, got
+        assert got["exposure_mode"] == "AperturePriority", got
+    print("✓ 設定經由 worker 讀寫正常")
 
 
 async def test_focus_range_read_and_clamped():

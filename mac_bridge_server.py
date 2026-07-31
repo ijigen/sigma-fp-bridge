@@ -47,6 +47,7 @@ from zeroconf.asyncio import AsyncZeroconf
 
 # 引入 PoC 裡的 patch 跟基礎 helpers
 sys.path.insert(0, str(Path(__file__).parent))
+from camera_settings import SettingError, apply_settings, describe, read_settings
 from sigma_fp_focus import (
     open_camera,
     close_camera,
@@ -136,6 +137,8 @@ class BridgeState:
     # 讀不到時是 None（UI 會退回自己長 slider 的舊行為）。
     focus_range: tuple[int, int] | None = None
     camera_connected: bool = False
+    # True = 使用者主動交還相機，自動重連要停手，否則放開的下一秒就被搶回去
+    released_by_user: bool = False
     reconnect_task: asyncio.Task | None = None
     last_focus_mode: str | None = None  # 顯示 AF/MF/AF_S 等狀態
 
@@ -509,6 +512,19 @@ async def cam_wait_idle(timeout_s: float = 2.0, poll_interval_s: float = 0.05) -
     return False
 
 
+async def cam_read_settings() -> dict:
+    return await worker.call(
+        lambda: read_settings(state.camera), priority=Priority.STATUS
+    )
+
+
+async def cam_apply_settings(changes: dict) -> dict:
+    """套用設定變更。整批一起驗證，不會出現一半成功的狀態。"""
+    return await worker.call(
+        lambda: apply_settings(state.camera, changes), priority=Priority.CONTROL
+    )
+
+
 def _grab_view_frame() -> bytes | None:
     """在 executor 裡跑：sigma-ptpy 回傳 ViewFrame 物件，要取 .Data。"""
     frame = state.camera.get_view_frame()
@@ -545,10 +561,39 @@ def mark_disconnected() -> None:
     state.camera_connected = False
 
 
+async def release_camera() -> None:
+    """交還機身操作，但保持 bridge 執行中。
+
+    config_api() 讓相機進入 API 模式後，機身除了電源以外全部按鍵失效
+    （見 README Gotcha 4）。想在不關掉 bridge 的情況下實體操作相機，
+    就得真的退出 API 模式 —— 送 CloseApplication 並關掉 session。
+
+    代價：釋放期間沒有 live view、沒有狀態更新、不能控焦。重新取得時
+    相機設定會再被 config_api() 重置一次。
+    """
+    state.released_by_user = True
+    cam = state.camera
+    # 先清掉再關，這樣進行中的 job 會拿到 CameraUnavailable 而不是半死的 handle
+    state.camera = None
+    state.camera_connected = False
+    state.focus_range = None
+    if cam is not None:
+        with suppress(Exception):
+            await worker.call(lambda: close_camera(cam), needs_camera=False)
+    log.info("已交還相機，機身操作恢復（bridge 仍在執行）")
+    await broadcast_state({"event": "camera_released"})
+
+
+async def acquire_camera() -> bool:
+    """重新取得相機控制權。"""
+    state.released_by_user = False
+    return await try_connect_camera()
+
+
 async def reconnect_loop():
     """背景任務：如果相機斷線，每 3 秒嘗試重連。"""
     while True:
-        if not state.camera_connected:
+        if not state.camera_connected and not state.released_by_user:
             await try_connect_camera()
         await asyncio.sleep(3)
 
@@ -609,6 +654,7 @@ async def broadcast_state(extra: dict | None = None) -> None:
         "type": "state",
         "ts": time.time(),
         "connected": state.camera_connected,
+        "released": state.released_by_user,
         "focus_position": state.last_focus_position,
         "focus_state": state.last_focus_state,
         "focus_mode": state.last_focus_mode,
@@ -710,8 +756,43 @@ async def handle_ws_command(req: dict) -> dict | None:
     cmd = req.get("cmd")
     request_id = req.get("id")
 
-    if not state.camera_connected and cmd != "get_state":
+    # 這幾個在沒相機時也要能用：查狀態、看有哪些設定、以及重新取得控制權
+    ALWAYS_ALLOWED = {"get_state", "describe_settings", "acquire", "release"}
+
+    if not state.camera_connected and cmd not in ALWAYS_ALLOWED:
         return {"type": "error", "id": request_id, "error": "camera not connected"}
+
+    if cmd == "release":
+        await release_camera()
+        return {"type": "ack", "id": request_id, "released": True}
+
+    if cmd == "acquire":
+        ok = await acquire_camera()
+        return {"type": "ack", "id": request_id, "released": not ok, "connected": ok}
+
+    if cmd == "describe_settings":
+        return {"type": "settings_schema", "id": request_id, "settings": describe()}
+
+    if cmd == "get_settings":
+        return {
+            "type": "settings",
+            "id": request_id,
+            "settings": await cam_read_settings(),
+        }
+
+    if cmd == "set_settings":
+        changes = req.get("settings") or {}
+        try:
+            applied = await cam_apply_settings(changes)
+        except SettingError as e:
+            return {"type": "error", "id": request_id, "error": str(e)}
+        return {
+            "type": "ack",
+            "id": request_id,
+            "applied": applied,
+            # 回讀一次：相機可能拒絕或調整某些值（例如 A 模式下設快門）
+            "settings": await cam_read_settings(),
+        }
 
     if cmd == "set_position":
         result = await cam_set_position(int(req["position"]))
@@ -798,6 +879,7 @@ async def handle_index(request: web.Request) -> web.Response:
 async def handle_status(request: web.Request) -> web.Response:
     return web.json_response({
         "connected": state.camera_connected,
+        "released": state.released_by_user,
         "focus_position": state.last_focus_position,
         "focus_state": state.last_focus_state,
         "focal_length_mm": state.last_lens_focal_mm,
@@ -849,6 +931,40 @@ async def handle_distance_post(request: web.Request) -> web.Response:
         "applied": result.applied,
         "clamped": result.clamped,
     })
+
+
+async def handle_settings_schema(request: web.Request) -> web.Response:
+    """所有可設定項目的中繼資料。不需要相機。"""
+    return web.json_response({"settings": describe()})
+
+
+async def handle_settings_get(request: web.Request) -> web.Response:
+    if not state.camera_connected:
+        return web.json_response({"error": "not connected"}, status=503)
+    return web.json_response({"settings": await cam_read_settings()})
+
+
+async def handle_settings_post(request: web.Request) -> web.Response:
+    if not state.camera_connected:
+        return web.json_response({"error": "not connected"}, status=503)
+    data = await request.json()
+    changes = data.get("settings", data)
+    applied = await cam_apply_settings(changes)
+    return web.json_response({
+        "ok": True,
+        "applied": applied,
+        "settings": await cam_read_settings(),
+    })
+
+
+async def handle_release(request: web.Request) -> web.Response:
+    await release_camera()
+    return web.json_response({"ok": True, "released": True})
+
+
+async def handle_acquire(request: web.Request) -> web.Response:
+    ok = await acquire_camera()
+    return web.json_response({"ok": ok, "released": not ok, "connected": ok})
 
 
 async def handle_calibration_get(request: web.Request) -> web.Response:
@@ -975,6 +1091,9 @@ async def camera_unavailable_middleware(request: web.Request, handler):
         return await handler(request)
     except CameraUnavailable as e:
         return web.json_response({"error": str(e)}, status=503)
+    except SettingError as e:
+        # 設定名稱或值不合法是呼叫端的錯，不是伺服器壞掉
+        return web.json_response({"error": str(e)}, status=400)
 
 
 def make_app() -> web.Application:
@@ -987,6 +1106,11 @@ def make_app() -> web.Application:
     app.router.add_post("/api/distance", handle_distance_post)
     app.router.add_get("/api/calibration", handle_calibration_get)
     app.router.add_post("/api/calibration", handle_calibration_post)
+    app.router.add_get("/api/settings/schema", handle_settings_schema)
+    app.router.add_get("/api/settings", handle_settings_get)
+    app.router.add_post("/api/settings", handle_settings_post)
+    app.router.add_post("/api/release", handle_release)
+    app.router.add_post("/api/acquire", handle_acquire)
     app.router.add_get("/liveview.mjpeg", handle_liveview)
     return app
 

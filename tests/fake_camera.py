@@ -36,6 +36,28 @@ class FakeCamera:
         # CanSetInfo5 tag 658 回報的合法範圍。設成 None 模擬相機不回報。
         self.focus_range: tuple[int, int] | None = (5974, 11116)
         self.focal_length = 28
+        self.api_mode = True
+        self.set_group_log: list = []
+        self.groups: dict[int, dict] = self._default_groups()
+
+    @staticmethod
+    def _default_groups() -> dict[int, dict]:
+        """一組合理的初始設定：f/2.0、ISO 6400、1/25s（照實機 dump 的值）。"""
+        from sigma_ptpy import enum as E
+        return {
+            1: {"Aperture": 24, "ShutterSpeed": 93, "ISOSpeed": 80,
+                "ExpComp": 0, "ISOAuto": E.ISOAuto.Manual},
+            2: {"ExposureMode": E.ExposureMode.Manual,
+                "WhiteBalance": E.WhiteBalance.Auto,
+                "ImageQuality": E.ImageQuality.DNG,
+                "Resolution": E.Resolution.High,
+                "DriveMode": E.DriveMode.SingleCapture,
+                "AEMeteringMode": E.AEMeteringMode.Evaluative},
+            3: {"ColorMode": E.ColorMode.Standard, "ColorSpace": E.ColorSpace.sRGB},
+            4: {"DNGQuality": E.DNGQuality.Q14bit},
+            5: {"ColorTemp": 5600, "AspectRatio": E.AspectRatio.W16H9,
+                "ToneEffect": E.ToneEffect.Null},
+        }
 
     def _tick(self, label: str) -> None:
         if self.op_delay:
@@ -52,6 +74,9 @@ class FakeCamera:
         self.idle_after_reads = 0
         self.focus_range = (5974, 11116)
         self.focal_length = 28
+        self.api_mode = True
+        self.set_group_log.clear()
+        self.groups = self._default_groups()
 
     # -- sigma-ptpy 那邊會用到的 --------------------------------------
 
@@ -64,7 +89,54 @@ class FakeCamera:
 
     def get_cam_data_group1(self):
         self._tick("datagroup1")
-        return types.SimpleNamespace(CurrentLensFocalLength=self.focal_length)
+        g = types.SimpleNamespace(CurrentLensFocalLength=self.focal_length)
+        for k, v in self.groups[1].items():
+            setattr(g, k, v)
+        return g
+
+    # -- DataGroup 2..5：設定的讀寫 -------------------------------------
+
+    def _get_group(self, n):
+        self._tick(f"getgroup{n}")
+        return types.SimpleNamespace(**self.groups[n])
+
+    def get_cam_data_group2(self):
+        return self._get_group(2)
+
+    def get_cam_data_group3(self):
+        return self._get_group(3)
+
+    def get_cam_data_group4(self):
+        return self._get_group(4)
+
+    def get_cam_data_group5(self):
+        return self._get_group(5)
+
+    def _set_group(self, n, payload):
+        self._tick(f"setgroup{n}")
+        for k, v in vars(payload).items():
+            if v is not None:
+                self.groups[n][k] = v
+        self.set_group_log.append((n, {k: v for k, v in vars(payload).items() if v is not None}))
+
+    def set_cam_data_group1(self, p):
+        self._set_group(1, p)
+
+    def set_cam_data_group2(self, p):
+        self._set_group(2, p)
+
+    def set_cam_data_group3(self, p):
+        self._set_group(3, p)
+
+    def set_cam_data_group4(self, p):
+        self._set_group(4, p)
+
+    def set_cam_data_group5(self, p):
+        self._set_group(5, p)
+
+    def close_application(self):
+        self._tick("close_application")
+        self.api_mode = False
 
 
 def install(camera: FakeCamera | None = None) -> FakeCamera:
@@ -89,7 +161,13 @@ def install(camera: FakeCamera | None = None) -> FakeCamera:
 
     mod = types.ModuleType("sigma_fp_focus")
     mod.open_camera = lambda: cam
-    mod.close_camera = lambda c: None
+
+    def close_camera(c):
+        # 忠實反映真實的 close_camera()：一定會先送 CloseApplication 讓相機
+        # 退出 API 模式。stub 成空的話，test_release 就測不到真正在乎的事。
+        c.close_application()
+
+    mod.close_camera = close_camera
     mod.get_focus_state = get_focus_state
     mod.get_focus_range = get_focus_range
     mod.set_focus_position = set_focus_position

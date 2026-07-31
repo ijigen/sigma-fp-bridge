@@ -183,6 +183,20 @@
     </div>
 
     <div class="panel" style="margin-top:16px">
+      <h2>Camera Settings</h2>
+      <div style="font-size:12px; color:#888; margin-bottom:8px">
+        機身按鍵在 bridge 連線時會全部失效（協定限制）。需要實體操作時按
+        <b>Release</b> 交還，完畢後按 <b>Acquire</b> 收回。
+      </div>
+      <div style="margin-bottom:10px">
+        <button id="btn-release" onclick="send({cmd:'release'})">Release camera</button>
+        <button id="btn-acquire" class="primary" onclick="send({cmd:'acquire'})">Acquire</button>
+        <button onclick="send({cmd:'get_settings'})">↻ Reload</button>
+      </div>
+      <div id="settings-grid"></div>
+    </div>
+
+    <div class="panel" style="margin-top:16px">
       <h2>WebSocket Log</h2>
       <div id="log" class="log"></div>
     </div>
@@ -210,6 +224,8 @@ function connectWS() {
     logRow('WS connected', 'recv');
     setConn(true);
     send({cmd: 'calibration_get'});
+    send({cmd: 'describe_settings'});
+    send({cmd: 'get_settings'});
   };
   ws.onclose = () => {
     logRow('WS disconnected, retrying in 2s…', 'err');
@@ -223,7 +239,15 @@ function connectWS() {
       updateState(msg);
     } else if (msg.type === 'calibration') {
       renderCalibration(msg);
+    } else if (msg.type === 'settings_schema') {
+      settingsSchema = msg.settings;
+      renderSettings();
+    } else if (msg.type === 'settings') {
+      settingsValues = msg.settings;
+      renderSettings();
     } else if (msg.type === 'ack') {
+      if (msg.settings) { settingsValues = msg.settings; renderSettings(); }
+      if (msg.released !== undefined) setTimeout(() => send({cmd: 'get_settings'}), 300);
       if (msg.clamped) {
         logRow(`⚠ ${msg.requested} 超出合法範圍，已修正為 ${msg.position}`, 'err');
       } else {
@@ -307,6 +331,7 @@ function maybeGrowSliderMax(observed) {
 }
 
 function updateState(msg) {
+  setReleased(!!msg.released);
   document.getElementById('f-pos').textContent = msg.focus_position ?? '—';
   document.getElementById('f-state').textContent =
     msg.focus_state === 0 ? 'Idle' : msg.focus_state === 1 ? 'Moving' : '—';
@@ -360,6 +385,78 @@ function markSliderUsed() {
   userInteractingSlider = true;
   clearTimeout(sliderIdleTimer);
   sliderIdleTimer = setTimeout(() => { userInteractingSlider = false; }, 5000);
+}
+
+// ── 相機設定面板 ──────────────────────────────────────────────────────
+let settingsSchema = null;
+let settingsValues = {};
+
+function fmtChoice(v, unit) {
+  if (unit === 's' && typeof v === 'number' && v > 0 && v < 1) return '1/' + Math.round(1 / v);
+  if (unit === 'f') return 'f/' + v;
+  return String(v);
+}
+
+function renderSettings() {
+  if (!settingsSchema) return;
+  const grid = document.getElementById('settings-grid');
+  // 記住焦點，免得 10Hz 狀態更新把使用者正在操作的控制項重繪掉
+  const active = document.activeElement && document.activeElement.dataset
+    ? document.activeElement.dataset.setting : null;
+  if (active) return;
+
+  grid.innerHTML = '';
+  for (const s of settingsSchema) {
+    const row = document.createElement('div');
+    row.className = 'field';
+    const label = document.createElement('span');
+    label.textContent = s.name.replace(/_/g, ' ');
+    if (s.note) label.title = s.note;
+    row.appendChild(label);
+
+    const value = settingsValues[s.name];
+    let control;
+    if (s.choices) {
+      control = document.createElement('select');
+      for (const c of s.choices) {
+        const opt = document.createElement('option');
+        opt.value = c;
+        opt.textContent = fmtChoice(c, s.unit);
+        control.appendChild(opt);
+      }
+      // 相機回報的值不在選項裡時（例如 None），加一個暫時的項目撐住顯示
+      if (value === null || value === undefined) {
+        const opt = document.createElement('option');
+        opt.value = ''; opt.textContent = '—'; opt.selected = true;
+        control.insertBefore(opt, control.firstChild);
+      } else {
+        control.value = String(value);
+      }
+    } else {
+      control = document.createElement('input');
+      control.type = 'number';
+      control.value = value ?? '';
+      control.style.width = '90px';
+    }
+    control.dataset.setting = s.name;
+    control.onchange = () => {
+      let v = control.value;
+      if (v === '') return;
+      if (!s.choices || typeof s.choices[0] === 'number') v = parseFloat(v);
+      send({cmd: 'set_settings', settings: {[s.name]: v}});
+    };
+    row.appendChild(control);
+    grid.appendChild(row);
+  }
+}
+
+function setReleased(released) {
+  const r = document.getElementById('btn-release');
+  const a = document.getElementById('btn-acquire');
+  if (!r || !a) return;
+  r.disabled = released;
+  a.disabled = !released;
+  a.style.display = released ? '' : 'none';
 }
 
 function renderCalibration(msg) {

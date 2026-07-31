@@ -191,7 +191,12 @@ Two consequences worth internalising:
   closing the session — if you write your own client, don't skip it, or the only
   way to get the body back is unplugging the cable or power-cycling.
 
-Shut the bridge down with Ctrl+C and control returns cleanly.
+Shut the bridge down with Ctrl+C and control returns cleanly. To get the body
+back **without** stopping the bridge, use `release` (WebSocket) or
+`POST /api/release`, then `acquire` when you want control again. While released
+there is no live view, no status polling and no focus control — the bridge is
+genuinely off the camera. Re-acquiring runs `sgm_ConfigApi` again, so it resets
+the camera settings to defaults a second time.
 
 ### Gotcha 5: macOS binds PTP cameras at enumeration
 
@@ -428,9 +433,10 @@ Three consequences worth knowing:
 ### Tests
 
 ```bash
-python3 tests/test_ifd.py      # IFD parser, pure data
-python3 tests/test_bridge.py   # camera worker + HTTP/WS/MJPEG, fake camera
-python3 tests/test_session.py  # camera session lifecycle
+python3 tests/test_ifd.py       # IFD parser, pure data
+python3 tests/test_bridge.py    # camera worker + HTTP/WS/MJPEG, fake camera
+python3 tests/test_session.py   # camera session lifecycle
+python3 tests/test_settings.py  # settings encode/decode, batch apply
 ```
 
 Both run without a Sigma fp attached. `tests/test_bridge.py` pins the properties
@@ -449,7 +455,19 @@ ws.send(JSON.stringify({cmd: "get_state"}));
 ws.send(JSON.stringify({cmd: "calibration_add", distance: 2.0, position: 1500}));
 ws.send(JSON.stringify({cmd: "calibration_clear"}));
 ws.send(JSON.stringify({cmd: "set_active_lens", lens_id: "28mm_art"}));
+
+// Camera settings
+ws.send(JSON.stringify({cmd: "describe_settings"}));   // choices for every setting
+ws.send(JSON.stringify({cmd: "get_settings"}));
+ws.send(JSON.stringify({cmd: "set_settings", settings: {aperture: 2.8, iso: 800}}));
+
+// Hand the body back / take it again (see Gotcha 4)
+ws.send(JSON.stringify({cmd: "release"}));
+ws.send(JSON.stringify({cmd: "acquire"}));
 ```
+
+`describe_settings`, `release` and `acquire` work even with no camera attached;
+everything else requires a connection.
 
 Server pushes a `state` message at ~10 Hz with current focus position / state /
 mode, plus `focus_range` — the `(min, max)` the camera reports for the mounted
@@ -473,7 +491,48 @@ curl http://localhost:8765/api/status
 curl -X POST http://localhost:8765/api/focus  -d '{"position":1500}' -H "Content-Type: application/json"
 curl -X POST http://localhost:8765/api/distance -d '{"distance":2.5}' -H "Content-Type: application/json"
 curl http://localhost:8765/api/calibration
+
+# Camera settings
+curl http://localhost:8765/api/settings/schema   # what's settable, with choices
+curl http://localhost:8765/api/settings
+curl -X POST http://localhost:8765/api/settings -H 'Content-Type: application/json' \
+  -d '{"aperture": 2.8, "iso": 800, "exposure_mode": "Manual"}'
+
+# Hand the body back without stopping the bridge (see Gotcha 4)
+curl -X POST http://localhost:8765/api/release
+curl -X POST http://localhost:8765/api/acquire
 ```
+
+### Camera settings
+
+Exposure, white balance and image format are exposed in human units — the
+protocol's 8-bit APEX codes are converted for you (`aperture: 2.8`, not `32`).
+`GET /api/settings/schema` lists every setting with its allowed values, so a UI
+can build itself.
+
+Changes are validated as a batch before anything is sent: one bad value rejects
+the whole request rather than leaving the camera half-configured. Settings that
+share a `DataGroup` are written in a single transaction.
+
+| Settable | |
+|---|---|
+| Exposure | `exposure_mode` (P/A/S/M), `aperture`, `shutter_speed`, `iso`, `iso_auto`, `exposure_compensation`, `metering_mode` |
+| White balance | `white_balance`, `color_temp` (Kelvin; needs `white_balance: ColorTemp`) |
+| Format | `image_quality` (DNG/JPEG), `dng_quality` (12/14-bit), `resolution`, `aspect_ratio` |
+| Look | `color_mode`, `color_space`, `tone_effect` |
+| Drive | `drive_mode` |
+
+**Not settable over PTP:**
+
+- **Still ↔ movie mode.** Driven by the physical switch. The SDK states the
+  movie/still setting "is synchronized with the switch status", and while
+  `CanSetInfo5` reports a `StillMovieSwitch` capability, no `DataGroup` exposes a
+  writable field for it.
+- **Movie record format (CinemaDNG, movie resolution).** The camera reports
+  `RecordFormat`, `CinemaDNGImageQuality` and `MovieResolution` in `CanSetInfo5`,
+  but sigma-ptpy has no setter for them. Note these come back with `Count=0` while
+  the body is in stills mode — the settable set changes with the switch position,
+  so investigating this needs the switch on CINE first.
 
 ### Live view
 
