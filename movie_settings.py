@@ -338,6 +338,38 @@ def capabilities_for(name: str) -> list | None:
 _LAST_CAPABILITIES: dict[str, list] = {}
 
 
+#: 探測用途允許的型別。刻意只開這幾個 —— 寫入未知欄位本來就該把
+#: 可能造成的影響壓到最小。
+PROBE_TYPES = {
+    "UInt8": DT.UInt8,
+    "Int8": DT.Int8,
+    "UInt16": DT.UInt16,
+    "Int16": DT.Int16,
+    "URational": DT.URational,
+}
+
+
+def write_tag(cam, tag: int, type_name: str, value) -> None:
+    """把單一 tag 寫進 DataGroupMovie。純探測用。
+
+    這是為了找出協定裡意義不明的欄位而存在的，不是給一般操作用的 —— 一般
+    設定請走 apply_settings()，那裡有合法值檢查。IFD 是稀疏的，所以只有指定
+    的 tag 會被送出，其餘欄位不受影響。
+
+    Raises:
+        MovieSettingError: 型別不在允許清單內。
+    """
+    dt = PROBE_TYPES.get(type_name)
+    if dt is None:
+        raise MovieSettingError(
+            f"探測不接受型別 {type_name!r}；可用：{', '.join(sorted(PROBE_TYPES))}")
+    if dt in (DT.URational,):
+        value = tuple(value)
+    else:
+        value = int(value)
+    write_raw(cam, [(int(tag), dt, value)])
+
+
 def describe(capabilities: dict[str, list] | None = None) -> list[dict[str, Any]]:
     """給 UI 用的中繼資料。"""
     caps = capabilities or {}

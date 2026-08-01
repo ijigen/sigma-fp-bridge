@@ -231,6 +231,25 @@ def test_writes_use_the_cameras_own_encoding():
     print("✓ 寫入時原封送回相機宣告的原始分數")
 
 
+def test_probe_write_is_type_restricted_and_sparse():
+    """探測寫入刻意不做合法值檢查（那正是要探測的），但型別要限制，
+    而且只能動到指定的 tag。"""
+    cam = fake_camera.FakeCamera()
+    before = dict(cam.movie)
+    M.write_tag(cam, 6, "UInt8", 1)
+    assert cam.movie[6] == 1
+    for k, v in before.items():
+        if k != 6:
+            assert cam.movie[k] == v, f"tag {k} 不該被動到"
+    try:
+        M.write_tag(cam, 6, "Float64", 1)
+    except M.MovieSettingError as e:
+        assert "Float64" in str(e)
+        print("✓ 探測寫入限制型別，且只影響指定的 tag")
+    else:
+        raise AssertionError("不允許的型別應該被擋下")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

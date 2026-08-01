@@ -1356,6 +1356,49 @@ async def _do_record(action: str, request: web.Request) -> web.Response:
     return web.json_response({"error": f"unknown action: {action}"}, status=404)
 
 
+async def handle_probe_movie(request: web.Request) -> web.Response:
+    """把單一 tag 寫進 DataGroupMovie，並回報前後的完整內容。
+
+    協定探測用。DataGroupMovie 有幾個欄位（tag 1 / 5 / 6）對任何已知設定
+    都不反應，意義不明；要判斷它們是什麼，只剩下「寫寫看有什麼變化」這條路
+    —— 機身端的變更會被 config_api 重置，而非 API 模式下相機根本不回應。
+
+    刻意不做合法值檢查（那正是要探測的），但型別限制在小範圍內，
+    而且會回傳寫入前後的內容讓呼叫端能還原。
+    """
+    if not state.camera_connected:
+        return web.json_response({"error": "not connected"}, status=503)
+    try:
+        data = await request.json()
+        tag = int(data["tag"])
+        type_name = data.get("type", "UInt8")
+        value = data["value"]
+    except (KeyError, TypeError, ValueError) as e:
+        return web.json_response({"error": f"需要 tag / value：{e}"}, status=400)
+
+    def read_group():
+        return {e.tag: e.values for e in parse_ifd(movie_settings.read_raw(state.camera)).entries}
+
+    try:
+        before = await worker.call(read_group, priority=Priority.STATUS)
+        log.warning(f"探測寫入 DataGroupMovie tag {tag} = {value!r} ({type_name})")
+        await worker.call(
+            lambda: movie_settings.write_tag(state.camera, tag, type_name, value),
+            priority=Priority.CONTROL,
+        )
+        after = await worker.call(read_group, priority=Priority.STATUS)
+    except movie_settings.MovieSettingError as e:
+        return web.json_response({"error": str(e)}, status=400)
+    except Exception as e:
+        return web.json_response({"error": f"{type(e).__name__}: {e}"}, status=502)
+
+    changed = {k: [before.get(k), v] for k, v in after.items() if before.get(k) != v}
+    return web.json_response({
+        "ok": True, "tag": tag, "value": value,
+        "changed": changed, "before": before, "after": after,
+    })
+
+
 async def handle_dump(request: web.Request) -> web.Response:
     """把 CanSetInfo5 / DataGroupMovie 的原始 IFD 以 JSON 吐出來。
 
@@ -1553,6 +1596,7 @@ def make_app() -> web.Application:
     app.router.add_get("/api/settings", handle_settings_get)
     app.router.add_post("/api/settings", handle_settings_post)
     app.router.add_get("/api/dump/{which}", handle_dump)
+    app.router.add_post("/api/probe/movie", handle_probe_movie)
     app.router.add_post("/api/record/{action}", handle_record)
     app.router.add_get("/api/record/{action}", handle_record)
     app.router.add_post("/api/release", handle_release)
