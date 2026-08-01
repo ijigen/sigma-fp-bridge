@@ -14,6 +14,16 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
+def _sample_ifd(entries) -> bytes:
+    """用 sigma-ptpy 自己的 encoder 產生一段像樣的 IFD payload。"""
+    from sigma_ptpy.schema import DirectoryType as DT
+    from sigma_ptpy.schema import _DirectoryEntrySchema
+
+    encoder = type("E", (_DirectoryEntrySchema,), {})()
+    type_map = {1: DT.UInt8, 3: DT.UInt16}
+    return encoder._encode([(tag, type_map[t], vals) for tag, t, vals in entries])
+
+
 class FakeFocusState:
     """對應 CamDataGroupFocusExt 的最小介面。"""
 
@@ -40,6 +50,9 @@ class FakeCamera:
         self.usb_claimed = True
         # 這些欄位寫進去會被相機默默忽略（模擬自動曝光覆蓋手動值）
         self.ignored_fields: set = set()
+        # /api/dump/* 用的原始 IFD payload
+        self.info5_raw = _sample_ifd([(658, 3, [5974, 11116])])
+        self.movie_raw = _sample_ifd([(1, 1, [2]), (10, 3, [25])])
         # 照實機回報：ISO 100–25600、曝光補償 ±5EV
         self.capabilities = {
             "iso": {"min": 100, "max": 25600, "step_ev": 0.333},
@@ -205,7 +218,17 @@ def install(camera: FakeCamera | None = None) -> FakeCamera:
 
     mod.close_camera = close_camera
     mod.get_focus_state = get_focus_state
+    def read_info5_raw(c):
+        c._tick("info5_raw")
+        return c.info5_raw
+
+    def read_movie_group_raw(c):
+        c._tick("movie_raw")
+        return c.movie_raw
+
     mod.get_focus_range = get_focus_range
+    mod.read_info5_raw = read_info5_raw
+    mod.read_movie_group_raw = read_movie_group_raw
     mod.read_capabilities = read_capabilities
     mod.set_focus_position = set_focus_position
     mod.distance_to_position = lambda table, d: int(d * 2000)  # 3.0m -> 6000，在範圍內

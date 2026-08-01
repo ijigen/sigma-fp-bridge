@@ -188,6 +188,29 @@ async def test_rejected_settings_are_reported():
     print("✓ 被相機忽略的設定會被抓出來並提示原因")
 
 
+async def test_dump_endpoints_parse_ifd():
+    """協定探勘端點要能把原始 IFD 解成 JSON。"""
+    reset()
+    async with running_worker():
+        runner = web.AppRunner(B.make_app())
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        base = f"http://127.0.0.1:{runner.addresses[0][1]}"
+        try:
+            async with aiohttp.ClientSession() as s:
+                info5 = await (await s.get(f"{base}/api/dump/info5")).json()
+                tags = [e["tag"] for e in info5["entries"]]
+                assert 658 in tags, info5
+                movie = await (await s.get(f"{base}/api/dump/movie")).json()
+                assert movie["entries"], movie
+                bad = await s.get(f"{base}/api/dump/nope")
+                assert bad.status == 404
+        finally:
+            await runner.cleanup()
+    print("✓ /api/dump/{info5,movie} 解析並回傳 IFD")
+
+
 async def test_settings_roundtrip_through_bridge():
     reset()
     async with running_worker():
