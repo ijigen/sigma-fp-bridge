@@ -183,16 +183,11 @@
       <div class="panel">
         <h2>相機設定</h2>
         <div id="settings"></div>
-        <div class="btnrow" style="margin-top:14px; padding-top:12px; border-top:1px solid #2a2a2a">
-          <span class="hint">快門顯示</span>
-          <span class="seg">
-            <button id="su-time" onclick="setShutterUnit('time')">秒</button>
-            <button id="su-angle" onclick="setShutterUnit('angle')">角度</button>
-          </span>
-          <span class="hint" style="margin-left:4px">換算幀率</span>
+        <div class="btnrow" id="fps-box" style="margin-top:14px; padding-top:12px; border-top:1px solid #2a2a2a">
+          <span class="hint">角度換算用幀率</span>
           <input type="number" id="fps-input" value="24" step="0.01" style="min-width:78px"
                  onchange="send({cmd:'set_frame_rate', frame_rate: parseFloat(this.value)})">
-          <span class="hint" id="fps-hint"></span>
+          <span class="hint" id="fps-hint">拍照模式下把快門秒數換算成角度用；錄影模式改用相機自己的幀率。</span>
         </div>
       </div>
 
@@ -450,9 +445,8 @@ const ORDER = [
   ['dng_quality',           '色彩位元'],
   ['mov_image_quality',     '影片畫質'],
   ['__iso',                 'ISO'],
-  ['aperture',              '光圈'],
-  ['shutter_speed',         '快門'],
-  ['shutter_angle',         '快門角度'],
+  ['__aperture',            '光圈'],
+  ['__shutter',             '快門'],
   ['exposure_compensation', '曝光補償'],
   ['metering_mode',         '測光'],
   ['white_balance',         '白平衡'],
@@ -477,6 +471,12 @@ const FRIENDLY = {
                   Incandescent:'白熾', Fluorescent:'螢光', Flash:'閃燈', ColorTemp:'色溫'},
   metering_mode: {Evaluative:'權衡', CenterWeightedAverage:'中央重點',
                   CenterArea:'中央', Spot:'點測'},
+};
+
+// 相機回報 10 個曝光模式（含 Null / C1-C3 / Star），但實際會用的就這四個。
+// 目前值若不在名單內仍會列出來 —— 否則使用者會看不到自己現在在哪一檔。
+const CHOICE_WHITELIST = {
+  exposure_mode: ['ProgramAuto', 'AperturePriority', 'ShutterPriority', 'Manual'],
 };
 
 // 只有 M 模式能手動設的項目（實測：其他模式下寫入會被自動曝光覆蓋）
@@ -563,6 +563,52 @@ function isoRow(byName) {
   return '<div class="opt">' + head + '<div class="opts">' + btns + sel + '</div></div>';
 }
 
+// 值很多、而且使用者心裡通常已有目標的設定，用下拉比橫排按鈕好用。
+function selectRow(s, title, opts) {
+  opts = opts || {};
+  const cur = values[s.name];
+  const disabled = opts.disabled;
+  const sel = '<select data-set="' + s.name + '"' + (disabled ? ' disabled' : '') + '>' +
+    '<option value="">—</option>' +
+    (s.choices || []).map(v =>
+      '<option value="' + v + '"' + (String(v) === String(cur) ? ' selected' : '') + '>' +
+      escapeHTML(labelFor(s, v)) + '</option>').join('') + '</select>';
+  return '<div class="opt"><div class="opt-head">' +
+    '<span class="opt-name">' + title + '</span>' +
+    '<span class="opt-cur">' + (cur === null || cur === undefined ? '—' : escapeHTML(labelFor(s, cur))) + '</span>' +
+    (opts.note ? '<span class="opt-note">' + escapeHTML(opts.note) + '</span>' : '') +
+    '</div><div class="opts">' + (opts.prefix || '') + sel + '</div></div>';
+}
+
+// 快門：秒數與角度是同一件事的兩種表示，合併成一列。
+// 按鈕切換單位，數值用下拉。CINE 模式下秒數不可用 —— 那裡的快門只能靠
+// DataGroupMovie 的角度設定，寫 shutter_speed 相機會收下然後丟棄。
+function shutterRow(byName) {
+  const speed = byName.shutter_speed, angle = byName.shutter_angle;
+  if (!speed && !angle) return '';
+  const secondsAvailable = !!speed;
+  const useAngle = shutterUnit === 'angle' || !secondsAvailable;
+  const active = useAngle ? angle : speed;
+  const manual = values.exposure_mode === 'Manual';
+
+  const btn = (unit, label, enabled, tip) =>
+    '<button class="o' + (useAngle === (unit === 'angle') ? ' on' : '') + '"' +
+    (enabled ? '' : ' disabled') + (tip ? ' title="' + escapeHTML(tip) + '"' : '') +
+    ' data-unit="' + unit + '">' + label + '</button>';
+
+  const prefix =
+    btn('time', '秒', secondsAvailable, secondsAvailable ? '' : 'CINE 模式的快門只能用角度設定') +
+    btn('angle', '角度', !!angle, '');
+
+  if (!active) {
+    return '<div class="opt"><div class="opt-head"><span class="opt-name">快門</span>' +
+      '<span class="opt-cur">—</span></div><div class="opts">' + prefix + '</div></div>';
+  }
+  const note = !manual ? '需切換成 M 模式'
+    : (!secondsAvailable ? 'CINE：由角度控制' : '');
+  return selectRow(active, '快門', {prefix: prefix, disabled: !manual, note: note});
+}
+
 function settingsHTML() {
   if (!schema) return '<div class="hint">載入中…</div>';
   const byName = {};
@@ -585,18 +631,34 @@ function settingsHTML() {
 
   for (const [name, title] of ORDER) {
     if (name === '__iso') { const r = isoRow(byName); if (r) rows.push(r); continue; }
+    if (name === '__shutter') { const r = shutterRow(byName); if (r) rows.push(r); continue; }
+    if (name === '__aperture') {
+      const ap = byName.aperture;
+      if (ap) rows.push(selectRow(ap, '光圈', {
+        disabled: values.exposure_mode !== 'Manual' && values.exposure_mode !== 'AperturePriority',
+        note: (values.exposure_mode !== 'Manual' && values.exposure_mode !== 'AperturePriority')
+              ? '需切換成 M 或 A 模式' : '',
+      }));
+      continue;
+    }
     const s = byName[name];
     if (!s) continue;
     const cur = values[name];
 
     if (s.choices && s.choices.length) {
+      let choices = s.choices;
+      const white = CHOICE_WHITELIST[name];
+      if (white) {
+        choices = s.choices.filter(v => white.indexOf(String(v)) >= 0 || String(v) === String(cur));
+        if (!choices.length) choices = s.choices;
+      }
       const needsM = NEEDS_MANUAL[name] && !manual;
       rows.push(optRow(name, title, {
         current: cur,
         currentLabel: cur === null || cur === undefined ? '—' : labelFor(s, cur),
         disabled: needsM,
         note: needsM ? '需切換成 M 模式' : (s.inferred_labels ? '? = 推測未確認' : ''),
-        choices: s.choices.map(v => ({value: v, label: labelFor(s, v)})),
+        choices: choices.map(v => ({value: v, label: labelFor(s, v)})),
       }));
     } else {
       // 沒有離散選項的（色溫）維持數字輸入
@@ -634,6 +696,9 @@ function renderSettings() {
               settings: {[b.dataset.set]: numeric ? parseFloat(b.dataset.val) : b.dataset.val}});
       };
     });
+    box.querySelectorAll('.o[data-unit]').forEach(b => {
+      b.onclick = () => setShutterUnit(b.dataset.unit);
+    });
     box.querySelectorAll('select[data-set]').forEach(el => {
       el.onchange = () => {
         if (el.value === '') return;
@@ -649,15 +714,12 @@ function renderSettings() {
       };
     });
   }
-  $('fps-hint').textContent = values.frame_rate
-    ? '相機幀率 ' + values.frame_rate : '';
+  setShown($('fps-box'), st.camera_mode !== 'movie');
   renderNotices();
 }
 
 function setShutterUnit(u) {
   shutterUnit = u;
-  $('su-time').className = u === 'time' ? 'on' : '';
-  $('su-angle').className = u === 'angle' ? 'on' : '';
   renderSettings();
 }
 
@@ -732,7 +794,6 @@ function doRelease() {
   send({cmd: 'release'});
 }
 
-setShutterUnit('time');
 render();
 connect();
 setInterval(() => { if (st.connected && !st.released && !st.recording) send({cmd: 'capture_status'}); }, 5000);

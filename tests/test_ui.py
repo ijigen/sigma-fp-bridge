@@ -94,6 +94,52 @@ def test_iso_row_is_merged_and_uses_a_dropdown():
     print("✓ ISO 合併成一列，數值用下拉選單，自動模式下停用")
 
 
+def test_shutter_row_merges_speed_and_angle():
+    """秒數與角度是同一件事的兩種表示，合併成一列以免使用者以為是兩個設定。
+
+    CINE 模式下沒有 shutter_speed（相機會收下寫入然後丟棄），所以「秒」
+    要停用並說明，而不是留一個按了沒用的選項。
+    """
+    js = _script(HTML.read_text())
+    assert "function shutterRow" in js
+    assert "'__shutter'" in js
+    assert "secondsAvailable" in js, "沒有處理 CINE 下秒數不可用"
+    assert "CINE 模式的快門只能用角度設定" in js
+    body = js[js.index("const ORDER"):js.index("const SCROLL_IF_OVER")]
+    assert "shutter_speed" not in body and "shutter_angle" not in body, \
+        "快門不該還在一般的 ORDER 迴圈裡"
+    print("✓ 快門合併成一列，CINE 下停用秒數並說明")
+
+
+def test_aperture_uses_a_dropdown():
+    js = _script(HTML.read_text())
+    assert "'__aperture'" in js and "function selectRow" in js
+    assert "需切換成 M 或 A 模式" in js, "光圈沒有標示可設的模式"
+    print("✓ 光圈用下拉選單，並標示需要的曝光模式")
+
+
+def test_derived_shutter_angle_not_offered_in_movie_mode():
+    """錄影模式有真正的 DataGroupMovie tag 7，衍生的那個會打架。"""
+    src = (Path(__file__).resolve().parent.parent / "camera_settings.py").read_text()
+    assert 'if mode == "movie":' in src and "return out" in src
+    print("✓ 錄影模式不列衍生的快門角度")
+
+
+def test_exposure_mode_shows_only_pasm():
+    """相機回報 10 個曝光模式，但實際會用的就 P/A/S/M。
+
+    目前值若不在名單內仍要列出，否則使用者看不到自己現在在哪一檔。
+    """
+    js = _script(HTML.read_text())
+    assert "CHOICE_WHITELIST" in js
+    block = js[js.index("CHOICE_WHITELIST"):js.index("NEEDS_MANUAL")]
+    for m in ("ProgramAuto", "AperturePriority", "ShutterPriority", "Manual"):
+        assert m in block, m
+    assert "C1" not in block and "Star" not in block
+    assert "String(v) === String(cur)" in js, "目前值不在名單時沒有保留"
+    print("✓ 曝光模式只列 P/A/S/M（目前值不在名單時仍保留）")
+
+
 def test_state_updates_do_not_rebuild_dom():
     """狀態廣播是 10Hz。無條件寫 innerHTML 會讓節點每 100ms 被銷毀重建 ——
     版面抖動、捲軸亂飄，按鈕在按下的瞬間被換掉所以按不到。實測踩過。

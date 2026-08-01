@@ -486,7 +486,11 @@ def describe(capabilities: dict | None = None,
             entry["choices"] = values
         out.append(entry)
 
-    # 衍生設定：沒有對應的相機欄位，由 shutter_speed + 幀率換算
+    # 衍生設定：沒有對應的相機欄位，由 shutter_speed + 幀率換算。
+    # 錄影模式下不要列 —— 那裡有真正的 DataGroupMovie tag 7，兩個同名會打架，
+    # 而且真的那個才是相機實際採用的值。
+    if mode == "movie":
+        return out
     out.append({
         "name": SHUTTER_ANGLE,
         "kind": "derived",
