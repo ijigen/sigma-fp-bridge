@@ -160,6 +160,8 @@ class BridgeState:
     settings_snapshot: dict | None = None
     #: 交還期間保留的相機連線。放開 USB 會被 macOS 搶走，所以只退出 API 模式。
     released_camera: object | None = None
+    #: 錄影時快門用速度還是角度（DataGroupMovie tag 6：1 = 速度、2 = 角度）
+    shutter_unit: int | None = None
     #: "stills" | "movie" | None —— 機身撥桿位置（推測而來，見 refresh_capabilities）
     camera_mode: str | None = None
     #: 錄影中與否。bridge 自己記，因為相機沒有可直接查詢的「正在錄影」旗標
@@ -581,6 +583,17 @@ async def cam_wait_idle(timeout_s: float = 2.0, poll_interval_s: float = 0.05) -
     return False
 
 
+def _shutter_speed_allowed() -> set:
+    """錄影模式下相機切到「快門速度」時，shutter_speed 才是有效的。
+
+    這是 DataGroupMovie tag 6 決定的（1 = 速度、2 = 角度）—— 用寫入試探
+    確認：設成 2 時相機宣告 18 個合法快門角度，設成 1 時變成 0 個。
+    """
+    if state.camera_mode == "movie" and state.shutter_unit == 1:
+        return {"shutter_speed"}
+    return set()
+
+
 def _read_all_settings() -> dict:
     """在 executor 裡跑：靜態設定 + 錄影設定一起讀。
 
@@ -589,7 +602,9 @@ def _read_all_settings() -> dict:
     """
     out = read_settings(state.camera, state.frame_rate)
     try:
-        out.update(movie_settings.read_settings(state.camera))
+        movie = movie_settings.read_settings(state.camera)
+        out.update(movie)
+        state.shutter_unit = movie.get("shutter_unit")
     except Exception as e:
         log.debug(f"錄影設定讀取失敗（可能不在 CINE 模式）：{e}")
     return out
@@ -622,7 +637,7 @@ def _apply_and_verify(changes: dict) -> dict:
     if still_changes:
         applied.update(apply_settings(state.camera, still_changes,
                                       state.capabilities, state.frame_rate,
-                                      state.camera_mode))
+                                      state.camera_mode, _shutter_speed_allowed()))
 
     actual = _read_all_settings()
     mode = actual.get("exposure_mode")
@@ -1023,12 +1038,14 @@ async def handle_ws_command(req: dict) -> dict | None:
         return {
             "type": "settings_schema",
             "id": request_id,
-            "settings": describe(state.capabilities, state.camera_mode)
+            "settings": describe(state.capabilities, state.camera_mode,
+                                 _shutter_speed_allowed())
                         + (movie_settings.describe(state.movie_capabilities)
                            if state.camera_mode == "movie" else []),
             "capabilities": state.capabilities,
             "movie_capabilities": state.movie_capabilities,
             "camera_mode": state.camera_mode,
+            "shutter_unit": state.shutter_unit,
             "frame_rate": state.frame_rate,
         }
 
@@ -1224,12 +1241,14 @@ async def handle_settings_schema(request: web.Request) -> web.Response:
         with suppress(Exception):
             await refresh_capabilities()
     return web.json_response({
-        "settings": describe(state.capabilities, state.camera_mode)
+        "settings": describe(state.capabilities, state.camera_mode,
+                             _shutter_speed_allowed())
                     + (movie_settings.describe(state.movie_capabilities)
                        if state.camera_mode == "movie" else []),
         "capabilities": state.capabilities,
         "movie_capabilities": state.movie_capabilities,
         "camera_mode": state.camera_mode,
+        "shutter_unit": state.shutter_unit,
     })
 
 

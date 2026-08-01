@@ -671,6 +671,17 @@ and both resolutions, with the same result each time. **The cause is unknown.**
 not explain it. The value is read back and the mismatch reported rather than
 passed off as success.
 
+**The shutter unit is `DataGroupMovie` tag 6** — 1 for speed, 2 for angle. Found
+by writing to it: at 2 the camera declares 18 legal shutter angles, at 1 it
+declares none while still reporting a shutter speed range. This is why writing
+`shutter_speed` in CINE appeared to do nothing — the camera was in angle mode,
+and the field it accepts depends on this tag. The UI's seconds/angle buttons set
+it, so switching there switches the camera.
+
+Both read-only routes to identifying it were closed: a change made on the body is
+wiped by `sgm_ConfigApi` on re-acquire, and outside API mode the camera answers
+vendor commands with an empty payload. Writing was the only way left.
+
 **Aspect ratio, colour space and tone effect do nothing in CINE.** Written and
 discarded, like `shutter_speed`. They are marked stills-only and omitted from the
 movie schema.

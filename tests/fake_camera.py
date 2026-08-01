@@ -51,7 +51,7 @@ class FakeCamera:
         # 這些欄位寫進去會被相機默默忽略（模擬自動曝光覆蓋手動值）
         self.ignored_fields: set = set()
         # DataGroupMovie 的內容（tag -> 值）。照實機讀到的樣子。
-        self.movie = {7: (1728, 3600), 50: 2, 51: 12, 52: 2, 60: 2, 61: (2398, 100)}
+        self.movie = {6: 2, 7: (1728, 3600), 50: 2, 51: 12, 52: 2, 60: 2, 61: (2398, 100)}
         self.movie_write_log: list = []
         # ptpy 的 Container 需要這兩個欄位
         self._session = 1
@@ -108,7 +108,7 @@ class FakeCamera:
         self.api_mode = True
         self.usb_claimed = True
         self.ignored_fields = set()
-        self.movie = {7: (1728, 3600), 50: 2, 51: 12, 52: 2, 60: 2, 61: (2398, 100)}
+        self.movie = {6: 2, 7: (1728, 3600), 50: 2, 51: 12, 52: 2, 60: 2, 61: (2398, 100)}
         self.movie_write_log.clear()
         self.capabilities = {
             "iso": {"min": 100, "max": 25600, "step_ev": 0.333},

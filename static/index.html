@@ -455,6 +455,7 @@ const ORDER = [
   // 控制項只會造成困惑。它仍可透過 API 讀寫，協定層的對應也留著。
   ['metering_mode',         '測光'],
   ['__wb',                  '白平衡'],
+  // shutter_unit 併在曝光列的秒 / 角度按鈕裡，不另外列
   ['color_mode',            '色彩模式'],
   ['aspect_ratio',          '長寬比'],
   ['color_space',           '色彩空間'],
@@ -678,20 +679,35 @@ function exposureRow(byName) {
   }
 
   // 快門：秒 / 角度切換 + 數值
+  // 錄影模式下「秒 / 角度」不是顯示偏好，而是相機的實際設定
+  // （DataGroupMovie tag 6）。切換等於寫入相機，所以按鈕要送設定而不是
+  // 只改前端狀態 —— 這也是為什麼 CINE 下秒數原本按了沒用：相機根本在角度模式。
+  const unitSetting = byName.shutter_unit;
+  const cameraUnit = values.shutter_unit;   // 1 = 速度、2 = 角度
   const secondsAvailable = !!speed;
-  const useAngle = shutterUnit === 'angle' || !secondsAvailable;
+  const useAngle = unitSetting
+    ? cameraUnit !== 1
+    : (shutterUnit === 'angle' || !secondsAvailable);
   const active = useAngle ? angle : speed;
   if (active) {
     if (values[active.name] !== null && values[active.name] !== undefined)
       parts.push(labelFor(active, values[active.name]));
-    const unitBtn = (u, label, on, tip) =>
-      '<button class="o' + (useAngle === (u === 'angle') ? ' on' : '') + '"' +
-      (on ? '' : ' disabled') + (tip ? ' title="' + escapeHTML(tip) + '"' : '') +
-      ' data-unit="' + u + '">' + label + '</button>';
+    // 相機有 shutter_unit 就寫入相機，沒有（拍照模式）就只切前端顯示
+    const unitBtn = (u, label, on, tip) => {
+      const attr = unitSetting
+        ? ' data-set="shutter_unit" data-val="' + (u === 'angle' ? 2 : 1) + '"'
+        : ' data-unit="' + u + '"';
+      return '<button class="o' + (useAngle === (u === 'angle') ? ' on' : '') + '"' +
+        (on ? '' : ' disabled') + (tip ? ' title="' + escapeHTML(tip) + '"' : '') +
+        attr + '>' + label + '</button>';
+    };
     const v = values[active.name];
     body += '<span class="grp">' +
-      unitBtn('time', '秒', secondsAvailable, secondsAvailable ? '' : 'CINE 模式的快門只能用角度設定') +
-      unitBtn('angle', '角度', !!angle, '') +
+      unitBtn('time', '秒', unitSetting ? true : secondsAvailable,
+              unitSetting ? '切換相機的快門表示法為速度' :
+              (secondsAvailable ? '' : 'CINE 模式的快門只能用角度設定')) +
+      unitBtn('angle', '角度', unitSetting ? true : !!angle,
+              unitSetting ? '切換相機的快門表示法為角度' : '') +
       '<select data-set="' + active.name + '"' + (shOK ? '' : ' disabled') +
       ' title="' + escapeHTML(shOK ? '快門' : 'P / A 模式下由相機決定快門') + '">' +
       optionsFor(active.choices, v, c => labelFor(active, c)) + '</select></span>';

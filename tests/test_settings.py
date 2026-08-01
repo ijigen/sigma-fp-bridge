@@ -297,6 +297,28 @@ def test_stills_only_settings_are_marked():
     print("✓ 錄影模式下無效的拍照設定已標記並排除")
 
 
+def test_shutter_speed_allowed_when_camera_is_in_speed_mode():
+    """錄影模式下 shutter_speed 原本被擋，但相機切到速度模式時它就是有效的。
+
+    模式閘門要能接受這個例外，否則使用者切了單位卻還是不能設快門。
+    """
+    cam = fake_camera.FakeCamera()
+    try:
+        CS.apply_settings(cam, {"shutter_speed": 1 / 500}, mode="movie")
+    except CS.SettingError:
+        pass
+    else:
+        raise AssertionError("角度模式下應該擋下")
+
+    CS.apply_settings(cam, {"shutter_speed": 1 / 500}, mode="movie",
+                      also_allowed={"shutter_speed"})
+    assert cam.groups[1]["ShutterSpeed"] == CS.SHUTTER.encode_uint8(1 / 500)
+
+    names = {d["name"] for d in CS.describe(mode="movie", also_allowed={"shutter_speed"})}
+    assert "shutter_speed" in names, "速度模式下 schema 要列出 shutter_speed"
+    print("✓ 相機切到速度模式時 shutter_speed 解除封鎖")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

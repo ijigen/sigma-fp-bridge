@@ -44,6 +44,11 @@ def reset():
     B.state.focus_range = None
     B.state.last_lens_focal_mm = None
     B.state.released_by_user = False
+    # 模式會被 refresh_capabilities() 設定，測試之間必須清掉 ——
+    # 不然某個測試會繼承前一個的錄影模式，然後被模式閘門擋下。
+    B.state.camera_mode = None
+    B.state.shutter_unit = None
+    B.state.released_camera = None
     B.state.frame_rate = 24.0
     CAM.usb_claimed = True
 

@@ -284,7 +284,8 @@ def read_settings(cam, frame_rate: float | None = None) -> dict[str, Any]:
     return result
 
 
-def check_applies_to_mode(name: str, mode: str | None) -> None:
+def check_applies_to_mode(name: str, mode: str | None,
+                          also_allowed: set | None = None) -> None:
     """擋掉在目前機身模式下無效的設定。
 
     不擋的話，相機會收下寫入然後默默丟掉 —— 使用者只看到「設了沒反應」，
@@ -292,6 +293,8 @@ def check_applies_to_mode(name: str, mode: str | None) -> None:
     不如直接說清楚哪裡不對、該用什麼代替。
     """
     if mode is None:
+        return
+    if also_allowed and name in also_allowed:
         return
     setting = BY_NAME.get(name)
     if setting is None or setting.applies_to in ("both", mode):
@@ -305,7 +308,8 @@ def check_applies_to_mode(name: str, mode: str | None) -> None:
 def apply_settings(cam, changes: dict[str, Any],
                    capabilities: dict | None = None,
                    frame_rate: float | None = None,
-                   mode: str | None = None) -> dict[str, Any]:
+                   mode: str | None = None,
+                   also_allowed: set | None = None) -> dict[str, Any]:
     """套用一批設定變更。
 
     同一個 DataGroup 的欄位會合併成一次寫入 —— 除了少一趟 USB，更重要的是
@@ -357,7 +361,7 @@ def apply_settings(cam, changes: dict[str, Any],
     by_group: dict[int, dict[str, Any]] = {}
     for name, value in changes.items():
         setting = BY_NAME[name]
-        check_applies_to_mode(name, mode)
+        check_applies_to_mode(name, mode, also_allowed)
         check_within_capabilities(name, value, capabilities)
         encoded = encode_value(setting, value)
         by_group.setdefault(setting.group, {})[setting.field] = encoded
@@ -463,7 +467,8 @@ def check_within_capabilities(name: str, value, capabilities: dict | None) -> No
 
 
 def describe(capabilities: dict | None = None,
-             mode: str | None = None) -> list[dict[str, Any]]:
+             mode: str | None = None,
+             also_allowed: set | None = None) -> list[dict[str, Any]]:
     """所有設定的中繼資料，給 UI 生控制項用。
 
     Args:
@@ -473,8 +478,11 @@ def describe(capabilities: dict | None = None,
     """
     out = []
     for setting in SETTINGS:
-        # 不適用於目前模式的設定直接不列 —— 列出來只會誘人去踩空
-        if mode and setting.applies_to not in ("both", mode):
+        # 不適用於目前模式的設定直接不列 —— 列出來只會誘人去踩空。
+        # also_allowed 是例外：錄影模式下相機切到「快門速度」時，
+        # shutter_speed 就是有效的（見 DataGroupMovie tag 6）。
+        if (mode and setting.applies_to not in ("both", mode)
+                and not (also_allowed and setting.name in also_allowed)):
             continue
         entry: dict[str, Any] = {
             "name": setting.name,

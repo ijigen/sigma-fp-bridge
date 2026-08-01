@@ -67,6 +67,10 @@ MOVIE_SETTINGS: tuple[MovieSetting, ...] = (
     MovieSetting("shutter_angle", 7, DT.URational, "angle", "deg",
                  "電影快門角度。CINE 模式下快門只能從這裡設，"
                  "寫 DataGroup1 的 shutter_speed 沒有作用。"),
+    MovieSetting("shutter_unit", 6, DT.UInt8, "int",
+                 note="錄影時快門用「速度」還是「角度」表示。用寫入試探確認的："
+                      "設成 2 時 CanSetInfo5 的 ShutterAngle 有 18 個合法值，"
+                      "設成 1 時變成 0 個，而快門速度範圍仍在。"),
     MovieSetting("record_format", 50, DT.UInt8, "int",
                  note="1 = CinemaDNG、2 = MOV，兩者都以實際錄製的產物確認過。"),
     MovieSetting("cinema_dng_quality", 51, DT.UInt8, "int", "bit",
@@ -85,6 +89,9 @@ MOVIE_SETTINGS: tuple[MovieSetting, ...] = (
 
 MOVIE_BY_NAME = {s.name: s for s in MOVIE_SETTINGS}
 
+#: 相機沒有回報合法值清單、但我們知道值域的設定。
+FALLBACK_CHOICES = {"shutter_unit": [1, 2]}
+
 #: 已經用實機確認過的數值標籤。沒確認的一律不列 —— 猜錯的標籤比沒有標籤更糟，
 #: 因為後面的人會相信它。
 VALUE_LABELS: dict[str, dict[int, str]] = {
@@ -100,10 +107,17 @@ VALUE_LABELS: dict[str, dict[int, str]] = {
 #: 哪些是推論」在程式裡就分得清楚。UI 顯示時會標註未確認。
 # 目前沒有待確認的項目。機制保留著 —— record_format 的 mov_image_quality
 # 與 movie_resolution 以外的數值仍然沒有名字，將來補上時會先經過這裡。
-INFERRED_LABELS: dict[str, dict[int, str]] = {}
+INFERRED_LABELS: dict[str, dict[int, str]] = {
+    # tag 6 = 2 時角度可用、= 1 時角度不可用而速度範圍仍在，所以 1 幾乎
+    # 確定是「速度」—— 但還沒實際在 1 的狀態下成功寫入一次快門速度，
+    # 所以先標為未確認。
+    "shutter_unit": {1: "速度", 2: "角度"},
+}
 
 #: CanSetInfo5 裡對應的「合法值清單」tag，用來限制可設的範圍。
 CAPABILITY_TAGS = {
+    # shutter_unit 在 CanSetInfo5 裡沒有對應的能力 tag（106 不存在），
+    # 所以沒有合法值清單可以驗證 —— 值域由下面的 CHOICES 補上。
     "shutter_angle": 214,
     "record_format": 150,
     "cinema_dng_quality": 151,
@@ -253,13 +267,16 @@ def read_capabilities(cam, info5_raw: bytes | None) -> dict[str, list]:
     """
     RAW_CAPABILITIES.clear()
     _LAST_CAPABILITIES.clear()
+    # 相機沒回報能力時，至少保留我們自己知道值域的那幾個
+    caps = dict(FALLBACK_CHOICES)
     if not info5_raw:
-        return {}
+        _LAST_CAPABILITIES.update(caps)
+        return caps
     try:
         ifd = parse_ifd(info5_raw)
     except Exception:
-        return {}
-    caps = {}
+        _LAST_CAPABILITIES.update(caps)
+        return caps
     for name in MOVIE_BY_NAME:
         values = _capability_values(ifd, name)
         if values:
@@ -268,6 +285,7 @@ def read_capabilities(cam, info5_raw: bytes | None) -> dict[str, list]:
             raw = _capability_raw(ifd, name)
             if raw:
                 RAW_CAPABILITIES[name] = raw
+    _LAST_CAPABILITIES.update(caps)
     return caps
 
 

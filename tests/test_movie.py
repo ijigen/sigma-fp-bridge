@@ -250,6 +250,26 @@ def test_probe_write_is_type_restricted_and_sparse():
         raise AssertionError("不允許的型別應該被擋下")
 
 
+def test_shutter_unit_is_a_real_setting():
+    """DataGroupMovie tag 6 決定錄影快門用速度還是角度。
+
+    用寫入試探確認：設成 2 時 CanSetInfo5 宣告 18 個合法快門角度，
+    設成 1 時變成 0 個而快門速度範圍仍在。這解釋了為什麼 CINE 下寫
+    shutter_speed 一直沒作用 —— 相機當時就在角度模式。
+    """
+    s = M.MOVIE_BY_NAME["shutter_unit"]
+    assert s.tag == 6
+    cam = fake_camera.FakeCamera()
+    assert M.read_settings(cam)["shutter_unit"] == 2
+    M.apply_settings(cam, {"shutter_unit": 1}, {"shutter_unit": [1, 2]})
+    assert cam.movie[6] == 1
+    assert M.read_settings(cam)["shutter_unit"] == 1
+    # 相機沒回報這個的合法值清單，值域由 FALLBACK_CHOICES 補
+    caps = M.read_capabilities(None, None)
+    assert caps["shutter_unit"] == [1, 2]
+    print("✓ 快門單位（tag 6）可讀可寫，值域有備援")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):
