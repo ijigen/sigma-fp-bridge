@@ -53,6 +53,25 @@ CHUNK_BYTES = 1 << 20
 #: 等待影像產生完成的上限
 CAPTURE_TIMEOUT_S = 30.0
 
+#: 目前進行到哪一步，(步驟名稱, 起始時間) 或 None。
+#: 拍攝卡住時 PTP 全部沒反應，但這個變數不碰相機就讀得到 —— /api/status
+#: 因此還答得出「卡在哪一個呼叫」，那是從外面唯一能取得的線索。
+CURRENT_STEP: tuple[str, float] | None = None
+
+
+def _step(name: str | None) -> None:
+    global CURRENT_STEP
+    CURRENT_STEP = (name, time.monotonic()) if name else None
+
+
+def current_step() -> dict | None:
+    """給 /api/status 用：目前卡在哪一步、卡了多久。"""
+    step = CURRENT_STEP
+    if step is None:
+        return None
+    return {"step": step[0], "seconds": round(time.monotonic() - step[1], 1)}
+
+
 _DONE = {"ImageGenCompleted", "ImageDataStorageCompleted", "ShootSuccess"}
 _FAILED = {"ImageGenFailed", "Failed", "BufferFull", "Interrupted", "AFFailed"}
 
@@ -194,17 +213,22 @@ def capture(cam, save_dir: Path | None = None,
     Raises:
         CaptureError: 拍攝失敗、逾時、或下載中斷。
     """
+    _step("release_stale")
     if release_stale:
         release_pending(cam)
 
     # 新的項目就落在拍攝前的 tail。這裡不能用「拍完再讀 tail」——那是 +1
     # 之後的值，指向還不存在的下一格。
+    _step("pending_range")
     _, image_id = pending_range(cam)
 
     mode = CaptureMode.GeneralCapt if autofocus else CaptureMode.NonAFCapt
+    _step("snap_command")
     cam.snap_command(SnapCommand(CaptureMode=mode, CaptureAmount=1))
+    _step(f"wait_until_done(id={image_id})")
     wait_until_done(cam, image_id)
 
+    _step("get_pict_file_info2")
     try:
         info = cam.get_pict_file_info2()
     except Exception as e:
@@ -220,12 +244,15 @@ def capture(cam, save_dir: Path | None = None,
     )
     try:
         if fetch and image.size:
+            _step(f"download({image.size:,} bytes)")
             image.data = download(cam, info)
             if save_dir is not None:
                 save_dir.mkdir(parents=True, exist_ok=True)
                 (save_dir / image.filename).write_bytes(image.data)
     finally:
         # 一定要釋放，即使下載失敗 —— 沒釋放的話下一次拍攝快門不會動作。
+        _step("clear_slot")
         if release:
             clear_slot(cam, image_id)
+        _step(None)
     return image

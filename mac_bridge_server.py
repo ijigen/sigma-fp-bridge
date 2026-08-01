@@ -1260,6 +1260,8 @@ async def handle_status(request: web.Request) -> web.Response:
         # 卡住的話這裡會有訊息。/api/status 不碰相機，所以就算 worker 死了
         # 這個端點仍答得出來 —— 卡住時它是唯一還能講話的地方。
         "stuck": worker.stuck,
+        # 拍攝進行到哪一步。卡住時這是唯一能指出「卡在哪個 PTP 呼叫」的線索。
+        "capture_step": capture.current_step(),
         "released": state.released_by_user,
         "camera_mode": state.camera_mode,
         "recording": state.recording,
@@ -1736,6 +1738,15 @@ async def camera_unavailable_middleware(request: web.Request, handler):
     handler 開頭雖然有檢查 camera_connected，但那之後到 job 真正執行之間
     還是有空窗，斷線剛好落在裡面時就靠這層兜住。
     """
+    # 卡住時各 handler 開頭的 camera_connected 檢查會先觸發，回報「not
+    # connected」—— 那是誤導，相機還在，是我們自己的執行緒回不來。在這裡先攔。
+    # /api/status 例外：它不碰相機，卡住時就靠它把狀況講出來。
+    if worker.stuck is not None and request.path != "/api/status":
+        return web.json_response(
+            {"error": worker.stuck, "stuck": True,
+             "capture_step": capture.current_step(),
+             "recovery": "restart the bridge"},
+            status=503)
     try:
         return await handler(request)
     except CameraUnavailable as e:

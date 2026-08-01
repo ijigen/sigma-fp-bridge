@@ -19,6 +19,7 @@ import contextlib
 import json
 import sys
 import threading
+import types
 import time
 from pathlib import Path
 
@@ -129,6 +130,41 @@ async def test_a_hung_camera_call_fails_fast_instead_of_queueing_forever():
         finally:
             never_returns.set()   # 放掉那條 executor 執行緒
     print("✓ 相機呼叫卡住時立刻回報，不讓後續請求無聲排隊")
+
+
+async def test_status_still_answers_and_names_the_stuck_step():
+    """卡住時 /api/status 必須是唯一還能講話的端點。
+
+    實測時從外面完全看不出哪裡壞了：/api/settings 沒有回應、live view 送出
+    0 bytes、/api/status 卻一切正常 —— 因為它讀快取。既然它是唯一活著的
+    出口，卡住的訊息和卡在哪一步就都要從它講出來。
+    """
+    reset()
+    async with running_worker() as w:
+        w.stuck = "測試用的卡住訊息"
+        capture_mod = sys.modules["capture"]
+        capture_mod._step("get_pict_file_info2")
+        try:
+            request = types.SimpleNamespace(path="/api/status")
+            resp = await B.handle_status(request)
+            body = json.loads(resp.body.decode())
+            assert body["stuck"] == "測試用的卡住訊息", body
+            assert body["capture_step"]["step"] == "get_pict_file_info2", body
+
+            # 其他端點要回 503 並指出解法，而不是誤報 not connected
+            async def unreachable(_):
+                raise AssertionError("卡住時不該進到 handler")
+
+            other = types.SimpleNamespace(path="/api/settings")
+            resp = await B.camera_unavailable_middleware(other, unreachable)
+            assert resp.status == 503
+            body = json.loads(resp.body.decode())
+            assert body["stuck"] is True and "restart" in body["recovery"], body
+            assert body["capture_step"]["step"] == "get_pict_file_info2", body
+        finally:
+            capture_mod._step(None)
+            w.stuck = None
+    print("✓ 卡住時 /api/status 仍答得出來，並指出卡在哪一步")
 
 
 async def test_set_position_coalesces():
