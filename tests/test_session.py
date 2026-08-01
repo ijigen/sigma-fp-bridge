@@ -74,6 +74,41 @@ def test_close_camera_without_session_does_not_raise():
     print("✓ 沒有 session context manager 時不會爆炸")
 
 
+def test_info5_survives_upstream_decode_crash():
+    """sigma-ptpy 解 CanSetInfo5 失敗時，我們還是要拿得到原始 bytes。
+
+    實測踩到：CINE 模式下 sigma-ptpy 的 field_defs 假設 tag 3 一定有值
+    （x[0]），但錄影模式下它是空的 → IndexError → 整個讀取失敗
+    → 焦點範圍與 ISO 範圍在錄影模式下全部拿不到。
+    我們只要原始 bytes，自己解，所以上游解不出來不該擋住我們。
+    """
+    payload = b"\x08\x00\x00\x00\x00\x00\x00\x00"
+
+    class Boom:
+        def get_cam_can_set_info5(self):
+            sigma_fp_focus._LAST_RAW["CanSetInfo5"] = payload
+            raise IndexError("list index out of range")
+
+    got = sigma_fp_focus.read_info5_raw(Boom())
+    assert got == payload, got
+    print("✓ 上游 decode 崩潰時仍取得 CanSetInfo5 原始 bytes")
+
+
+def test_info5_still_raises_when_nothing_captured():
+    """真的什麼都沒拿到就不能假裝成功。"""
+    class Dead:
+        def get_cam_can_set_info5(self):
+            raise RuntimeError("USB timeout")
+
+    sigma_fp_focus._LAST_RAW.pop("CanSetInfo5", None)
+    try:
+        sigma_fp_focus.read_info5_raw(Dead())
+    except RuntimeError:
+        print("✓ 完全沒攔到資料時照樣往上丟")
+    else:
+        raise AssertionError("應該要往上丟")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

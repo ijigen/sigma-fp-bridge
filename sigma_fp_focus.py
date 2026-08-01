@@ -355,7 +355,24 @@ def read_info5_raw(cam: SigmaPTPy) -> bytes:
             "可能是 sigma-ptpy 改了命名，檢查 _find_canset_info5_class()。"
         )
     _LAST_RAW.pop("CanSetInfo5", None)  # 清掉舊的，免得相機沒回卻拿到上一次的
-    cam.get_cam_can_set_info5()
+    try:
+        cam.get_cam_can_set_info5()
+    except Exception as e:
+        # sigma-ptpy 自己解不出來不代表我們拿不到資料。它的 field_defs 對某些
+        # tag 假設一定有值，例如：
+        #
+        #   (3, "IntervalTimerFrame", lambda x: {"InfiniteSetting": x[0] == 1, ...})
+        #
+        # 而在 CINE 模式下那些 tag 的 count 是 0，x[0] 就 IndexError。整個讀取
+        # 因此失敗 —— 連帶讓焦點範圍與 ISO 範圍在錄影模式下全部拿不到，
+        # 而 README 正好叫大家用 CINE 模式。
+        #
+        # 我們只要原始 bytes，自己用 ifd.py 解，所以只要側錄有攔到就繼續。
+        if "CanSetInfo5" not in _LAST_RAW:
+            raise
+        print(f"提示：sigma-ptpy 解 CanSetInfo5 失敗（{type(e).__name__}: {e}），"
+              "改用側錄到的原始 bytes 自行解析。", file=sys.stderr)
+
     raw = _LAST_RAW.get("CanSetInfo5")
     if raw is None:
         raise RuntimeError(
