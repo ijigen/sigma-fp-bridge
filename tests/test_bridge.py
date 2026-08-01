@@ -248,6 +248,55 @@ async def test_movie_rejection_hints_at_exposure_mode():
     print("✓ 錄影快門被自動曝光蓋掉時會提示切 Manual")
 
 
+async def test_release_acquire_restores_settings():
+    """acquire 會跑 config_api()，相機設定被重置成預設值。
+
+    這是已知行為（SDK：「API resets the camera setting to the default」），
+    但它讓 release 這個功能實際上很難用 —— 使用者只是想暫時拿回機身，
+    回來卻發現設定全沒了。所以 release 前存檔、acquire 後還原。
+    """
+    reset()
+    from sigma_ptpy import enum as E
+    async with running_worker():
+        await B.cam_apply_settings({"exposure_mode": "Manual", "aperture": 5.6})
+
+        # 模擬 config_api() 的重置：acquire 之後相機回到預設
+        original_open = sys.modules["sigma_fp_focus"].open_camera
+
+        def open_and_reset():
+            cam = original_open()
+            cam.groups = cam._default_groups()
+            cam.groups[2]["ExposureMode"] = E.ExposureMode.ProgramAuto
+            return cam
+
+        sys.modules["sigma_fp_focus"].open_camera = open_and_reset
+        B.open_camera = open_and_reset
+        try:
+            await B.release_camera()
+            assert B.state.settings_snapshot, "release 應該要留下快照"
+            assert await B.acquire_camera()
+            got = await B.cam_read_settings()
+        finally:
+            sys.modules["sigma_fp_focus"].open_camera = original_open
+            B.open_camera = original_open
+
+    assert got["exposure_mode"] == "Manual", got
+    assert got["aperture"] == 5.6, got
+    print("✓ release → acquire 之後設定被還原（而非停在重置值）")
+
+
+async def test_acquire_can_skip_restore():
+    """想看機身端改了什麼的時候，還原反而礙事。"""
+    reset()
+    async with running_worker():
+        await B.release_camera()
+        snapshot = B.state.settings_snapshot
+        assert snapshot
+        assert await B.acquire_camera(restore=False)
+        assert B.state.settings_snapshot is None
+    print("✓ acquire(restore=False) 不還原")
+
+
 async def test_settings_roundtrip_through_bridge():
     reset()
     async with running_worker():

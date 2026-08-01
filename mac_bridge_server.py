@@ -153,6 +153,8 @@ class BridgeState:
     capabilities: dict = field(default_factory=dict)
     #: 錄影設定的合法值清單（來自 CanSetInfo5 的 150/151/160/161/214 等）
     movie_capabilities: dict = field(default_factory=dict)
+    #: release 前的設定快照，acquire 後用來還原（見 release_camera）
+    settings_snapshot: dict | None = None
     # 快門角度換算用的幀率。機身實際幀率在 DataGroupMovie 裡，但那個
     # DataGroup 的 tag 編號還沒解出來，所以先由使用者指定。
     frame_rate: float = 24.0
@@ -689,6 +691,17 @@ async def release_camera() -> None:
     相機設定會再被 config_api() 重置一次。
     """
     state.released_by_user = True
+
+    # 先存檔再放手。重新取得相機時 config_api() 會把設定重置成預設值
+    # （SDK 原文："API resets the camera setting to the default"），
+    # 不存的話使用者只是暫時拿回機身，回來就發現設定全沒了。
+    try:
+        state.settings_snapshot = await cam_read_settings()
+        log.info(f"已保存 {len(state.settings_snapshot)} 項設定，供 acquire 後還原")
+    except Exception as e:
+        state.settings_snapshot = None
+        log.warning(f"設定快照失敗，acquire 後將無法還原：{e}")
+
     cam = state.camera
     # 先清掉再關，這樣進行中的 job 會拿到 CameraUnavailable 而不是半死的 handle
     state.camera = None
@@ -702,10 +715,41 @@ async def release_camera() -> None:
     await broadcast_state({"event": "camera_released"})
 
 
-async def acquire_camera() -> bool:
-    """重新取得相機控制權。"""
+async def acquire_camera(restore: bool = True) -> bool:
+    """重新取得相機控制權，並還原 release 前的設定。
+
+    Args:
+        restore: False = 保留相機重置後的預設值。想看機身端改了什麼的時候用
+            —— 還原會把那些變更蓋掉。
+    """
     state.released_by_user = False
-    return await try_connect_camera()
+    if not await try_connect_camera():
+        return False
+
+    snapshot = state.settings_snapshot
+    state.settings_snapshot = None
+    if not restore or not snapshot:
+        return True
+
+    # 曝光模式要先設：自動模式會擋掉手動的快門 / 光圈，順序錯了就白做
+    mode = snapshot.get("exposure_mode")
+    if mode:
+        with suppress(Exception):
+            await cam_apply_settings({"exposure_mode": mode})
+
+    rest = {k: v for k, v in snapshot.items()
+            if v is not None and k != "exposure_mode"}
+    if rest:
+        try:
+            result = await cam_apply_settings(rest)
+            missed = list(result.get("rejected", {}))
+            log.info(
+                f"已還原 {len(rest) - len(missed)} 項設定"
+                + (f"，{len(missed)} 項還原失敗：{', '.join(missed)}" if missed else "")
+            )
+        except Exception as e:
+            log.warning(f"還原設定失敗：{e}")
+    return True
 
 
 async def reconnect_loop():
@@ -888,7 +932,7 @@ async def handle_ws_command(req: dict) -> dict | None:
         return {"type": "ack", "id": request_id, "released": True}
 
     if cmd == "acquire":
-        ok = await acquire_camera()
+        ok = await acquire_camera(restore=req.get("restore", True))
         return {"type": "ack", "id": request_id, "released": not ok, "connected": ok}
 
     if cmd == "describe_settings":
@@ -1139,7 +1183,8 @@ async def handle_release(request: web.Request) -> web.Response:
 
 
 async def handle_acquire(request: web.Request) -> web.Response:
-    ok = await acquire_camera()
+    restore = request.query.get("restore", "1") not in ("0", "false", "no")
+    ok = await acquire_camera(restore=restore)
     return web.json_response({"ok": ok, "released": not ok, "connected": ok})
 
 

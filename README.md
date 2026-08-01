@@ -195,8 +195,17 @@ Shut the bridge down with Ctrl+C and control returns cleanly. To get the body
 back **without** stopping the bridge, use `release` (WebSocket) or
 `POST /api/release`, then `acquire` when you want control again. While released
 there is no live view, no status polling and no focus control — the bridge is
-genuinely off the camera. Re-acquiring runs `sgm_ConfigApi` again, so it resets
-the camera settings to defaults a second time.
+genuinely off the camera.
+
+Re-acquiring runs `sgm_ConfigApi` again, which resets the camera to defaults, so
+`release` snapshots the settings and `acquire` restores them. Without that,
+stepping away to press a button on the body would silently cost you every setting
+you had dialled in.
+
+**A consequence worth knowing:** changes you make on the body while released do
+not survive re-acquiring — the reset discards them, and the restore then puts
+back what was there before. Pass `restore: false` (WebSocket) or
+`POST /api/acquire?restore=0` to keep the reset values instead.
 
 ### Gotcha 5: macOS binds PTP cameras at enumeration
 
