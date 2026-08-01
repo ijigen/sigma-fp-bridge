@@ -215,7 +215,7 @@ class FakeCamera:
 
     def snap_command(self, data):
         self._tick("snap:" + data.CaptureMode.name)
-        from sigma_ptpy.enum import CaptureMode
+        from sigma_ptpy.enum import CaptStatus, CaptureMode
         if data.CaptureMode in (CaptureMode.GeneralCapt, CaptureMode.NonAFCapt,
                                 CaptureMode.StartCap):
             # 上一張還沒被 clear_image_db_single 取走就拒絕拍攝 ——
@@ -235,6 +235,7 @@ class FakeCamera:
         if data.CaptureMode in (CaptureMode.StartRecMovie, CaptureMode.StartRecMovieAF):
             self.recording = True
         elif data.CaptureMode == CaptureMode.StopRecMovie:
+            self.status0 = CaptStatus.MovieGenCompleted
             if self.recording:
                 # 錄完產生檔案，副檔名照目前的 record_format 決定
                 n = len(self.files) + 1
