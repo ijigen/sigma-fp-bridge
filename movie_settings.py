@@ -56,10 +56,10 @@ MOVIE_SETTINGS: tuple[MovieSetting, ...] = (
                  "電影快門角度。CINE 模式下快門只能從這裡設，"
                  "寫 DataGroup1 的 shutter_speed 沒有作用。"),
     MovieSetting("record_format", 50, DT.UInt8, "int",
-                 note="2 = MOV（實測：在空卡上以 2 錄製，產出 CINEMA/*.MOV）。"
-                      "1 的產物尚未確認。"),
+                 note="1 = CinemaDNG、2 = MOV，兩者都以實際錄製的產物確認過。"),
     MovieSetting("cinema_dng_quality", 51, DT.UInt8, "int", "bit",
-                 "CinemaDNG 位元深度（12 / 10 / 8）。"),
+                 "CinemaDNG 位元深度（12 / 10 / 8）。改 record_format 時相機會"
+                 "自己連動調整這個值，寫入後務必回讀。"),
     MovieSetting("mov_image_quality", 52, DT.UInt8, "int"),
     MovieSetting("movie_resolution", 60, DT.UInt8, "int"),
     MovieSetting("frame_rate", 61, DT.URational, "rational", "fps"),
@@ -70,9 +70,13 @@ MOVIE_BY_NAME = {s.name: s for s in MOVIE_SETTINGS}
 #: 已經用實機確認過的數值標籤。沒確認的一律不列 —— 猜錯的標籤比沒有標籤更糟，
 #: 因為後面的人會相信它。
 VALUE_LABELS: dict[str, dict[int, str]] = {
-    # 空卡 + record_format=2 錄製 → SigmaGetMovieFileInfo 回報
-    # CINEMA / A001_001_20260801.MOV
-    "record_format": {2: "MOV"},
+    # 空卡上各錄一段、由人眼確認產物：
+    #   record_format=2 -> CINEMA/A001_001_20260801.MOV
+    #   record_format=1 -> CinemaDNG 序列（8-bit UHD 23.98fps）
+    "record_format": {1: "CinemaDNG", 2: "MOV"},
+    # 上面那段 CinemaDNG 錄出來是 UHD，當時 movie_resolution = 2。
+    # 合法值是 [2, 1]，所以 1 很可能是 FHD —— 但沒實測過，不列。
+    "movie_resolution": {2: "UHD"},
 }
 
 #: CanSetInfo5 裡對應的「合法值清單」tag，用來限制可設的範圍。

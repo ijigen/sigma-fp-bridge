@@ -634,15 +634,21 @@ value simply never changes. Use `shutter_angle`, which writes to the movie group
 | `cinema_dng_quality` | 12 / 10 / 8-bit |
 | `record_format`, `mov_image_quality`, `movie_resolution` | camera-reported values |
 
-`record_format` reads and writes correctly and the change is fully reversible,
-but **which number means which format is not established.** Switching it to 1
-empties both `CinemaDNGImageQuality` and `MovImageQuality` and drops 29.97 from
-the frame rate list; switching back to 2 restores all three, and the camera also
-moves `cinema_dng_quality` on its own. The obvious reading is 2 = CinemaDNG,
-since that is the value under which the CinemaDNG depth is settable — but then 1
-ought to make `MovImageQuality` settable, and it does not. The API reports the
-raw numbers rather than inventing labels; the fp does not show the format on its
-main display, so confirming it means reading the movie menu.
+**`record_format`: 1 = CinemaDNG, 2 = MOV.** Established by recording a clip at
+each setting on a freshly cleared card and looking at what came out — the fp does
+not show the format on its main display, and the protocol reports a bare number.
+`movie_resolution` 2 = UHD, from the same clip. Values that have not been
+confirmed this way are left unlabelled.
+
+Worth knowing: **changing `record_format` moves `cinema_dng_quality` on its own**
+— switching to CinemaDNG dropped it from 12-bit to 8. Writing one tag is not
+always a one-tag change, which is why writes are read back.
+
+An inference that turned out to be wrong, kept here as a caution: with
+`record_format` at 1, `CinemaDNGImageQuality` reports **no settable values** — yet
+that setting records CinemaDNG perfectly well. An empty capability list means
+"cannot be changed right now", not "does not apply". Reading it as the latter is
+what led to guessing that 2 was CinemaDNG.
 
 sigma-ptpy defines `SigmaGetCamDataGroupMovie` (0x9033) and
 `SigmaSetCamDataGroupMovie` (0x9034) but ships no schema class or method for

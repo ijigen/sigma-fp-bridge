@@ -166,10 +166,13 @@ def test_only_confirmed_labels_are_published():
     先前我推測 record_format=2 是 CinemaDNG（因為只有它的畫質可設），
     實際錄一段才發現是 MOV。猜錯的標籤會被後面的人當事實。
     """
-    assert M.VALUE_LABELS["record_format"] == {2: "MOV"}
+    assert M.VALUE_LABELS["record_format"] == {1: "CinemaDNG", 2: "MOV"}
     schema = {d["name"]: d for d in M.describe()}
-    assert schema["record_format"]["labels"] == {2: "MOV"}
-    assert schema["movie_resolution"]["labels"] is None, "沒確認的不該有標籤"
+    assert schema["record_format"]["labels"] == {1: "CinemaDNG", 2: "MOV"}
+    # movie_resolution 只確認過 2 = UHD；1 沒實測過就不列
+    assert schema["movie_resolution"]["labels"] == {2: "UHD"}
+    assert 1 not in schema["movie_resolution"]["labels"]
+    assert schema["mov_image_quality"]["labels"] is None, "沒確認的不該有標籤"
     print("✓ 只發布實機確認過的數值標籤")
 
 
