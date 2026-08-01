@@ -216,6 +216,32 @@ def test_shutter_angle_and_speed_conflict_rejected():
         raise AssertionError("應該要丟 SettingError")
 
 
+def test_setting_iso_turns_off_iso_auto():
+    """實測發現的：ISO Auto 開著時寫 ISO 完全沒作用。
+
+    所以設 iso 必須同時關掉 iso_auto —— 跟 set_focus_position() 得在同一次
+    寫入裡關掉 AFLock / PreConstAF 是同一個道理。兩者同屬 DataGroup1，
+    會併成一次寫入。
+    """
+    from sigma_ptpy import enum as E
+    cam = fake_camera.FakeCamera()
+    cam.groups[1]["ISOAuto"] = E.ISOAuto.Auto
+    CS.apply_settings(cam, {"iso": 800})
+    assert cam.groups[1]["ISOAuto"] == E.ISOAuto.Manual, "沒有自動關掉 ISO Auto"
+    assert cam.groups[1]["ISOSpeed"] == CS.ISO.encode_uint8(800)
+    assert len(cam.set_group_log) == 1, "應該只有一次寫入（同一個 DataGroup）"
+    print("✓ 設 ISO 會一併關掉 ISO Auto（單次寫入）")
+
+
+def test_explicit_iso_auto_is_respected():
+    """使用者明講要 Auto 就不要雞婆覆蓋。"""
+    from sigma_ptpy import enum as E
+    cam = fake_camera.FakeCamera()
+    CS.apply_settings(cam, {"iso": 800, "iso_auto": "Auto"})
+    assert cam.groups[1]["ISOAuto"] == E.ISOAuto.Auto
+    print("✓ 明確指定 iso_auto 時不覆蓋")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

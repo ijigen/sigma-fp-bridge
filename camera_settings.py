@@ -286,6 +286,14 @@ def apply_settings(cam, changes: dict[str, Any],
 
     changes = dict(changes)
 
+    # 設 ISO 但沒關 ISO Auto 是白費工 —— 相機的自動曝光會立刻覆蓋掉。
+    # 實測確認過：iso_auto=Auto 時寫 iso 完全沒作用，先設成 Manual 就成功。
+    # 這跟 set_focus_position() 必須在同一次寫入裡關掉 AFLock / PreConstAF
+    # 是同一個道理：要手動控制，就得先把搶控制權的自動子系統關掉。
+    # 兩者同屬 DataGroup1，會合併成一次寫入，不會有中間狀態。
+    if "iso" in changes and "iso_auto" not in changes:
+        changes["iso_auto"] = "Manual"
+
     # shutter_angle 沒有對應的相機欄位 —— 換算成 shutter_speed 再照一般流程走
     if SHUTTER_ANGLE in changes:
         if "shutter_speed" in changes:

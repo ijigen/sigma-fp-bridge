@@ -47,6 +47,7 @@ from zeroconf.asyncio import AsyncZeroconf
 
 # 引入 PoC 裡的 patch 跟基礎 helpers
 sys.path.insert(0, str(Path(__file__).parent))
+from ifd import parse_ifd, to_json
 from camera_settings import (
     SettingError,
     apply_settings,
@@ -57,6 +58,8 @@ from camera_settings import (
 from sigma_fp_focus import (
     open_camera,
     read_capabilities,
+    read_info5_raw,
+    read_movie_group_raw,
     close_camera,
     get_focus_range,
     get_focus_state,
@@ -1033,6 +1036,36 @@ async def handle_settings_post(request: web.Request) -> web.Response:
     })
 
 
+async def handle_dump(request: web.Request) -> web.Response:
+    """把 CanSetInfo5 / DataGroupMovie 的原始 IFD 以 JSON 吐出來。
+
+    純唯讀的協定探勘端點。走 HTTP 的意義在於：相機被 bridge 佔著的時候，
+    CLI 版的 --dump-* 根本連不上；而且 HTTP 不需要 root。
+    """
+    which = request.match_info.get("which", "info5")
+    if not state.camera_connected:
+        return web.json_response({"error": "not connected"}, status=503)
+
+    readers = {"info5": read_info5_raw, "movie": read_movie_group_raw}
+    reader = readers.get(which)
+    if reader is None:
+        return web.json_response(
+            {"error": f"unknown dump: {which}（可用：{', '.join(readers)}）"}, status=404
+        )
+
+    try:
+        raw = await worker.call(lambda: reader(state.camera), priority=Priority.STATUS)
+    except Exception as e:
+        return web.json_response({"error": f"{type(e).__name__}: {e}"}, status=502)
+
+    if not raw:
+        return web.json_response({"error": "相機回了空的 payload", "raw_hex": ""})
+    try:
+        return web.json_response(to_json(parse_ifd(raw)))
+    except Exception as e:
+        return web.json_response({"error": str(e), "raw_hex": raw.hex()})
+
+
 async def handle_release(request: web.Request) -> web.Response:
     await release_camera()
     return web.json_response({"ok": True, "released": True})
@@ -1185,6 +1218,7 @@ def make_app() -> web.Application:
     app.router.add_get("/api/settings/schema", handle_settings_schema)
     app.router.add_get("/api/settings", handle_settings_get)
     app.router.add_post("/api/settings", handle_settings_post)
+    app.router.add_get("/api/dump/{which}", handle_dump)
     app.router.add_post("/api/release", handle_release)
     app.router.add_post("/api/acquire", handle_acquire)
     app.router.add_get("/liveview.mjpeg", handle_liveview)

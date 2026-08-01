@@ -277,3 +277,31 @@ def find_tag(ifd: IFD, tag: int) -> IFDEntry | None:
         if e.tag == tag:
             return e
     return None
+
+
+def to_json(ifd: IFD) -> dict:
+    """把解析結果轉成可 JSON 序列化的形式，方便從 HTTP 端點吐出來。
+
+    有了這個就能靠 bridge 的 HTTP API 做協定探勘，不必每次都用 sudo
+    跑 CLI —— 相機已經被 bridge 佔著的時候尤其重要。
+    """
+    return {
+        "data_length": ifd.data_length,
+        "directory_count": ifd.directory_count,
+        "truncated": ifd.truncated,
+        "raw_hex": ifd.payload.hex(),
+        "entries": [
+            {
+                "tag": e.tag,
+                "tag_hex": f"0x{e.tag:04x}",
+                "type": e.type,
+                "type_name": e.type_name,
+                "count": e.count,
+                "inline": e.inline,
+                "values": e.values,
+                "raw_hex": e.value_bytes.hex(),
+                "data_hex": e.data_bytes.hex() if e.data_bytes else None,
+            }
+            for e in ifd.entries
+        ],
+    }
