@@ -259,14 +259,6 @@ def capture(cam, save_dir: Path | None = None,
     except Exception as e:
         raise CaptureError(f"取得影像資訊失敗：{e}") from e
 
-    size = int(getattr(info, "FileSize", 0) or 0)
-    if size > MAX_IMAGE_BYTES:
-        # 這個值不可能是真的。硬拉下去會讓相機不再回應，所以在這裡停手。
-        raise CaptureError(
-            f"影像資訊看起來沒解對：FileSize 回報 {size:,} bytes，"
-            f"上限是 {MAX_IMAGE_BYTES:,}。"
-            "已知 DNGAndJPEG 模式會這樣 —— 改用 DNG 或 JPEG 單一格式。")
-
     image = CapturedImage(
         filename=_text(getattr(info, "FileName", "")) or "capture",
         path_name=_text(getattr(info, "PathName", "")),
@@ -277,6 +269,15 @@ def capture(cam, save_dir: Path | None = None,
     )
     try:
         if fetch and image.size:
+            if image.size > MAX_IMAGE_BYTES:
+                # 這個值不可能是真的。硬拉下去會讓相機不再回應，所以停手。
+                # 檢查放在這裡而不是更早：擋下載就夠了，而拍攝本身要能完成，
+                # 資料庫項目也才會在 finally 裡釋放掉。fetch=0 因此仍可用來
+                # 在這個模式下取樣 —— 破解版面就是靠它拿到原始位元組的。
+                raise CaptureError(
+                    f"影像資訊看起來沒解對：FileSize 回報 {image.size:,} bytes，"
+                    f"上限是 {MAX_IMAGE_BYTES:,}。"
+                    "已知 DNGAndJPEG 模式會這樣 —— 改用 DNG 或 JPEG 單一格式。")
             _step(f"download({image.size:,} bytes)")
             image.data = download(cam, info)
             if save_dir is not None:

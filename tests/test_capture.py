@@ -184,9 +184,32 @@ def test_an_absurd_file_size_is_refused_before_downloading():
     except capture.CaptureError as e:
         assert "沒解對" in str(e) and "1,646,170,112" in str(e), e
         assert cam.count("pict_chunk") == before, "已經開始下載了才發現不對"
+        assert cam.db_head == cam.db_tail, "擋下之後資料庫項目沒被釋放"
         print("✓ 荒謬的 FileSize 在送出下載請求前就被擋下")
     else:
         raise AssertionError("應該要拒絕這個大小")
+
+
+def test_shooting_without_fetching_works_even_with_a_bad_file_size():
+    """破解未知版面要靠這條路：拍得成、不下載、項目正常釋放。
+
+    大小檢查只擋下載。擋在更早的話，DNGAndJPEG 模式連拍都拍不了，
+    也就拿不到原始位元組可以分析。
+    """
+    cam = fake_camera.FakeCamera()
+    original = cam.get_pict_file_info2
+
+    def absurd():
+        info = original()
+        info.FileSize = 1_646_170_112
+        return info
+
+    cam.get_pict_file_info2 = absurd
+    img = capture.capture(cam, fetch=False)
+    assert img.data is None and img.size == 1_646_170_112
+    assert cam.shutter_fires == 1, "沒有真的拍"
+    assert cam.db_head == cam.db_tail, "項目沒釋放"
+    print("✓ fetch=0 在版面未知的模式下仍可安全取樣")
 
 
 def test_a_normal_file_size_still_downloads():
