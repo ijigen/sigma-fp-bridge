@@ -785,10 +785,44 @@ size, then `GetBigPartialPictFile` in chunks.
 
 `dest_to_save` (DataGroup3) is a separate setting: `InCamera` (card),
 `InComputer` ("drive in PC side") or `Both`. **It does not gate the download** —
-tested on all three values, and the buffer read back the same 8.9 MB frame every
-time, `InCamera` included. Whether the card also receives a copy could not be
-checked from the host: PTP object enumeration reports an empty card while the
-camera is in API mode, whatever has been written.
+a capture came back fine with it reading `Null`. Whether the card also receives a
+copy could not be checked from the host: PTP object enumeration reports an empty
+card while the camera is in API mode, whatever has been written.
+
+> An earlier version of this section claimed all three values had been tested and
+> returned the same frame. That was the stale-buffer bug below reading one image
+> three times — only the first of those shots ever fired. The download does not
+> depend on `dest_to_save`, but that particular experiment proved nothing.
+
+#### The image database
+
+Getting repeat captures working came down to one structure. Entries occupy the
+half-open range `[ImageDBHead, ImageDBTail)`, and **the entry a shot creates is
+numbered by the tail read _before_ the shot**, not after. `CamCaptStatus` is
+per-entry: ask for an id, get that entry's state. `ClearImageDBSingle` releases
+one and head advances.
+
+Two rules fall out of that, and breaking either one is silent:
+
+- **An unreleased entry stops the shutter.** The camera keeps accepting
+  `SnapCommand` and keeps advancing the tail, but never exposes. A tail that
+  moved is *not* evidence a photo was taken.
+- **Completion must be read from the shot's own entry.** Slot 0 is not special;
+  it is just entry 0, and after a shot it holds *that* shot's completed status
+  forever. Polling it makes the next capture look instantly finished, and
+  `PictFileInfo2` then hands back the previous image — same filename, same byte
+  count, reported as a fresh success.
+
+This project hit both at once through a falsy-zero: the first capture after a
+power cycle gets entry `0`, `if not image_id` treated that valid id as "not
+found", and the fallback released a nonexistent entry instead. Entry 0 leaked,
+which blocked every later shot, while the slot-0 poll dressed the failures up as
+successes. From the second shot on the fallback happened to pick the right id —
+so the symptom was "one photo works after every power cycle, then nothing".
+
+If captures start failing, `POST /api/record/clear` releases the whole pending
+range. `capture()` now does that itself before shooting, to recover from a run
+that died mid-flight.
 
 ```bash
 curl -X POST 'http://localhost:8765/api/capture'            # shoot and download
