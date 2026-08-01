@@ -91,7 +91,12 @@ def test_iso_row_is_merged_and_uses_a_dropdown():
     assert "<select data-set=\"iso\"" in js, "ISO 數值不是下拉選單"
     assert "isAuto ? ' disabled' : ''" in js, "自動模式下沒有停用數值選單"
     assert "select[data-set]" in js, "select 沒有綁事件"
-    print("✓ ISO 合併成一列，數值用下拉選單，自動模式下停用")
+    # 曝光補償併在同一排：它跟 ISO 一樣是調亮暗的旋鈕
+    assert 'data-set="exposure_compensation"' in js, "EV 沒有併進 ISO 那列"
+    assert "ISO / EV" in js
+    body = js[js.index("const ORDER"):js.index("const SCROLL_IF_OVER")]
+    assert "exposure_compensation" not in body, "EV 不該還在一般的 ORDER 迴圈裡"
+    print("✓ ISO 與 EV 合併成一列，數值皆用下拉選單")
 
 
 def test_shutter_row_merges_speed_and_angle():

@@ -447,7 +447,6 @@ const ORDER = [
   ['__iso',                 'ISO'],
   ['__aperture',            '光圈'],
   ['__shutter',             '快門'],
-  ['exposure_compensation', '曝光補償'],
   ['metering_mode',         '測光'],
   ['white_balance',         '白平衡'],
   ['color_temp',            '色溫'],
@@ -500,6 +499,7 @@ function labelFor(s, v) {
   if (s.unit === 'deg') return v + '°';
   if (s.unit === 'K') return v + 'K';
   if (s.unit === 'bit') return v + ' bit';
+  if (s.unit === 'EV') return (v > 0 ? '+' : '') + Number(v).toFixed(1);
   if (s.unit === 'fps') return v;
   return String(v);
 }
@@ -533,14 +533,18 @@ function optRow(name, title, opts) {
 // 選項太多（實測 25 個）不適合橫排按鈕，而且它跟其他設定不同 ——
 // 使用者通常心裡已經有目標值，用選的比用捲的快。
 function isoRow(byName) {
-  const auto = byName.iso_auto, iso = byName.iso;
-  if (!auto && !iso) return '';
+  const auto = byName.iso_auto, iso = byName.iso, ev = byName.exposure_compensation;
+  if (!auto && !iso && !ev) return '';
   const isAuto = values.iso_auto === 'Auto';
   const cur = values.iso;
-  const head = '<div class="opt-head"><span class="opt-name">ISO</span>' +
-    '<span class="opt-cur">' + (isAuto ? '自動' : '手動') +
-    (cur === null || cur === undefined ? '' : ' · ' + cur) + '</span>' +
-    (isAuto ? '<span class="opt-note">手動模式才能指定數值</span>' : '') +
+  const curEv = values.exposure_compensation;
+  const parts = [];
+  if (auto || iso) parts.push(isAuto ? '自動' : '手動');
+  if (cur !== null && cur !== undefined) parts.push('ISO ' + cur);
+  if (ev && curEv !== null && curEv !== undefined) parts.push('EV ' + labelFor(ev, curEv));
+  const head = '<div class="opt-head"><span class="opt-name">ISO / EV</span>' +
+    '<span class="opt-cur">' + (parts.join(' · ') || '—') + '</span>' +
+    (isAuto ? '<span class="opt-note">手動模式才能指定 ISO 數值</span>' : '') +
     '</div>';
 
   let btns = '';
@@ -560,7 +564,18 @@ function isoRow(byName) {
     sel = '<select data-set="iso"' + (isAuto ? ' disabled' : '') + '>' +
       '<option value="">—</option>' + opts + '</select>';
   }
-  return '<div class="opt">' + head + '<div class="opts">' + btns + sel + '</div></div>';
+
+  // 曝光補償併在同一排 —— 它跟 ISO 一樣是「讓畫面亮一點暗一點」的旋鈕，
+  // 分成兩列反而要多找一次。
+  let evSel = '';
+  if (ev && ev.choices && ev.choices.length) {
+    const opts = ev.choices.map(v =>
+      '<option value="' + v + '"' + (String(v) === String(curEv) ? ' selected' : '') +
+      '>EV ' + escapeHTML(labelFor(ev, v)) + '</option>').join('');
+    evSel = '<select data-set="exposure_compensation">' +
+      '<option value="">—</option>' + opts + '</select>';
+  }
+  return '<div class="opt">' + head + '<div class="opts">' + btns + sel + evSel + '</div></div>';
 }
 
 // 值很多、而且使用者心裡通常已有目標的設定，用下拉比橫排按鈕好用。
