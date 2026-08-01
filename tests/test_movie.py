@@ -167,6 +167,8 @@ def test_only_confirmed_labels_are_published():
     實際錄一段才發現是 MOV。猜錯的標籤會被後面的人當事實。
     """
     assert M.VALUE_LABELS["record_format"] == {1: "CinemaDNG", 2: "MOV"}
+    # 實測確認：tag 6 = 1 時錄影模式下 shutter_speed 精準生效
+    assert M.VALUE_LABELS["shutter_unit"] == {1: "速度", 2: "角度"}
     schema = {d["name"]: d for d in M.describe()}
     assert schema["record_format"]["labels"] == {1: "CinemaDNG", 2: "MOV"}
     assert schema["movie_resolution"]["labels"] == {1: "FHD", 2: "UHD"}

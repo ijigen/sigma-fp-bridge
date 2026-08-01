@@ -675,8 +675,10 @@ passed off as success.
 by writing to it: at 2 the camera declares 18 legal shutter angles, at 1 it
 declares none while still reporting a shutter speed range. This is why writing
 `shutter_speed` in CINE appeared to do nothing — the camera was in angle mode,
-and the field it accepts depends on this tag. The UI's seconds/angle buttons set
-it, so switching there switches the camera.
+and the field it accepts depends on this tag. Confirmed by switching to 1 and writing 1/500, 1/50 and 1/125 — all three
+read back exactly. The UI's seconds/angle buttons set the tag, so switching
+there switches the camera, and the schema lists only the representation
+currently in effect.
 
 Both read-only routes to identifying it were closed: a change made on the body is
 wiped by `sgm_ConfigApi` on re-acquire, and outside API mode the camera answers

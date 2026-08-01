@@ -68,9 +68,9 @@ MOVIE_SETTINGS: tuple[MovieSetting, ...] = (
                  "電影快門角度。CINE 模式下快門只能從這裡設，"
                  "寫 DataGroup1 的 shutter_speed 沒有作用。"),
     MovieSetting("shutter_unit", 6, DT.UInt8, "int",
-                 note="錄影時快門用「速度」還是「角度」表示。用寫入試探確認的："
-                      "設成 2 時 CanSetInfo5 的 ShutterAngle 有 18 個合法值，"
-                      "設成 1 時變成 0 個，而快門速度範圍仍在。"),
+                 note="錄影時快門用「速度」還是「角度」表示。1 = 速度、2 = 角度，"
+                      "兩者都以實機寫入確認。這個 tag 決定相機接受哪個欄位 —— "
+                      "在角度模式下寫 shutter_speed 會被收下然後丟棄。"),
     MovieSetting("record_format", 50, DT.UInt8, "int",
                  note="1 = CinemaDNG、2 = MOV，兩者都以實際錄製的產物確認過。"),
     MovieSetting("cinema_dng_quality", 51, DT.UInt8, "int", "bit",
@@ -99,6 +99,9 @@ VALUE_LABELS: dict[str, dict[int, str]] = {
     #   record_format=2 -> CINEMA/A001_001_20260801.MOV
     #   record_format=1 -> CinemaDNG 序列（8-bit UHD 23.98fps）
     "record_format": {1: "CinemaDNG", 2: "MOV"},
+    # 實測確認：tag 6 設成 1 之後，錄影模式下寫 shutter_speed 精準生效
+    # （1/500、1/50、1/125 三個值回讀完全相符）；設成 2 則只有角度可設。
+    "shutter_unit": {1: "速度", 2: "角度"},
     # 2 = UHD 來自那段 CinemaDNG 的產物；1 = FHD 由使用者檢視錄出來的檔案確認。
     "movie_resolution": {1: "FHD", 2: "UHD"},
 }
@@ -107,12 +110,7 @@ VALUE_LABELS: dict[str, dict[int, str]] = {
 #: 哪些是推論」在程式裡就分得清楚。UI 顯示時會標註未確認。
 # 目前沒有待確認的項目。機制保留著 —— record_format 的 mov_image_quality
 # 與 movie_resolution 以外的數值仍然沒有名字，將來補上時會先經過這裡。
-INFERRED_LABELS: dict[str, dict[int, str]] = {
-    # tag 6 = 2 時角度可用、= 1 時角度不可用而速度範圍仍在，所以 1 幾乎
-    # 確定是「速度」—— 但還沒實際在 1 的狀態下成功寫入一次快門速度，
-    # 所以先標為未確認。
-    "shutter_unit": {1: "速度", 2: "角度"},
-}
+INFERRED_LABELS: dict[str, dict[int, str]] = {}
 
 #: CanSetInfo5 裡對應的「合法值清單」tag，用來限制可設的範圍。
 CAPABILITY_TAGS = {

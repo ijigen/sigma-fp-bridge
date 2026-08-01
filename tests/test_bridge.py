@@ -390,6 +390,29 @@ async def test_dump_works_while_released():
     print("✓ 交還期間仍可讀取原始資料群組")
 
 
+async def test_schema_hides_the_inactive_shutter_representation():
+    """速度模式下不要列 shutter_angle，反之亦然。
+
+    相機接受哪個欄位由 shutter_unit（tag 6）決定 —— 列出無效的那個
+    只會讓人按了沒反應，這正是這個 bug 原本的樣子。
+    """
+    reset()
+    async with running_worker():
+        B.state.camera_mode = "movie"
+        B.state.movie_capabilities = {"shutter_angle": [11.2, 180.0]}
+
+        B.state.shutter_unit = 2          # 角度模式
+        names = {r["name"] for r in B._movie_schema()}
+        assert "shutter_angle" in names
+        assert not B._shutter_speed_allowed()
+
+        B.state.shutter_unit = 1          # 速度模式
+        names = {r["name"] for r in B._movie_schema()}
+        assert "shutter_angle" not in names, "速度模式下不該列角度"
+        assert B._shutter_speed_allowed() == {"shutter_speed"}
+    print("✓ schema 只列當下有效的快門表示法")
+
+
 async def test_settings_roundtrip_through_bridge():
     reset()
     async with running_worker():

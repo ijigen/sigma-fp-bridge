@@ -583,6 +583,20 @@ async def cam_wait_idle(timeout_s: float = 2.0, poll_interval_s: float = 0.05) -
     return False
 
 
+def _movie_schema() -> list:
+    """錄影設定的 schema，並依快門單位濾掉當下無效的那一個。
+
+    速度模式下列出 shutter_angle 只會讓人按了沒反應 —— 相機接受哪個欄位
+    是由 shutter_unit（tag 6）決定的。
+    """
+    if state.camera_mode != "movie":
+        return []
+    rows = movie_settings.describe(state.movie_capabilities)
+    if state.shutter_unit == 1:
+        rows = [r for r in rows if r["name"] != "shutter_angle"]
+    return rows
+
+
 def _shutter_speed_allowed() -> set:
     """錄影模式下相機切到「快門速度」時，shutter_speed 才是有效的。
 
@@ -1040,8 +1054,7 @@ async def handle_ws_command(req: dict) -> dict | None:
             "id": request_id,
             "settings": describe(state.capabilities, state.camera_mode,
                                  _shutter_speed_allowed())
-                        + (movie_settings.describe(state.movie_capabilities)
-                           if state.camera_mode == "movie" else []),
+                        + _movie_schema(),
             "capabilities": state.capabilities,
             "movie_capabilities": state.movie_capabilities,
             "camera_mode": state.camera_mode,
@@ -1243,8 +1256,7 @@ async def handle_settings_schema(request: web.Request) -> web.Response:
     return web.json_response({
         "settings": describe(state.capabilities, state.camera_mode,
                              _shutter_speed_allowed())
-                    + (movie_settings.describe(state.movie_capabilities)
-                       if state.camera_mode == "movie" else []),
+                    + _movie_schema(),
         "capabilities": state.capabilities,
         "movie_capabilities": state.movie_capabilities,
         "camera_mode": state.camera_mode,
