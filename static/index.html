@@ -715,11 +715,17 @@ function settingsHTML() {
         if (!choices.length) choices = s.choices;
       }
       const needsM = NEEDS_MANUAL[name] && !manual;
+      // 沒有單位也沒有標籤的整數選項 —— 我們知道相機接受這些值，
+      // 但不知道它們代表什麼。與其讓使用者對著 1 / 2 猜，不如直說。
+      const opaque = s.kind === 'int' && !s.unit && !s.labels &&
+                     !(FRIENDLY[name]) && (s.choices || []).every(v => typeof v === 'number');
       rows.push(optRow(name, title, {
         current: cur,
         currentLabel: cur === null || cur === undefined ? '—' : labelFor(s, cur),
         disabled: needsM,
-        note: needsM ? '需切換成 M 模式' : (s.inferred_labels ? '? = 推測未確認' : ''),
+        note: needsM ? '需切換成 M 模式'
+              : opaque ? '數值意義尚未確認'
+              : (s.inferred_labels ? '? = 推測未確認' : ''),
         choices: choices.map(v => ({value: v, label: labelFor(s, v)})),
       }));
     } else {

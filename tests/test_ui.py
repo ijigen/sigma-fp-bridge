@@ -205,6 +205,18 @@ def test_locked_option_groups_do_not_vanish():
     print("✓ 無可選值的群組改為鎖定顯示，不會消失")
 
 
+def test_unidentified_values_say_so():
+    """有些設定我們知道相機接受哪些值，卻不知道值代表什麼
+    （例如 mov_image_quality 的 1 / 2）。
+
+    讓使用者對著沒有意義的數字猜，跟控制項壞掉沒兩樣 —— 要直說未確認。
+    """
+    js = _script(HTML.read_text())
+    assert "數值意義尚未確認" in js
+    assert "const opaque" in js and "!s.labels" in js
+    print("✓ 未確認意義的數值會標明")
+
+
 def test_state_updates_do_not_rebuild_dom():
     """狀態廣播是 10Hz。無條件寫 innerHTML 會讓節點每 100ms 被銷毀重建 ——
     版面抖動、捲軸亂飄，按鈕在按下的瞬間被換掉所以按不到。實測踩過。
