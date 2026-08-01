@@ -53,6 +53,13 @@ CHUNK_BYTES = 1 << 20
 #: 等待影像產生完成的上限
 CAPTURE_TIMEOUT_S = 30.0
 
+#: FileSize 超過這個值就當作沒解對，不要真的去拉。
+#: fp 最大的單張是 14bit 全解析度 DNG，實測 27 MB；256 MB 已經留了近十倍餘裕。
+#: 這道檢查是實機踩出來的：DNGAndJPEG 模式下 PictFileInfo2 回報 1,646,170,112
+#: bytes，download() 照單全收，於是拿著一個錯的位址去要 1.6 GB —— 相機不再
+#: 回應，整座橋跟著停擺。寧可在這裡明確失敗，也不要送出那個請求。
+MAX_IMAGE_BYTES = 256 << 20
+
 #: 目前進行到哪一步，(步驟名稱, 起始時間) 或 None。
 #: 拍攝卡住時 PTP 全部沒反應，但這個變數不碰相機就讀得到 —— /api/status
 #: 因此還答得出「卡在哪一個呼叫」，那是從外面唯一能取得的線索。
@@ -176,6 +183,24 @@ def wait_until_done(cam, image_id: int,
     raise CaptureError(f"等待影像產生逾時（影像 {image_id}，最後狀態 {last}）")
 
 
+def pict_file_info_raw(cam) -> bytes:
+    """發 SigmaGetPictFileInfo2 取回未經解析的原始位元組。
+
+    sigma-ptpy 的 PictFileInfo2 結構開頭有 12 個未知位元組，而 DNGAndJPEG
+    模式顯然不是同一個版面（解出來的 FileSize 是 1.6 GB）。要弄懂那個模式
+    得先看得到原始資料。
+    """
+    from construct import Container
+
+    ptp = Container(
+        OperationCode="SigmaGetPictFileInfo2",
+        SessionID=cam._session,
+        TransactionID=cam._transaction,
+        Parameter=[],
+    )
+    return bytes(cam.recv(ptp).Data)
+
+
 def download(cam, info) -> bytes:
     """把相機緩衝區裡的影像分塊抓下來。
 
@@ -233,6 +258,14 @@ def capture(cam, save_dir: Path | None = None,
         info = cam.get_pict_file_info2()
     except Exception as e:
         raise CaptureError(f"取得影像資訊失敗：{e}") from e
+
+    size = int(getattr(info, "FileSize", 0) or 0)
+    if size > MAX_IMAGE_BYTES:
+        # 這個值不可能是真的。硬拉下去會讓相機不再回應，所以在這裡停手。
+        raise CaptureError(
+            f"影像資訊看起來沒解對：FileSize 回報 {size:,} bytes，"
+            f"上限是 {MAX_IMAGE_BYTES:,}。"
+            "已知 DNGAndJPEG 模式會這樣 —— 改用 DNG 或 JPEG 單一格式。")
 
     image = CapturedImage(
         filename=_text(getattr(info, "FileName", "")) or "capture",

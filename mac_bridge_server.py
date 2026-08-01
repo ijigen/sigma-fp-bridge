@@ -1580,11 +1580,37 @@ async def handle_dump(request: web.Request) -> web.Response:
         return web.json_response({"error": "not connected"}, status=503)
     released = state.camera is None
 
+    if which == "pict":
+        # PictFileInfo2 不是 IFD，是固定結構，所以不能走下面的 parse_ifd。
+        # 回原始位元組加上 sigma-ptpy 現行結構的切法，兩者並排才看得出
+        # DNGAndJPEG 模式差在哪。
+        try:
+            raw = await worker.call(lambda: capture.pict_file_info_raw(cam),
+                                    priority=Priority.STATUS, needs_camera=False)
+        except Exception as e:
+            return web.json_response(
+                {"error": f"{type(e).__name__}: {e}", "released": released}, status=502)
+        fields = {}
+        if len(raw) >= 24:
+            fields = {
+                "_Unknown0": raw[0:12].hex(),
+                "FileAddress": int.from_bytes(raw[12:16], "little"),
+                "FileSize": int.from_bytes(raw[16:20], "little"),
+                "PathNameOffset": int.from_bytes(raw[20:24], "little"),
+            }
+        return web.json_response({
+            "bytes": len(raw), "raw_hex": raw.hex(),
+            "as_current_schema": fields,
+            "ascii": "".join(chr(b) if 32 <= b < 127 else "." for b in raw),
+            "released": released,
+        })
+
     readers = {"info5": read_info5_raw, "movie": read_movie_group_raw}
     reader = readers.get(which)
     if reader is None:
         return web.json_response(
-            {"error": f"unknown dump: {which}（可用：{', '.join(readers)}）"}, status=404
+            {"error": f"unknown dump: {which}（可用：{', '.join(readers)}, pict）"},
+            status=404
         )
 
     try:

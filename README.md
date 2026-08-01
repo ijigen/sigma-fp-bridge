@@ -861,8 +861,22 @@ TIFF magic 42, `DNGVersion` (tag 50706) present, `Make=SIGMA`,
 thumbnail with the full-size image in a SubIFD, which is ordinary DNG layout.
 
 `ImageQuality` is another bitmask: `JPEGFine` 2, `JPEGNormal` 4, `JPEGBasic` 8,
-`DNG` 16, `DNGAndJPEG` 18 (16 | 2). What a `DNGAndJPEG` shot hands back — one
-file or two database entries — has not been established yet.
+`DNG` 16, `DNGAndJPEG` 18 (16 | 2).
+
+**`DNGAndJPEG` does not work over PTP** — use `DNG` or a JPEG grade on its own.
+The shot itself is fine; what breaks is reading it back. `PictFileInfo2` returns
+a `FileSize` of 1,646,170,112 bytes for that mode, and `FileAddress` is presumably
+just as wrong, because sigma-ptpy's fixed layout — twelve unknown bytes, then
+address, size, path offset — evidently is not what the camera sends when a shot
+produces two files. Asking for 1.6 GB at a bogus address stops the camera
+responding entirely: memory never grew during the attempt, so not even the first
+chunk arrived.
+
+`capture()` now refuses any `FileSize` over 256 MB (about ten times the largest
+real still) instead of sending that request, so the mode fails with a message
+rather than taking the bridge down. `GET /api/dump/pict` returns the raw
+`PictFileInfo2` bytes next to the current schema's reading of them, which is what
+decoding the real layout would start from.
 
 **Movies have not been pulled back yet** — which is not the same as knowing they
 can't be. The SDK gives them their own pair of opcodes, `SigmaGetMovieFileInfo`

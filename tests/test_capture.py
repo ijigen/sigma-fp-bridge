@@ -160,6 +160,43 @@ def test_stale_entries_are_released_before_shooting():
     print("✓ 開拍前會釋放前一輪的殘留項目")
 
 
+def test_an_absurd_file_size_is_refused_before_downloading():
+    """迴歸：DNGAndJPEG 模式下 PictFileInfo2 回報 1,646,170,112 bytes。
+
+    download() 照單全收，拿著一個同樣沒解對的位址去要 1.6 GB，相機從此不再
+    回應 —— 整座橋停擺，要重啟才活得過來。實測那次 RSS 完全沒成長，代表
+    連第一塊都沒拿到，不是「下載很慢」而是請求本身把相機打死了。
+
+    這種值不可能是真的，所以在送出請求之前就要停手。
+    """
+    cam = fake_camera.FakeCamera()
+    original = cam.get_pict_file_info2
+
+    def absurd():
+        info = original()
+        info.FileSize = 1_646_170_112
+        return info
+
+    cam.get_pict_file_info2 = absurd
+    before = cam.count("pict_chunk")
+    try:
+        capture.capture(cam)
+    except capture.CaptureError as e:
+        assert "沒解對" in str(e) and "1,646,170,112" in str(e), e
+        assert cam.count("pict_chunk") == before, "已經開始下載了才發現不對"
+        print("✓ 荒謬的 FileSize 在送出下載請求前就被擋下")
+    else:
+        raise AssertionError("應該要拒絕這個大小")
+
+
+def test_a_normal_file_size_still_downloads():
+    """上面的檢查不能把正常的 27 MB DNG 也擋掉。"""
+    cam = fake_camera.FakeCamera()
+    assert len(cam.pict_data) < capture.MAX_IMAGE_BYTES
+    assert capture.capture(cam).data, "正常大小被誤擋"
+    print(f"✓ 正常大小照常下載（上限 {capture.MAX_IMAGE_BYTES:,} bytes）")
+
+
 def test_capture_releases_the_entry_even_without_downloading():
     """不下載也要釋放 —— 佔著就會讓下一次拍攝的快門不動作。"""
     cam = fake_camera.FakeCamera()
