@@ -778,9 +778,17 @@ is why ranges are read from the camera rather than tabulated.
 
 ### Tethered capture
 
-`dest_to_save` (DataGroup3) chooses where a photo goes: `InCamera`, `InComputer`
-or `Both`. With it on `InComputer` or `Both`, `POST /api/capture` takes a frame
-and pulls the image back over USB, saving it under `~/.sigma_fp_bridge/photos/`.
+`POST /api/capture` takes a frame and pulls the image back over USB, saving it
+under `~/.sigma_fp_bridge/photos/`. The download asks the camera for the buffer
+it holds after a Camera Control mode shot — `PictFileInfo2` for the address and
+size, then `GetBigPartialPictFile` in chunks.
+
+`dest_to_save` (DataGroup3) is a separate setting: `InCamera` (card),
+`InComputer` ("drive in PC side") or `Both`. It governs whether the card also
+gets a copy, not how the download works. **Whether the buffer is still readable
+with it set to `InCamera` has not been tested** — the download may work
+regardless, or may require the PC to be one of the destinations. Do not assume
+either from this text.
 
 ```bash
 curl -X POST 'http://localhost:8765/api/capture'            # shoot and download

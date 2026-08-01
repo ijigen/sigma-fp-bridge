@@ -3,11 +3,17 @@
 
 流程是 Sigma SDK 有文件的那條：
 
-    1. DestToSave 設成 InComputer 或 Both（DataGroup3）
-    2. SigmaSnapCommand 觸發拍攝
-    3. 輪詢 CamCaptStatus 等到影像產生完成
-    4. SigmaGetPictFileInfo2 取得檔案位址與大小
-    5. SigmaGetBigPartialPictFile 分塊把資料抓下來
+    1. SigmaSnapCommand 觸發拍攝
+    2. 輪詢 CamCaptStatus 等到影像產生完成
+    3. SigmaGetPictFileInfo2 取得檔案位址與大小
+    4. SigmaGetBigPartialPictFile 分塊把資料抓下來
+
+注意這裡沒有動到 DestToSave。那是獨立的設定（DataGroup3），決定影像要不要
+「順便」寫進記憶卡 —— 下載一律是「跟相機要它 buffer 裡的資料」。
+把兩者說成有因果關係是錯的。
+
+尚未驗證：DestToSave 設成 InCamera 時，buffer 還讀不讀得到。可能一直都能讀
+（Camera Control 模式本來就會 buffer），也可能要把 PC 列為目的地才有。
 
 錄影沒有對應的實作。opcode 存在（SigmaGetPartialMovieFile = 0x9037），
 但 sigma-ptpy 沒有包，參數格式也沒有文件 —— 要做得先像挖 DataGroupMovie
