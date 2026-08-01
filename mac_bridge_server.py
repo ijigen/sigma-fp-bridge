@@ -1439,8 +1439,9 @@ async def _do_record(action: str, request: web.Request) -> web.Response:
 async def handle_capture(request: web.Request) -> web.Response:
     """拍一張，並把影像抓回電腦。
 
-    要真的拿到影像，相機的 dest_to_save 必須是 InComputer 或 Both ——
-    設成 InCamera 的話檔案只會寫進記憶卡，這裡抓不到。
+    dest_to_save 不影響這裡拿不拿得到影像 —— 四個值（含 Null 與 InCamera）
+    都實測過，每個都拍成並下載成功。它決定的應該是要不要順便寫一份到
+    記憶卡，跟電腦端的下載無關。
     """
     if not state.camera_connected:
         return web.json_response({"error": "not connected"}, status=503)

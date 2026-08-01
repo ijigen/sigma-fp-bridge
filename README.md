@@ -783,16 +783,23 @@ under `~/.sigma_fp_bridge/photos/`. The download asks the camera for the buffer
 it holds after a Camera Control mode shot — `PictFileInfo2` for the address and
 size, then `GetBigPartialPictFile` in chunks.
 
-`dest_to_save` (DataGroup3) is a separate setting: `InCamera` (card),
-`InComputer` ("drive in PC side") or `Both`. **It does not gate the download** —
-a capture came back fine with it reading `Null`. Whether the card also receives a
-copy could not be checked from the host: PTP object enumeration reports an empty
-card while the camera is in API mode, whatever has been written.
+`dest_to_save` (DataGroup3) is a separate setting: `Null`, `InCamera` (card),
+`InComputer` ("drive in PC side") or `Both`. **It does not gate the download.**
+All four values were set, read back to confirm they applied, and shot once each:
+four captures, four different filenames, four different SHA-1s, all downloaded.
+`Null` and `InCamera` behave no differently from `InComputer` here.
 
-> An earlier version of this section claimed all three values had been tested and
-> returned the same frame. That was the stale-buffer bug below reading one image
-> three times — only the first of those shots ever fired. The download does not
-> depend on `dest_to_save`, but that particular experiment proved nothing.
+So the name is misleading from the host's point of view. Downloading is always
+"ask the camera for the buffer it is holding" — `PictFileInfo2` for the address
+and size, then `GetBigPartialPictFile`. What this setting plausibly controls is
+whether a copy *also* goes to the card, which is not observable over PTP while
+the camera is in API mode: object enumeration reports an empty card no matter
+what has been written.
+
+> An earlier version of this section claimed three values had been tested and
+> each returned the same frame. The sameness *was* the bug — only the first of
+> those three shots fired, and the other two re-read its buffer. The conclusion
+> survived retesting, but the experiment behind it proved nothing at the time.
 
 #### The image database
 

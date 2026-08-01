@@ -112,7 +112,8 @@ SETTINGS: tuple[Setting, ...] = (
     # ── 連機拍攝 ─────────────────────────────────────────────────────
     Setting("dest_to_save", 3, "DestToSave", "enum", enum_cls=E.DestToSave,
             note="拍下的影像存到哪裡：InCamera（記憶卡）／InComputer（傳到電腦）"
-                 "／Both。InComputer 就是所謂的連機拍攝。"),
+                 "／Both。注意這個設定不影響 /api/capture 能不能把影像抓回來 ——"
+                 "四個值都實測過，含 Null 在內都下載得到。"),
 
     # ── 驅動 ─────────────────────────────────────────────────────────
     Setting("drive_mode", 2, "DriveMode", "enum", enum_cls=E.DriveMode,
