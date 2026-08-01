@@ -638,7 +638,8 @@ value simply never changes. Use `shutter_angle`, which writes to the movie group
 | `shutter_angle` | 11.2 – 360°, from the camera's own list |
 | `frame_rate` | 23.98 / 25 / 29.97 |
 | `cinema_dng_quality` | 12 / 10 / 8-bit |
-| `record_format`, `mov_image_quality`, `movie_resolution` | camera-reported values |
+| `record_format`, `movie_resolution` | camera-reported values, labelled |
+| `mov_image_quality` | reported but **never settable in testing** — see below |
 
 **`record_format`: 1 = CinemaDNG, 2 = MOV.** Established by recording a clip at
 each setting on a freshly cleared card and looking at what came out — the fp does
@@ -646,6 +647,13 @@ not show the format on its main display, and the protocol reports a bare number.
 `movie_resolution` 1 = FHD, 2 = UHD — 2 from that clip, 1 confirmed by
 inspecting the recorded file. Values that have not been confirmed this way are
 left unlabelled rather than guessed at.
+
+`mov_image_quality` reads back as 1 or 2 and neither value has a meaning
+established. The method that identified `record_format` — set each value, record
+a clip, look at what came out — could not be run: the camera reported no settable
+values for it in MOV and CinemaDNG, at UHD and FHD, and at 23.98, 29.97 and
+59.94 fps. Whatever gates it was not found. It is exposed with its raw numbers
+and marked as unidentified rather than hidden, since the camera does report it.
 
 **Judge a recording by `CaptStatus` and `ImageDBTail`, never by the movie file
 info.** `SigmaGetMovieFileInfo` describes MOV only, so it is blind to CinemaDNG,

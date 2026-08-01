@@ -60,7 +60,10 @@ MOVIE_SETTINGS: tuple[MovieSetting, ...] = (
     MovieSetting("cinema_dng_quality", 51, DT.UInt8, "int", "bit",
                  "CinemaDNG 位元深度（12 / 10 / 8）。改 record_format 時相機會"
                  "自己連動調整這個值，寫入後務必回讀。"),
-    MovieSetting("mov_image_quality", 52, DT.UInt8, "int"),
+    MovieSetting("mov_image_quality", 52, DT.UInt8, "int",
+                 note="值 1 / 2 的意義未確認。實測相機在 MOV / CinemaDNG × "
+                      "UHD / FHD 四種組合、以及多個幀率下都不開放調整它，"
+                      "所以無法用『各錄一段比對產出』的方式判讀。"),
     MovieSetting("movie_resolution", 60, DT.UInt8, "int"),
     MovieSetting("frame_rate", 61, DT.URational, "rational", "fps"),
 )
