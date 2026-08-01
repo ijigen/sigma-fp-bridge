@@ -290,6 +290,144 @@ def test_capture_mode_is_settable():
     print("✓ 機身模式（tag 1）可讀可寫")
 
 
+
+
+# ── 影片檔案資訊與下載 ──────────────────────────────────────────────────
+#
+# 實機抓到的 SigmaGetMovieFileInfo payload（fp 韌體 5.02，FHD MOV 三秒）。
+# 手寫的假資料只能證明解析器跟我對版面的理解一致；這份能證明它跟相機一致。
+REAL_MOVIE_INFO = bytes.fromhex(
+    "5500000000000000"          # DataLength = 85
+    "0100000000000000"          # FileCount = 1
+    "1800000000000000"          # RecordOffset[0] = 24
+    "4d4f560000000000"          # Format "MOV"
+    "28fa220100000000"          # FileSize = 19,069,480
+    "3800000000000000"          # PathNameOffset = 56
+    "3f00000000000000"          # FileNameOffset = 63
+    "43494e454d4100"            # "CINEMA"
+    "413030315f3032375f32303236303830322e4d4f5600")   # A001_027_...MOV
+
+#: 沒有影片可報時相機回的空殼
+EMPTY_MOVIE_INFO = bytes.fromhex("10000000000000000000000000000000")
+
+
+def test_parses_a_real_movie_file_info():
+    """64-bit 欄位，而且記錄裡沒有 FileAddress —— 影片是用偏移讀的。"""
+    import recording
+    movies = recording.parse_movie_file_info(REAL_MOVIE_INFO)
+    assert len(movies) == 1, movies
+    m = movies[0]
+    assert m.filename == "A001_027_20260802.MOV", m.filename
+    assert m.path_name == "CINEMA", m.path_name
+    assert m.format == "MOV", m.format
+    assert m.size == 19_069_480, m.size
+    print(f"✓ 影片資訊：{m.filename} {m.size:,} bytes")
+
+
+def test_an_empty_movie_info_parses_to_nothing():
+    """沒錄過影片時相機回 16 bytes 全零，不能當成一個檔案。"""
+    import recording
+    assert recording.parse_movie_file_info(EMPTY_MOVIE_INFO) == []
+    assert recording.parse_movie_file_info(b"") == []
+    print("✓ 空殼影片資訊解成空清單")
+
+
+def test_movie_download_uses_the_verified_parameter_shape():
+    """SigmaGetPartialMovieFile(0, offset, 0, length)。
+
+    第 2 個是位元組偏移、第 4 個是長度，第 1、3 個必須是 0 —— 這是用重疊
+    比對驗出來的（從 N 讀到的資料等於從 0 讀的第 N 個 byte 之後）。
+    """
+    import recording
+    import types as _t
+
+    payload = bytes(range(256)) * 40      # 10,240 bytes
+    calls = []
+    # 縮小分塊，讓下載跨好幾次請求 —— 只有一塊的話 offset 永遠是 0，
+    # 參數順序寫錯也測不出來（第一版就是這樣漏掉的）
+    original_chunk = recording.MOVIE_CHUNK_BYTES
+    recording.MOVIE_CHUNK_BYTES = 1024
+
+    class Cam:
+        _session = 1
+        _transaction = 1
+
+        def recv(self, ptp):
+            assert ptp.OperationCode == "SigmaGetPartialMovieFile"
+            a, offset, c, length = ptp.Parameter
+            assert a == 0 and c == 0, f"第 1、3 個參數必須是 0，收到 {ptp.Parameter}"
+            calls.append((offset, length))
+            return _t.SimpleNamespace(Data=payload[offset:offset + length])
+
+    movie = recording.MovieFile(filename="A001.MOV", path_name="CINEMA",
+                                format="MOV", size=len(payload))
+    seen = []
+    try:
+        got = recording.download_movie(
+            Cam(), movie, progress=lambda d, t: seen.append(d))
+    finally:
+        recording.MOVIE_CHUNK_BYTES = original_chunk
+    assert got.data == payload, "抓回來的資料跟相機的不一致"
+    assert len(calls) == 10, f"應該要分 10 塊，實際 {len(calls)}"
+    assert [o for o, _ in calls] == [i * 1024 for i in range(10)], calls
+    assert [o for o, _ in calls] == sorted(o for o, _ in calls), "偏移沒有遞增"
+    assert seen and seen[-1] == len(payload), "進度回報沒有走到結尾"
+    print(f"✓ 影片下載參數形狀正確（{len(calls)} 次請求）")
+
+
+def test_a_truncated_movie_download_is_an_error():
+    """相機提前停止回傳時要報錯，不能默默交出半個檔案。"""
+    import recording
+    import types as _t
+
+    class Cam:
+        _session = 1
+        _transaction = 1
+
+        def recv(self, ptp):
+            return _t.SimpleNamespace(Data=b"")
+
+    movie = recording.MovieFile(filename="A.MOV", path_name="C",
+                                format="MOV", size=1024)
+    try:
+        recording.download_movie(Cam(), movie)
+    except recording.RecordingError as e:
+        assert "下載中斷" in str(e), e
+        print("✓ 影片下載中斷時報錯")
+    else:
+        raise AssertionError("應該要丟 RecordingError")
+
+
+def test_a_movie_filename_cannot_escape_the_save_directory():
+    """檔名是裝置送來的資料，不能直接接路徑 —— 照片那邊踩過。"""
+    import recording
+    import tempfile
+    import types as _t
+    from pathlib import Path
+
+    payload = b"MOVIEDATA" * 100
+
+    class Cam:
+        _session = 1
+        _transaction = 1
+
+        def recv(self, ptp):
+            _, offset, _, length = ptp.Parameter
+            return _t.SimpleNamespace(Data=payload[offset:offset + length])
+
+    movie = recording.MovieFile(filename="../../escaped.MOV", path_name="C",
+                                format="MOV", size=len(payload))
+    with tempfile.TemporaryDirectory() as d:
+        # 目錄刻意放深一層：就算淨化失效，".." 也只跑得到暫存區裡面，
+        # 不會污染系統。上一版沒這樣做，變異測試真的在 /var/folders 留下檔案。
+        root = Path(d) / "a" / "b" / "movies"
+        got = recording.download_movie(Cam(), movie, root)
+        written = root / got.filename
+        assert written.exists() and written.resolve().parent == root.resolve()
+        assert not (Path(d) / "a" / "escaped.MOV").exists(), "檔名逃出了目錄"
+    print("✓ 影片檔名不會寫出指定目錄")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

@@ -380,6 +380,29 @@ def test_stop_button_stays_clickable_while_recording():
     print("✓ 錄影中仍可按停止")
 
 
+def test_every_test_file_runs_all_of_its_tests():
+    """測試定義在 __main__ 區塊之後就不會被執行，而且不會有任何抱怨。
+
+    踩過兩次：加在檔案末尾的測試看起來過了，其實一次都沒跑 —— 變異測試
+    全過才發現。這裡直接檢查每個測試檔的執行區塊是不是真的在最後面。
+    """
+    import re
+    # 行首比對 —— 這個測試自己的原始碼裡就有那串字，縮排過的不算
+    runner = re.compile(r"^if __name__ ==", re.M)
+    root = Path(__file__).resolve().parent
+    for path in sorted(root.glob("test_*.py")):
+        text = path.read_text()
+        starts = [m.start() for m in runner.finditer(text)]
+        if not starts:
+            continue
+        assert len(starts) == 1, f"{path.name} 有 {len(starts)} 個執行區塊"
+        defined_after = re.findall(r"^def (test_\w+)", text[starts[0]:], re.M)
+        assert not defined_after, (
+            f"{path.name} 有 {len(defined_after)} 個測試定義在執行區塊之後，"
+            f"永遠不會被執行：{defined_after}")
+    print("✓ 每個測試檔的測試都在執行區塊之前定義")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

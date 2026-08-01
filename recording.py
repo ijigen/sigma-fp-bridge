@@ -250,3 +250,147 @@ def record_clip(cam, seconds: float = 1.5) -> dict[str, Any]:
         "status_after": status_after,
         "produced_something": produced,
     }
+
+
+# ── 影片下載 ────────────────────────────────────────────────────────────
+#
+# 兩個 opcode 都沒有文件，sigma-ptpy 也沒包，是照實機位元組反推出來的。
+#
+# SigmaGetMovieFileInfo (0x9036) 的版面跟 PictFileInfo2 同一套設計
+# （長度 → 數量 → 偏移表 → 記錄），但欄位是 64-bit，而且記錄裡**沒有**
+# FileAddress —— 影片是直接用偏移讀的，不需要位址。
+#
+#     0   uint64  DataLength（整包長度）
+#     8   uint64  FileCount
+#     16  uint64  RecordOffset[FileCount]
+#     記錄：
+#       +0   char[8]  Format（"MOV"）
+#       +8   uint64   FileSize
+#       +16  uint64   PathNameOffset
+#       +24  uint64   FileNameOffset
+#
+# SigmaGetPartialMovieFile (0x9037) 的參數形狀是 (0, offset, 0, length)。
+# 第 2 個是位元組偏移（用重疊比對驗證：從 N 讀到的資料等於從 0 讀的第 N
+# 個 byte 之後），第 4 個是長度。第 1、3 個必須是 0 —— 第 3 個推測是偏移的
+# 高 32 位，設成 1 會直接失敗。
+
+#: 單次請求的大小。實測 16 MB 也可以，但一次要太多會讓 USB transaction
+#: 佔住相機太久 —— 這個 bridge 還要同時跑 live view。
+MOVIE_CHUNK_BYTES = 4 << 20
+
+#: 影片檔案大小的合理上限。純粹是「解錯版面」的防線，跟照片那道同樣理由。
+MAX_MOVIE_BYTES = 64 << 30
+
+
+@dataclass
+class MovieFile:
+    filename: str
+    path_name: str
+    format: str
+    size: int
+    data: bytes | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"filename": self.filename, "path": self.path_name,
+                "format": self.format, "size": self.size,
+                "downloaded": self.data is not None}
+
+
+def _u64(raw: bytes, off: int) -> int:
+    return int.from_bytes(raw[off:off + 8], "little")
+
+
+def parse_movie_file_info(raw: bytes) -> list[MovieFile]:
+    """解 SigmaGetMovieFileInfo 的 payload。實機位元組反推，非官方文件。
+
+    沒有影片可報時相機回 16 bytes 全零，這時回空清單。
+
+    ⚠️ 「欄位是 64-bit」這件事只有一份單檔樣本佐證，而單檔樣本其實分辨不了 ——
+    值都很小，little-endian 下讀 4 或 8 bytes 結果一樣。支持它的是版面本身：
+    記錄偏移落在 16 而不是 12，count 後面跟著 4 個零。要真正確認得有一份
+    兩個檔案的樣本（連錄兩段？），目前沒有。
+    """
+    if len(raw) < 24:
+        return []
+    count = _u64(raw, 8)
+    if not 0 < count < 16:          # 不合理就當作沒解對，別硬湊
+        return []
+    out: list[MovieFile] = []
+    for i in range(count):
+        table = 16 + i * 8
+        if table + 8 > len(raw):
+            break
+        rec = _u64(raw, table)
+        if rec + 32 > len(raw):
+            break
+        out.append(MovieFile(
+            filename=_cstring(raw, _u64(raw, rec + 24)),
+            path_name=_cstring(raw, _u64(raw, rec + 16)),
+            format=_cstring(raw, rec),
+            size=_u64(raw, rec + 8),
+        ))
+    return out
+
+
+def _cstring(raw: bytes, off: int) -> str:
+    if not 0 <= off < len(raw):
+        return ""
+    end = raw.find(b"\x00", off)
+    return raw[off:end if end >= 0 else len(raw)].decode("ascii", "replace")
+
+
+def movie_files(cam) -> list[MovieFile]:
+    """相機目前能提供的影片檔案。"""
+    return parse_movie_file_info(movie_file_info_raw(cam))
+
+
+def partial_movie(cam, offset: int, length: int) -> bytes:
+    """讀影片檔案的一段。參數形狀 (0, offset, 0, length)。"""
+    from construct import Container
+
+    ptp = Container(
+        OperationCode="SigmaGetPartialMovieFile",
+        SessionID=cam._session,
+        TransactionID=cam._transaction,
+        Parameter=[0, int(offset), 0, int(length)],
+    )
+    return bytes(cam.recv(ptp).Data)
+
+
+def download_movie(cam, movie: MovieFile, save_dir=None,
+                   progress=None) -> MovieFile:
+    """把一段影片抓回電腦。
+
+    Args:
+        progress: 每抓完一塊呼叫一次，參數是 (已完成 bytes, 總 bytes)。
+            影片檔案很大，沒有進度回報的話看起來就像當掉了。
+
+    Raises:
+        RecordingError: 大小不合理，或相機提前停止回傳。
+    """
+    if not 0 < movie.size <= MAX_MOVIE_BYTES:
+        raise RecordingError(
+            f"影片大小看起來沒解對：{movie.size:,} bytes")
+
+    out = bytearray()
+    while len(out) < movie.size:
+        want = min(MOVIE_CHUNK_BYTES, movie.size - len(out))
+        got = partial_movie(cam, len(out), want)
+        if not got:
+            raise RecordingError(
+                f"下載中斷：已取得 {len(out):,} / {movie.size:,} bytes")
+        out += got[:want]
+        if progress is not None:
+            progress(len(out), movie.size)
+
+    movie.data = bytes(out)
+    if save_dir is not None:
+        from pathlib import Path
+        import os
+        save_dir = Path(save_dir)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        # 檔名是裝置送來的資料，不能直接接路徑
+        base = os.path.basename(movie.filename.replace("\\", "/")).strip()
+        movie.filename = base if base and not base.startswith(".") else "movie.MOV"
+        (save_dir / movie.filename).write_bytes(movie.data)
+    return movie

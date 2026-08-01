@@ -162,6 +162,8 @@ class BridgeState:
     settings_snapshot: dict | None = None
     #: 交還期間保留的相機連線。放開 USB 會被 macOS 搶走，所以只退出 API 模式。
     released_camera: object | None = None
+    #: 影片下載進度 {"done": int, "total": int}，沒在下載時是 None
+    movie_progress: dict | None = None
     #: 錄影時快門用速度還是角度（DataGroupMovie tag 6：1 = 速度、2 = 角度）
     shutter_unit: int | None = None
     #: "stills" | "movie" | None —— 機身撥桿位置（推測而來，見 refresh_capabilities）
@@ -1263,6 +1265,8 @@ async def handle_status(request: web.Request) -> web.Response:
         "stuck": worker.stuck,
         # 拍攝進行到哪一步。卡住時這是唯一能指出「卡在哪個 PTP 呼叫」的線索。
         "capture_step": capture.current_step(),
+        # 影片下載的進度。檔案大，沒有進度看起來就像當掉了。
+        "movie_progress": getattr(state, "movie_progress", None),
         "released": state.released_by_user,
         "camera_mode": state.camera_mode,
         "recording": state.recording,
@@ -1467,6 +1471,58 @@ async def _do_record(action: str, request: web.Request) -> web.Response:
             lambda: recording.describe_last_movie(state.camera), priority=Priority.STATUS
         )
         return web.json_response(info)
+
+    if action == "download":
+        # 影片下載。檔案很大（FHD 三秒約 19 MB，UHD 更多），所以走 CONTROL
+        # 優先權，並把進度記在 state 上讓 /api/status 看得到。
+        movies = await worker.call(
+            lambda: recording.movie_files(state.camera), priority=Priority.STATUS)
+        if not movies:
+            return web.json_response(
+                {"error": "相機沒有可下載的影片 —— 這個 session 內錄過嗎？"},
+                status=404)
+        try:
+            index = int(request.query.get("index", 0))
+        except ValueError:
+            return web.json_response({"error": "index 必須是整數"}, status=400)
+        if not 0 <= index < len(movies):
+            return web.json_response(
+                {"error": f"index 超出範圍（有 {len(movies)} 個檔案）"}, status=400)
+
+        save = request.query.get("save", "1") not in ("0", "false", "no")
+        movies_dir = STATE_DIR / "movies"
+
+        def report(done, total):
+            state.movie_progress = {"done": done, "total": total}
+
+        try:
+            movie = await worker.call(
+                lambda: recording.download_movie(
+                    state.camera, movies[index],
+                    movies_dir if save else None, progress=report),
+                priority=Priority.CONTROL)
+        except recording.RecordingError as e:
+            return web.json_response({"error": str(e)}, status=502)
+        except Exception as e:
+            return web.json_response({"error": f"{type(e).__name__}: {e}"}, status=502)
+        finally:
+            state.movie_progress = None
+
+        if save and movie.data:
+            _restore_ownership(movies_dir)
+            with suppress(Exception):
+                _restore_ownership(movies_dir / movie.filename)
+
+        out = movie.as_dict()
+        out["ok"] = True
+        if save and movie.data:
+            out["saved_to"] = str(movies_dir / movie.filename)
+        return web.json_response(out)
+
+    if action == "movies":
+        movies = await worker.call(
+            lambda: recording.movie_files(state.camera), priority=Priority.STATUS)
+        return web.json_response({"movies": [m.as_dict() for m in movies]})
 
     if action == "files":
         entries = await worker.call(
