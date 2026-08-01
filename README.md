@@ -42,6 +42,7 @@ Useful for:
 | Exposure / white balance / format control | ✅ Working |
 | Movie settings (shutter angle, frame rate, CinemaDNG) | ✅ Working |
 | Recording start / stop | ✅ Working |
+| Tethered capture (JPEG / DNG / both) | ✅ Working |
 | WebSocket + REST + MJPEG | ✅ Working |
 | Calibration persistence | ✅ Working |
 | Bonjour mDNS | ✅ Working |
@@ -912,6 +913,19 @@ So `capture()` parses the table, downloads every record, and releases the whole
 pending range. `DNGAndJPEG` returns both files; the DNG is the primary result and
 the JPEG comes back under `companions`. `GET /api/dump/pict` returns the raw
 payload if you want to check a mode this parser has not seen.
+
+Verified on hardware, two shots back to back from an empty database:
+
+```
+SDIM0001.DNG  28,566,007 bytes  6064x4042   SDIM0001.JPG  9,025,142 bytes  6000x4000
+SDIM0002.DNG  28,710,259 bytes  6064x4042   SDIM0002.JPG  9,075,184 bytes  6000x4000
+```
+
+head kept up with tail both times (0→2→4), all four SHA-1s differ, and the files
+hold up under inspection: the DNGs carry `DNGVersion`, `UniqueCameraModel=SIGMA
+fp` and a SubIFD for the full-size image, the JPEGs have intact SOI/EOI markers
+and Exif. The second shot mattered most — a leftover entry would have stopped the
+shutter, and that failure looks like success from the host.
 
 One more thing that fell out of decoding this: the filename is data from the
 device, and it was being joined straight onto the save directory. A misparse
