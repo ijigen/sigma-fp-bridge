@@ -136,7 +136,15 @@ def _ascii_runs(data: bytes, minimum: int = 4) -> list[str]:
 
 
 def describe_last_movie(cam) -> dict[str, Any]:
-    """最近一段影片的檔名 / 路徑。取不到就回 error 而不是丟例外。"""
+    """最近一段影片的檔名 / 路徑。取不到就回 error 而不是丟例外。
+
+    ⚠️ 這個回覆在同一個 PTP session 內會過期。實測：連錄五段之後它仍回報
+    第一段的檔名與大小，直到 bridge 重啟（新 session）才更新。所以它可以
+    用來知道「曾經錄過什麼」，**不能**用來判斷「剛才那段錄成了沒」——
+    那要看 capture_status() 的 CaptStatus 與 ImageDBTail。
+
+    對 CinemaDNG 更是完全沒用：它只描述 MOV。
+    """
     try:
         raw = movie_file_info_raw(cam)
     except Exception as e:

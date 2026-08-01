@@ -638,7 +638,19 @@ value simply never changes. Use `shutter_angle`, which writes to the movie group
 each setting on a freshly cleared card and looking at what came out — the fp does
 not show the format on its main display, and the protocol reports a bare number.
 `movie_resolution` 2 = UHD, from the same clip. Values that have not been
-confirmed this way are left unlabelled.
+confirmed this way are left unlabelled — `movie_resolution` 1 records
+successfully but its dimensions could not be measured from the host.
+
+**Judge a recording by `CaptStatus` and `ImageDBTail`, never by the movie file
+info.** `SigmaGetMovieFileInfo` describes MOV only, so it is blind to CinemaDNG,
+and it also goes stale within a PTP session: after five consecutive clips it was
+still reporting the first one's name and size, and only refreshed after the
+bridge reconnected. `POST /api/record/clip` reports `produced_something` from the
+image database tail, which advances for every format.
+
+I misread that staleness as recording having broken, and spent several rounds
+chasing a camera fault that did not exist. The footage was on the card the whole
+time.
 
 Worth knowing: **changing `record_format` moves `cinema_dng_quality` on its own**
 — switching to CinemaDNG dropped it from 12-bit to 8. Writing one tag is not
