@@ -167,6 +167,26 @@ def test_shutter_row_never_disappears():
     print("✓ 快門列在 CINE / STILL × 秒 / 角度 都有內容")
 
 
+def test_format_size_and_depth_share_a_row():
+    """規格 / 大小 / 色彩位元是同一個決策的三個面向，而且相機讓它們互相牽動。
+
+    分成三列看不出這層關係 —— 改規格會改變另外兩個可選什麼。
+    """
+    js = _script(HTML.read_text())
+    assert "function formatRow" in js and "'__format'" in js
+    for name in ("record_format", "image_quality", "movie_resolution",
+                 "resolution", "cinema_dng_quality", "dng_quality"):
+        assert name in js[js.index("function formatRow"):js.index("function settingsHTML")], name
+    body = js[js.index("const ORDER"):js.index("const SCROLL_IF_OVER")]
+    # 用帶引號的形式比對：mov_image_quality 是刻意留著的獨立列，
+    # 而它的名字包含 image_quality，裸比對會誤判。
+    for name in ("record_format", "image_quality", "movie_resolution",
+                 "cinema_dng_quality", "dng_quality"):
+        assert f"'{name}'" not in body, f"{name} 不該還在一般的 ORDER 迴圈裡"
+    assert "grp-l" in js, "同列的多個群組沒有標籤區隔"
+    print("✓ 規格 / 大小 / 位元合併成一列，分群標示")
+
+
 def test_state_updates_do_not_rebuild_dom():
     """狀態廣播是 10Hz。無條件寫 innerHTML 會讓節點每 100ms 被銷毀重建 ——
     版面抖動、捲軸亂飄，按鈕在按下的瞬間被換掉所以按不到。實測踩過。

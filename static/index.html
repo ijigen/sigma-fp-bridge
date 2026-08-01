@@ -109,6 +109,10 @@
   .o.locked.on { background: #334155; border-color: #475569; }
   .lockicon { font-size: 10px; opacity: .8; }
   .opts select { min-width: 120px; max-width: 160px; }
+  /* 同一列裡的多個小群組：用細標籤與分隔線區隔，免得三排按鈕黏成一團 */
+  .grp { display: flex; align-items: center; gap: 5px; }
+  .grp-l { font-size: 10.5px; color: #6d6d6d; margin-right: 1px; white-space: nowrap; }
+  .grp + .grp { margin-left: 4px; padding-left: 10px; border-left: 1px solid #333; }
 </style>
 </head>
 <body>
@@ -436,13 +440,8 @@ function stepPos(d) {
 // 每一列的選項都來自相機當下回報的合法值，所以上層一改，下層自動跟著變。
 const ORDER = [
   ['exposure_mode',         '曝光模式'],
-  ['record_format',         '影像規格'],
-  ['image_quality',         '影像規格'],
-  ['movie_resolution',      '影像大小'],
-  ['resolution',            '影像大小'],
+  ['__format',              '影像規格'],
   ['frame_rate',            '幀率'],
-  ['cinema_dng_quality',    '色彩位元'],
-  ['dng_quality',           '色彩位元'],
   ['mov_image_quality',     '影片畫質'],
   ['__iso',                 'ISO'],
   ['__aperture',            '光圈'],
@@ -623,6 +622,40 @@ function shutterRow(byName) {
   return selectRow(active, '快門', {prefix: prefix, disabled: !manual, note: note});
 }
 
+// 影像規格 / 大小 / 色彩位元合併成一列。它們是同一個決策的三個面向，
+// 而且相機讓它們互相牽動 —— 改規格會改變可選的大小與位元深度，
+// 分成三列反而看不出這層關係。
+function formatRow(byName) {
+  const groups = [
+    ['規格', byName.record_format || byName.image_quality],
+    ['大小', byName.movie_resolution || byName.resolution],
+    ['位元', byName.cinema_dng_quality || byName.dng_quality],
+  ].filter(g => g[1] && g[1].choices && g[1].choices.length);
+  if (!groups.length) return '';
+
+  const cur = groups
+    .map(g => {
+      const v = values[g[1].name];
+      return (v === null || v === undefined) ? null : labelFor(g[1], v);
+    })
+    .filter(Boolean).join(' · ');
+
+  const body = groups.map(g => {
+    const s = g[1];
+    const v = values[s.name];
+    const btns = s.choices.map(c =>
+      '<button class="o' + (String(c) === String(v) ? ' on' : '') + '"' +
+      ' data-set="' + s.name + '" data-val="' + escapeHTML(c) + '">' +
+      escapeHTML(labelFor(s, c)) + '</button>').join('');
+    return '<span class="grp"><span class="grp-l">' + g[0] + '</span>' + btns + '</span>';
+  }).join('');
+
+  return '<div class="opt"><div class="opt-head">' +
+    '<span class="opt-name">影像規格</span>' +
+    '<span class="opt-cur">' + escapeHTML(cur || '—') + '</span>' +
+    '</div><div class="opts">' + body + '</div></div>';
+}
+
 function settingsHTML() {
   if (!schema) return '<div class="hint">載入中…</div>';
   const byName = {};
@@ -646,6 +679,7 @@ function settingsHTML() {
   for (const [name, title] of ORDER) {
     if (name === '__iso') { const r = isoRow(byName); if (r) rows.push(r); continue; }
     if (name === '__shutter') { const r = shutterRow(byName); if (r) rows.push(r); continue; }
+    if (name === '__format') { const r = formatRow(byName); if (r) rows.push(r); continue; }
     if (name === '__aperture') {
       const ap = byName.aperture;
       if (ap) rows.push(selectRow(ap, '光圈', {
