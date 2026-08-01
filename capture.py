@@ -15,6 +15,15 @@
 尚未驗證：DestToSave 設成 InCamera 時，buffer 還讀不讀得到。可能一直都能讀
 （Camera Control 模式本來就會 buffer），也可能要把 PC 列為目的地才有。
 
+實測到但還沒解釋的狀況（2026-08 於 fp 韌體 5.02）：
+
+    - 第一次拍攝成功並下載了 8.7 MB 的 JPEG，之後同一台相機再也拍不成。
+    - NonAFCapt 會得到 ImageGenFailed；GeneralCapt 會卡在 ShootInProgress
+      不再前進。兩者都會讓 ImageDBTail +1，代表相機確實接受了指令。
+    - DestToSave 設 InCamera / InComputer / Both 三種都一樣失敗，而
+      CamCaptStatus 的 dest 欄位確實反映了設定值 —— 所以目的地不是原因。
+    - 尚未排除：記憶卡剩餘空間。失敗開始之前錄了數段 MOV 與 UHD CinemaDNG。
+
 錄影沒有對應的實作。opcode 存在（SigmaGetPartialMovieFile = 0x9037），
 但 sigma-ptpy 沒有包，參數格式也沒有文件 —— 要做得先像挖 DataGroupMovie
 那樣反推一次。
