@@ -49,15 +49,19 @@ def test_every_element_id_exists():
     print(f"✓ JS 取用的 {len(used)} 個元素 id 都存在")
 
 
-def test_body_mode_is_not_presented_as_settable():
-    """機身模式是實體撥桿，PTP 改不了。
+def test_body_mode_is_settable_when_the_camera_reports_it():
+    """機身模式實測可寫（DataGroupMovie tag 1），寫入後螢幕真的切換。
 
-    做成可按的按鈕會讓使用者按了沒反應還以為壞掉。它必須是鎖定的指示。
+    先前這裡斷言它必須是唯讀 —— 那是根據我對 SDK 那句「與撥桿狀態同步」
+    的誤讀。相機沒回報時才退回唯讀指示。
     """
     js = _script(HTML.read_text())
-    assert "'__mode'" in js and "locked: true" in js, "機身模式沒有標成 locked"
-    assert "if (b.dataset.set === '__mode') return;" in js, "機身模式的按鈕沒有擋掉送出"
-    print("✓ 機身模式呈現為鎖定指示，不是可按的設定")
+    assert "byName.capture_mode" in js, "沒有用 capture_mode 當可寫控制"
+    assert "'capture_mode', '機身模式'" in js
+    # 相機沒回報時仍要有唯讀的後備
+    assert "'__mode'" in js and "locked: true" in js, "缺少唯讀後備"
+    assert "if (b.dataset.set === '__mode') return;" in js, "後備的按鈕沒擋掉送出"
+    print("✓ 機身模式可切換，相機未回報時退回唯讀指示")
 
 
 def test_manual_only_settings_are_marked():

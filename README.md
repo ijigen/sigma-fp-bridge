@@ -606,10 +606,10 @@ in the same request is rejected.
 
 **Not settable over PTP:**
 
-- **Still ↔ movie mode.** Driven by the physical switch. The SDK states the
-  movie/still setting "is synchronized with the switch status", and while
-  `CanSetInfo5` reports a `StillMovieSwitch` capability, no `DataGroup` exposes a
-  writable field for it.
+- ~~Still ↔ movie mode~~ — **this turned out to be writable.** See
+  `capture_mode` below. The SDK says the setting "is synchronized with the switch
+  status", which I read as "only the switch can change it". It is not: writing
+  `DataGroupMovie` tag 1 switches the body, confirmed by watching the screen.
 #### Stills and movie are different cameras
 
 The body switch does not merely change what gets recorded — **it changes which
@@ -670,6 +670,17 @@ and both resolutions, with the same result each time. **The cause is unknown.**
 23.98 is an NTSC fractional rate and works, so a recording-standard setting does
 not explain it. The value is read back and the mismatch reported rather than
 passed off as success.
+
+**Still/movie mode is `DataGroupMovie` tag 1** — 1 for STILL, 2 for CINE. Writing
+it switches the body: the screen changes, and the whole capability set swaps over
+(drive mode, continuous shooting, interval timer, aspect ratio, fill light and HDR
+appear; audio, record format, CinemaDNG depth, resolution, frame rate, aperture,
+T-stop, shutter and shutter angle disappear). Switching also drags the shutter
+unit along with it.
+
+This corrects the earlier claim that the mode could only be changed on the body.
+It also means the bridge reads the mode rather than inferring it from which
+capabilities are populated, which is what it did before.
 
 **The shutter unit is `DataGroupMovie` tag 6** — 1 for speed, 2 for angle. Found
 by writing to it: at 2 the camera declares 18 legal shutter angles, at 1 it

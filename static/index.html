@@ -457,7 +457,7 @@ const ORDER = [
   // 控制項只會造成困惑。它仍可透過 API 讀寫，協定層的對應也留著。
   ['metering_mode',         '測光'],
   ['__wb',                  '白平衡'],
-  // shutter_unit 併在曝光列的秒 / 角度按鈕裡，不另外列
+  // shutter_unit 併在曝光列的秒 / 角度按鈕裡；capture_mode 是最上層那列，都不另外列
   ['color_mode',            '色彩模式'],
   ['aspect_ratio',          '長寬比'],
   ['color_space',           '色彩空間'],
@@ -808,18 +808,33 @@ function settingsHTML() {
   const manual = values.exposure_mode === 'Manual';
   const rows = [];
 
-  // 最上層：機身模式。撥桿控制，PTP 改不了 —— 做成鎖定的指示而不是按鈕，
-  // 免得使用者按了沒反應還以為壞了。
-  rows.push(optRow('__mode', '機身模式', {
-    current: st.camera_mode || '',
-    currentLabel: st.camera_mode === 'movie' ? 'CINE' : st.camera_mode === 'stills' ? 'STILL' : '—',
-    locked: true,
-    note: '由機身撥桿控制',
-    choices: [
-      {value: 'stills', label: 'STILL', title: '拍照模式 — 由機身撥桿切換'},
-      {value: 'movie',  label: 'CINE',  title: '錄影模式 — 由機身撥桿切換'},
-    ],
-  }));
+  // 最上層：機身模式。實測可寫（DataGroupMovie tag 1），寫入後機身螢幕
+  // 真的切換 —— 所以做成可按的按鈕，不是唯讀指示。
+  const modeSetting = byName.capture_mode;
+  if (modeSetting) {
+    rows.push(optRow('capture_mode', '機身模式', {
+      current: values.capture_mode,
+      currentLabel: values.capture_mode === 1 ? 'STILL'
+                  : values.capture_mode === 2 ? 'CINE' : '—',
+      note: '切換會連帶改變快門表示法',
+      choices: [
+        {value: 1, label: 'STILL', title: '拍照模式'},
+        {value: 2, label: 'CINE', title: '錄影模式'},
+      ],
+    }));
+  } else {
+    rows.push(optRow('__mode', '機身模式', {
+      current: st.camera_mode || '',
+      currentLabel: st.camera_mode === 'movie' ? 'CINE'
+                  : st.camera_mode === 'stills' ? 'STILL' : '—',
+      locked: true,
+      note: '相機未回報，無法切換',
+      choices: [
+        {value: 'stills', label: 'STILL'},
+        {value: 'movie', label: 'CINE'},
+      ],
+    }));
+  }
 
   for (const [name, title] of ORDER) {
     if (name === '__format') { const r = formatRow(byName); if (r) rows.push(r); continue; }

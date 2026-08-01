@@ -272,6 +272,24 @@ def test_shutter_unit_is_a_real_setting():
     print("✓ 快門單位（tag 6）可讀可寫，值域有備援")
 
 
+def test_capture_mode_is_settable():
+    """DataGroupMovie tag 1 是機身的拍照 / 錄影模式，而且可寫。
+
+    實測：寫 1 之後機身螢幕真的從錄影切換成拍照，能力清單也整組對調
+    （拍照的 DriveMode / 連拍 / 間隔計時器出現，錄影的格式 / 幀率 /
+    快門角度消失）。先前文件寫「只能靠實體撥桿」是誤讀 SDK。
+    """
+    s = M.MOVIE_BY_NAME["capture_mode"]
+    assert s.tag == 1
+    assert M.VALUE_LABELS["capture_mode"] == {1: "STILL", 2: "CINE"}
+    cam = fake_camera.FakeCamera()
+    cam.movie[1] = 2
+    assert M.read_settings(cam)["capture_mode"] == 2
+    M.apply_settings(cam, {"capture_mode": 1}, {"capture_mode": [1, 2]})
+    assert cam.movie[1] == 1
+    print("✓ 機身模式（tag 1）可讀可寫")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

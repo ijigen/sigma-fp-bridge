@@ -438,6 +438,23 @@ async def test_all_paths_return_the_same_schema():
     print("✓ 所有路徑共用同一份 schema，且隨快門單位切換")
 
 
+async def test_mode_inference_ignores_our_own_fallbacks():
+    """模式推測只能看相機真的回報的錄影能力。
+
+    FALLBACK_CHOICES 是我們自己補的值域（shutter_unit），永遠存在 ——
+    拿它判斷的話模式會永遠停在 movie，即使相機已經在拍照模式。
+    """
+    import movie_settings as MS
+    reset()
+    async with running_worker():
+        # 相機只回報我們自己補的那個 —— 應該判定為拍照模式
+        state_caps = dict(MS.FALLBACK_CHOICES)
+        B.state.movie_capabilities = state_caps
+        reported = set(state_caps) - set(MS.FALLBACK_CHOICES)
+        assert not reported, "備援值域不該被當成相機回報"
+    print("✓ 模式推測忽略我們自己補的備援值域")
+
+
 async def test_settings_roundtrip_through_bridge():
     reset()
     async with running_worker():

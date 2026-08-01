@@ -492,7 +492,21 @@ async def refresh_capabilities() -> None:
     # 的合法值清單只在 CINE 模式下才有內容 —— 實測：STILL 時 RecordFormat /
     # CinemaDNGImageQuality / MovieResolution / ShutterAngle 全是空的，
     # 切到 CINE 就都有值。用這個推測模式。
-    mode = "movie" if state.movie_capabilities else "stills"
+    # 首選讀 DataGroupMovie tag 1（capture_mode），那是機身模式本身。
+    # 讀不到才退回推測：看相機有沒有回報錄影專屬的能力 —— 但要排除
+    # FALLBACK_CHOICES，那是我們自己補的值域，永遠存在。
+    mode = None
+    try:
+        movie = await worker.call(
+            lambda: movie_settings.read_settings(state.camera), priority=Priority.STATUS)
+        if movie.get("capture_mode") in (1, 2):
+            mode = "stills" if movie["capture_mode"] == 1 else "movie"
+        state.shutter_unit = movie.get("shutter_unit")
+    except Exception as e:
+        log.debug(f"讀取機身模式失敗：{e}")
+    if mode is None:
+        reported = set(state.movie_capabilities) - set(movie_settings.FALLBACK_CHOICES)
+        mode = "movie" if reported else "stills"
     if mode != state.camera_mode:
         log.info(f"機身模式：{'錄影 (CINE)' if mode == 'movie' else '拍照 (STILL)'}")
     state.camera_mode = mode
@@ -590,8 +604,8 @@ def _full_schema() -> list:
     各自組一份，改了前兩個卻漏掉 ack —— 而 ack 正是 UI 每次操作後用來更新
     schema 的那條路，於是切換快門單位後整組控制項消失。
     """
-    return describe(state.capabilities, state.camera_mode,
-                    _shutter_speed_allowed()) + _movie_schema()
+    return (describe(state.capabilities, state.camera_mode, _shutter_speed_allowed())
+            + _movie_schema() + _capture_mode_schema())
 
 
 def _movie_schema() -> list:
@@ -606,6 +620,13 @@ def _movie_schema() -> list:
     if state.shutter_unit == 1:
         rows = [r for r in rows if r["name"] != "shutter_angle"]
     return rows
+
+
+def _capture_mode_schema() -> list:
+    """機身模式那一列。錄影模式以外也要能拿到 —— 不然切到拍照後就沒有
+    路可以切回去了。"""
+    return [r for r in movie_settings.describe(movie_settings.FALLBACK_CHOICES)
+            if r["name"] == "capture_mode"]
 
 
 def _shutter_speed_allowed() -> set:
@@ -630,6 +651,9 @@ def _read_all_settings() -> dict:
         movie = movie_settings.read_settings(state.camera)
         out.update(movie)
         state.shutter_unit = movie.get("shutter_unit")
+        # tag 1 直接就是機身模式，比從能力清單推測可靠得多
+        if movie.get("capture_mode") in (1, 2):
+            state.camera_mode = "stills" if movie["capture_mode"] == 1 else "movie"
     except Exception as e:
         log.debug(f"錄影設定讀取失敗（可能不在 CINE 模式）：{e}")
     return out

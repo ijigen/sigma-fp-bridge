@@ -64,6 +64,10 @@ class MovieSetting:
 
 
 MOVIE_SETTINGS: tuple[MovieSetting, ...] = (
+    MovieSetting("capture_mode", 1, DT.UInt8, "int",
+                 note="機身的拍照 / 錄影模式。1 = STILL、2 = CINE，兩者都以實機"
+                      "確認（寫入後機身螢幕真的切換，且能力清單整組對調）。"
+                      "注意切換模式會連帶改變 shutter_unit。"),
     MovieSetting("shutter_angle", 7, DT.URational, "angle", "deg",
                  "電影快門角度。CINE 模式下快門只能從這裡設，"
                  "寫 DataGroup1 的 shutter_speed 沒有作用。"),
@@ -90,7 +94,7 @@ MOVIE_SETTINGS: tuple[MovieSetting, ...] = (
 MOVIE_BY_NAME = {s.name: s for s in MOVIE_SETTINGS}
 
 #: 相機沒有回報合法值清單、但我們知道值域的設定。
-FALLBACK_CHOICES = {"shutter_unit": [1, 2]}
+FALLBACK_CHOICES = {"shutter_unit": [1, 2], "capture_mode": [1, 2]}
 
 #: 已經用實機確認過的數值標籤。沒確認的一律不列 —— 猜錯的標籤比沒有標籤更糟，
 #: 因為後面的人會相信它。
@@ -102,6 +106,8 @@ VALUE_LABELS: dict[str, dict[int, str]] = {
     # 實測確認：tag 6 設成 1 之後，錄影模式下寫 shutter_speed 精準生效
     # （1/500、1/50、1/125 三個值回讀完全相符）；設成 2 則只有角度可設。
     "shutter_unit": {1: "速度", 2: "角度"},
+    # 寫入後機身螢幕真的從錄影切換成拍照，能力清單也整組對調
+    "capture_mode": {1: "STILL", 2: "CINE"},
     # 2 = UHD 來自那段 CinemaDNG 的產物；1 = FHD 由使用者檢視錄出來的檔案確認。
     "movie_resolution": {1: "FHD", 2: "UHD"},
 }
