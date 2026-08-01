@@ -56,6 +56,8 @@ class FakeCamera:
         # ptpy 的 Container 需要這兩個欄位
         self._session = 1
         self._transaction = 1
+        self.recording = False
+        self.files: list = []
         # /api/dump/* 用的原始 IFD payload
         self.info5_raw = _sample_ifd([(658, 3, [5974, 11116])])
         self.movie_raw = _sample_ifd([(1, 1, [2]), (10, 3, [25])])
@@ -201,6 +203,34 @@ class FakeCamera:
         for tag, v in sorted(self.movie.items()):
             rows.append((tag, DT.URational if isinstance(v, tuple) else DT.UInt8, v))
         return enc._encode(rows)
+
+    # -- 錄影 / 檔案列舉 -------------------------------------------------
+
+    def snap_command(self, data):
+        self._tick("snap:" + data.CaptureMode.name)
+        from sigma_ptpy.enum import CaptureMode
+        if data.CaptureMode in (CaptureMode.StartRecMovie, CaptureMode.StartRecMovieAF):
+            self.recording = True
+        elif data.CaptureMode == CaptureMode.StopRecMovie:
+            if self.recording:
+                # 錄完產生檔案，副檔名照目前的 record_format 決定
+                n = len(self.files) + 1
+                name = f"CLIP{n:04d}.MOV" if self.movie.get(50) == 1 else f"A{n:03d}_C001.DNG"
+                self.files.append((100 + n, name, 0x300a, 1024 * n))
+            self.recording = False
+
+    def get_storage_ids(self):
+        return types.SimpleNamespace(StorageIDs=[0x00010001])
+
+    def get_object_handles(self, storage_id, **kw):
+        return types.SimpleNamespace(ObjectHandles=[h for h, _, _, _ in self.files])
+
+    def get_object_info(self, handle):
+        for h, name, fmt, size in self.files:
+            if h == handle:
+                return types.SimpleNamespace(
+                    Filename=name, ObjectFormat=fmt, ObjectCompressedSize=size)
+        raise RuntimeError("no such handle")
 
     def close_application(self):
         self._tick("close_application")

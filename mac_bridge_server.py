@@ -48,6 +48,7 @@ from zeroconf.asyncio import AsyncZeroconf
 # 引入 PoC 裡的 patch 跟基礎 helpers
 sys.path.insert(0, str(Path(__file__).parent))
 import movie_settings
+import recording
 from ifd import parse_ifd, to_json
 from camera_settings import (
     AUTO_OVERRIDE_HINTS,
@@ -1166,6 +1167,51 @@ async def handle_settings_post(request: web.Request) -> web.Response:
     })
 
 
+async def handle_record(request: web.Request) -> web.Response:
+    """開始 / 停止錄影，或錄一小段並回報產出的檔案。
+
+    POST /api/record/start | /api/record/stop | /api/record/clip?seconds=1.5
+    """
+    action = request.match_info.get("action")
+    if not state.camera_connected:
+        return web.json_response({"error": "not connected"}, status=503)
+
+    if action == "start":
+        await worker.call(lambda: recording.start(state.camera), priority=Priority.CONTROL)
+        return web.json_response({"ok": True, "recording": True})
+
+    if action == "stop":
+        await worker.call(lambda: recording.stop(state.camera), priority=Priority.CONTROL)
+        return web.json_response({"ok": True, "recording": False})
+
+    if action == "clip":
+        seconds = float(request.query.get("seconds", 1.5))
+        result = await worker.call(
+            lambda: recording.record_clip(state.camera, seconds),
+            priority=Priority.CONTROL,
+        )
+        return web.json_response({
+            "ok": True,
+            "seconds": result["seconds"],
+            "new_files": [
+                {"filename": e.filename, "size": e.size,
+                 "format": f"0x{e.format_code:04x}"}
+                for e in result["new"]
+            ],
+        })
+
+    if action == "files":
+        entries = await worker.call(
+            lambda: recording.list_objects(state.camera), priority=Priority.STATUS
+        )
+        return web.json_response({
+            "files": [{"filename": e.filename, "size": e.size,
+                       "format": f"0x{e.format_code:04x}"} for e in entries]
+        })
+
+    return web.json_response({"error": f"unknown action: {action}"}, status=404)
+
+
 async def handle_dump(request: web.Request) -> web.Response:
     """把 CanSetInfo5 / DataGroupMovie 的原始 IFD 以 JSON 吐出來。
 
@@ -1350,6 +1396,8 @@ def make_app() -> web.Application:
     app.router.add_get("/api/settings", handle_settings_get)
     app.router.add_post("/api/settings", handle_settings_post)
     app.router.add_get("/api/dump/{which}", handle_dump)
+    app.router.add_post("/api/record/{action}", handle_record)
+    app.router.add_get("/api/record/{action}", handle_record)
     app.router.add_post("/api/release", handle_release)
     app.router.add_post("/api/acquire", handle_acquire)
     app.router.add_get("/liveview.mjpeg", handle_liveview)

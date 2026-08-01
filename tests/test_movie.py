@@ -106,6 +106,37 @@ def test_capabilities_from_info5():
     print("✓ 從 CanSetInfo5 取得合法值清單")
 
 
+def test_record_clip_reports_new_files():
+    """錄一小段，回報多出來哪些檔案。
+
+    這是判斷錄影格式的探針：協定裡 record_format 只是個數字，機身主畫面
+    也不顯示，但產出的檔案騙不了人 —— MOV 是單一檔案，CinemaDNG 是 .dng。
+    """
+    import recording
+    cam = fake_camera.FakeCamera()
+    cam.movie[50] = 1
+    result = recording.record_clip(cam, seconds=0.2)
+    assert len(result["new"]) == 1, result
+    assert result["new"][0].filename.endswith(".MOV"), result["new"][0]
+
+    cam.movie[50] = 2
+    result = recording.record_clip(cam, seconds=0.2)
+    assert result["new"][0].filename.endswith(".DNG"), result["new"][0]
+    print("✓ 錄影探針回報新檔案（副檔名隨 record_format 改變）")
+
+
+def test_recording_does_not_autofocus_by_default():
+    """我們是靠 PTP 手動控焦的，錄影開始時不該讓相機跑 AF 搶走焦點。"""
+    import recording
+    from sigma_ptpy.enum import CaptureMode
+    cam = fake_camera.FakeCamera()
+    recording.start(cam)
+    assert cam.count("snap:" + CaptureMode.StartRecMovie.name) == 1
+    assert cam.count("snap:" + CaptureMode.StartRecMovieAF.name) == 0
+    recording.stop(cam)
+    print("✓ 錄影預設不觸發 AF")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):
