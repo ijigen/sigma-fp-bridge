@@ -77,13 +77,11 @@ def test_failed_capture_status_is_an_error():
     from sigma_ptpy.enum import CaptStatus
     import types as _t
     cam = fake_camera.FakeCamera()
-    # tail 要前進，流程才會走到查詢該筆狀態那一步
+    # 結果出現在 slot 0（實機就是這樣），所以失敗狀態要放在那裡
     def failing(image_id=0):
         return _t.SimpleNamespace(
-            CaptStatus=(CaptStatus.ImageGenFailed if image_id
-                        else CaptStatus.Cleared),
-            ImageId=image_id, ImageDBHead=0,
-            ImageDBTail=1 if cam.calls else 0, DestToSave=None)
+            CaptStatus=CaptStatus.ImageGenFailed if image_id == 0 else CaptStatus.Cleared,
+            ImageId=image_id, ImageDBHead=0, ImageDBTail=1, DestToSave=None)
     cam.get_cam_capt_status = failing
     try:
         capture.capture(cam)
@@ -141,18 +139,29 @@ def test_consecutive_captures_each_take_a_new_photo():
     print("✓ 連續拍攝每次都是新照片")
 
 
-def test_status_is_polled_for_the_new_image_not_slot_zero():
-    """狀態綁在 image_id 上：查 0 一律回 Cleared。
+def test_result_comes_from_slot_zero_but_release_targets_the_new_entry():
+    """兩件事用的是不同的 id，混用就會壞：
 
-    實測拍三張，ImageDBTail 每次都前進（影像確實產生），但一律查 slot 0
-    的話狀態全程是 Cleared，等待邏輯以為什麼都沒發生而逾時。
+      - 拍攝結果出現在 slot 0（拿 ImageDBTail 當 id 去查一律是 Cleared）
+      - 要釋放的是 ImageDBTail 新增的那一筆（釋放 slot 0 不會放掉它）
+
+    實測踩過兩次：先前查 tail 導致永遠讀到 Cleared 而逾時；更早之前
+    釋放時傳 0，真正的項目從沒被放掉，資料庫累積到 6 之後完全拍不成。
     """
     cam = fake_camera.FakeCamera()
     img = capture.capture(cam)
     assert img.data
-    # 新影像的 id 來自 ImageDBTail，狀態要用那個 id 查
-    assert cam.db_tail >= 1
-    print("✓ 用新影像的 id 查狀態，而非固定查 slot 0")
+    assert not cam.pending, f"資料庫項目沒被釋放：{cam.pending}"
+    print("✓ 結果查 slot 0、釋放針對新增的那一筆")
+
+
+def test_capture_releases_the_slot_even_without_downloading():
+    """不下載也要釋放位置 —— 佔著就會擋住下一次拍攝。"""
+    cam = fake_camera.FakeCamera()
+    capture.capture(cam, fetch=False)
+    assert not cam.pending, "fetch=False 沒有釋放資料庫項目"
+    assert capture.capture(cam).data, "前一張沒下載就擋住了下一張"
+    print("✓ 不下載也會釋放資料庫位置")
 
 
 if __name__ == "__main__":

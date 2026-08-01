@@ -59,8 +59,9 @@ class FakeCamera:
         self.recording = False
         self.pict_data = b"\xff\xd8" + b"IMAGE" * 3000 + b"\xff\xd9"
         self.last_capture = "movie"
-        self.pending_image = None
-        self.images = {}
+        self.pending = set()
+        from sigma_ptpy.enum import CaptStatus
+        self.status0 = CaptStatus.Cleared
         self.pending_image = None
         self.db_tail = 0
         self.files: list = []
@@ -222,8 +223,11 @@ class FakeCamera:
             from sigma_ptpy.enum import CaptStatus
             self.last_capture = "still"
             self.db_tail += 1
-            self.pending_image = self.db_tail
-            self.images[self.db_tail] = CaptStatus.ImageGenCompleted
+            if self.pending:          # 上一筆沒釋放 —— 資料庫塞住
+                self.status0 = CaptStatus.ImageGenFailed
+            else:
+                self.pending.add(self.db_tail)
+                self.status0 = CaptStatus.ImageGenCompleted
         elif data.CaptureMode in (CaptureMode.StartRecMovie,
                                   CaptureMode.StartRecMovieAF,
                                   CaptureMode.StopRecMovie):
@@ -240,16 +244,12 @@ class FakeCamera:
             self.recording = False
 
     def get_cam_capt_status(self, image_id=0):
-        # 狀態是綁在 image_id 上的：查 0 一律回 Cleared，要查真正那筆才有結果。
-        # 實機就是這樣 —— 拍三張 ImageDBTail 每次都前進，但 status(0) 全程
-        # 回 Cleared，害等待邏輯以為什麼都沒發生。
+        # 照實機的行為：
+        #   - 拍攝結果出現在 slot 0；用 ImageDBTail 當 id 去查一律是 Cleared
+        #   - ImageDBTail 每拍一張就 +1，那是資料庫新增的位置
+        #   - 位置沒被釋放就會累積，塞滿之後拍攝變成 ImageGenFailed
         from sigma_ptpy.enum import CaptStatus
-        if image_id and image_id in self.images:
-            status = self.images[image_id]
-        elif self.last_capture == "movie" and not image_id:
-            status = CaptStatus.MovieGenCompleted
-        else:
-            status = CaptStatus.Cleared
+        status = self.status0 if image_id == 0 else CaptStatus.Cleared
         return types.SimpleNamespace(
             ImageId=image_id, ImageDBHead=0, ImageDBTail=self.db_tail,
             CaptStatus=status, DestToSave=None)
@@ -262,10 +262,12 @@ class FakeCamera:
             self.pending_image = None
 
     def clear_image_db_single(self, image_id):
+        from sigma_ptpy.enum import CaptStatus
         self._tick("clear_db")
-        self.images.pop(image_id, None)
-        if self.pending_image == image_id:
-            self.pending_image = None
+        if image_id == 0:
+            self.status0 = CaptStatus.Cleared   # 清掉結果，不釋放項目
+        else:
+            self.pending.discard(image_id)      # 釋放資料庫位置
 
     def get_pict_file_info2(self):
         self._tick("pict_info")

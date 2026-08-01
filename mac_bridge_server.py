@@ -1393,6 +1393,19 @@ async def _do_record(action: str, request: web.Request) -> web.Response:
             "produced_something": result["produced_something"],
         })
 
+    if action == "clear":
+        # 復原用：資料庫項目沒被釋放會累積，塞滿之後相機就拍不成了。
+        # 實際發生過 —— tail 累積到 6、slot 0 卡在 ImageGenFailed。
+        def clear_all():
+            st = recording.capture_status(state.camera)
+            tail = st.get("db_tail") or 0
+            for i in range(0, int(tail) + 1):
+                capture.clear_slot(state.camera, i)
+            return recording.capture_status(state.camera)
+
+        after = await worker.call(clear_all, priority=Priority.CONTROL)
+        return web.json_response({"ok": True, "status": after})
+
     if action == "status":
         info = await worker.call(
             lambda: recording.capture_status(state.camera), priority=Priority.STATUS
