@@ -1176,6 +1176,18 @@ async def handle_record(request: web.Request) -> web.Response:
     if not state.camera_connected:
         return web.json_response({"error": "not connected"}, status=503)
 
+    # 這些操作走的是未文件化 / 未驗證的協定路徑，例外要看得見而不是回 500
+    try:
+        return await _do_record(action, request)
+    except Exception as e:
+        log.warning(f"錄影操作 {action} 失敗：{type(e).__name__}: {e}")
+        return web.json_response(
+            {"error": f"{type(e).__name__}: {e}", "action": action}, status=502
+        )
+
+
+async def _do_record(action: str, request: web.Request) -> web.Response:
+
     if action == "start":
         await worker.call(lambda: recording.start(state.camera), priority=Priority.CONTROL)
         return web.json_response({"ok": True, "recording": True})
@@ -1193,12 +1205,20 @@ async def handle_record(request: web.Request) -> web.Response:
         return web.json_response({
             "ok": True,
             "seconds": result["seconds"],
+            "listing_supported": result["listing_supported"],
             "new_files": [
                 {"filename": e.filename, "size": e.size,
                  "format": f"0x{e.format_code:04x}"}
                 for e in result["new"]
             ],
+            "movie_info": result["movie_info"],
         })
+
+    if action == "movie_info":
+        info = await worker.call(
+            lambda: recording.describe_last_movie(state.camera), priority=Priority.STATUS
+        )
+        return web.json_response(info)
 
     if action == "files":
         entries = await worker.call(

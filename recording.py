@@ -50,6 +50,48 @@ def stop(cam) -> None:
     cam.snap_command(SnapCommand(CaptureMode=CaptureMode.StopRecMovie, CaptureAmount=1))
 
 
+def movie_file_info_raw(cam) -> bytes:
+    """發 SigmaGetMovieFileInfo (0x9036)，取回最近一段影片的資訊。
+
+    sigma-ptpy 定義了這個 opcode 但沒有包成方法（同 PictFileInfo2 的處境，
+    那個有包）。結構未文件化，但檔名是 ASCII，肉眼就看得出來 —— 對「這段
+    錄出來是 MOV 還是 DNG」這個問題來說已經夠用。
+    """
+    from construct import Container
+
+    ptp = Container(
+        OperationCode="SigmaGetMovieFileInfo",
+        SessionID=cam._session,
+        TransactionID=cam._transaction,
+        Parameter=[],
+    )
+    return bytes(cam.recv(ptp).Data)
+
+
+def _ascii_runs(data: bytes, minimum: int = 4) -> list[str]:
+    """把 bytes 裡的可列印字串抽出來。未文件化結構的土法煉鋼，但有效。"""
+    out, current = [], []
+    for b in data:
+        if 32 <= b < 127:
+            current.append(chr(b))
+        else:
+            if len(current) >= minimum:
+                out.append("".join(current))
+            current = []
+    if len(current) >= minimum:
+        out.append("".join(current))
+    return out
+
+
+def describe_last_movie(cam) -> dict[str, Any]:
+    """最近一段影片的檔名 / 路徑。取不到就回 error 而不是丟例外。"""
+    try:
+        raw = movie_file_info_raw(cam)
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+    return {"strings": _ascii_runs(raw), "raw_hex": raw.hex(), "bytes": len(raw)}
+
+
 def list_objects(cam, limit: int = 40) -> list[ObjectEntry]:
     """列出卡片上的檔案（最新的在前）。
 
@@ -57,7 +99,12 @@ def list_objects(cam, limit: int = 40) -> list[ObjectEntry]:
     有可能查不到資訊。
     """
     entries: list[ObjectEntry] = []
-    for storage_id in cam.get_storage_ids().StorageIDs:
+    storage = cam.get_storage_ids()
+    ids = getattr(storage, "StorageIDs", None)
+    if not ids:
+        # API 模式下相機不一定開放標準 PTP 的儲存列舉
+        raise RecordingError(f"相機沒有回報 StorageIDs（收到 {storage!r}）")
+    for storage_id in ids:
         try:
             handles = cam.get_object_handles(storage_id, all_formats=True).ObjectHandles
         except Exception:
@@ -86,7 +133,12 @@ def record_clip(cam, seconds: float = 1.5) -> dict[str, Any]:
     Returns:
         {"before": int, "new": [ObjectEntry], "seconds": float}
     """
-    before = {e.handle for e in list_objects(cam)}
+    try:
+        before = {e.handle for e in list_objects(cam)}
+        listing_works = True
+    except Exception:
+        # 標準 PTP 列舉不見得能用 —— 還是要錄，改看 Sigma 自己的影片資訊
+        before, listing_works = set(), False
 
     start(cam)
     try:
@@ -96,11 +148,23 @@ def record_clip(cam, seconds: float = 1.5) -> dict[str, Any]:
 
     # 相機需要一點時間把檔案寫完並登錄
     new: list[ObjectEntry] = []
-    deadline = time.monotonic() + 15
-    while time.monotonic() < deadline:
-        time.sleep(1.0)
-        new = [e for e in list_objects(cam) if e.handle not in before]
-        if new:
-            break
+    if listing_works:
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            time.sleep(1.0)
+            try:
+                new = [e for e in list_objects(cam) if e.handle not in before]
+            except Exception:
+                break
+            if new:
+                break
+    else:
+        time.sleep(2.0)
 
-    return {"before": len(before), "seconds": seconds, "new": new}
+    return {
+        "before": len(before),
+        "seconds": seconds,
+        "new": new,
+        "listing_supported": listing_works,
+        "movie_info": describe_last_movie(cam),
+    }
