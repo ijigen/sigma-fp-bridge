@@ -720,6 +720,15 @@ function wbRow(byName) {
     '</div><div class="opts">' + body + '</div></div>';
 }
 
+// 送出前依 schema 決定要不要轉成數字。白平衡之類的 enum 值是字串，
+// 無條件 parseFloat 會變成 NaN，序列化後成 null 送出去 —— 選了沒反應。
+// 按鈕與下拉必須共用同一套判斷，否則只要有一邊漏掉就會重演。
+function coerceValue(name, raw) {
+  const s = (schema || []).find(x => x.name === name);
+  const numeric = s && (!s.choices || typeof s.choices[0] === 'number');
+  return numeric ? parseFloat(raw) : raw;
+}
+
 function settingsHTML() {
   if (!schema) return '<div class="hint">載入中…</div>';
   const byName = {};
@@ -799,10 +808,8 @@ function renderSettings() {
       b.onclick = () => {
         if (b.dataset.set === '__mode') return;
         markBusy();
-        const s = (schema || []).find(x => x.name === b.dataset.set);
-        const numeric = s && (!s.choices || typeof s.choices[0] === 'number');
         send({cmd: 'set_settings',
-              settings: {[b.dataset.set]: numeric ? parseFloat(b.dataset.val) : b.dataset.val}});
+              settings: {[b.dataset.set]: coerceValue(b.dataset.set, b.dataset.val)}});
       };
     });
     box.querySelectorAll('.o[data-unit]').forEach(b => {
@@ -812,14 +819,16 @@ function renderSettings() {
       el.onchange = () => {
         if (el.value === '') return;
         markBusy();
-        send({cmd: 'set_settings', settings: {[el.dataset.set]: parseFloat(el.value)}});
+        send({cmd: 'set_settings',
+              settings: {[el.dataset.set]: coerceValue(el.dataset.set, el.value)}});
       };
     });
     box.querySelectorAll('input[data-set]').forEach(el => {
       el.onchange = () => {
         if (el.value === '') return;
         markBusy();
-        send({cmd: 'set_settings', settings: {[el.dataset.set]: parseFloat(el.value)}});
+        send({cmd: 'set_settings',
+              settings: {[el.dataset.set]: coerceValue(el.dataset.set, el.value)}});
       };
     });
   }

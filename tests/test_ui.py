@@ -266,6 +266,23 @@ def test_row_slices_use_the_next_function_defined():
     print("✓ row builder 的定義順序符合測試切片假設")
 
 
+def test_all_controls_coerce_values_the_same_way():
+    """按鈕、下拉、數字輸入送出前都要依 schema 決定型別。
+
+    白平衡壞過：下拉的處理器無條件 parseFloat，而白平衡的值是字串
+    （Auto / ColorTemp），變成 NaN、序列化成 null —— 選了完全沒反應。
+    三種控制項各寫各的轉換，只要有一邊漏掉就會重演。
+    """
+    js = _script(HTML.read_text())
+    assert "function coerceValue" in js, "沒有共用的型別轉換"
+    # 送出路徑不得再出現裸的 parseFloat
+    import re as _re
+    assert not _re.search(r"settings: \{\[.*?\]: parseFloat", js), \
+        "還有控制項直接 parseFloat 就送出"
+    assert js.count("coerceValue") >= 4, "不是所有控制項都走共用轉換"
+    print("✓ 按鈕 / 下拉 / 輸入框共用型別轉換")
+
+
 def test_state_updates_do_not_rebuild_dom():
     """狀態廣播是 10Hz。無條件寫 innerHTML 會讓節點每 100ms 被銷毀重建 ——
     版面抖動、捲軸亂飄，按鈕在按下的瞬間被換掉所以按不到。實測踩過。
