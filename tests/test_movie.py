@@ -375,6 +375,34 @@ def test_movie_download_uses_the_verified_parameter_shape():
     print(f"✓ 影片下載參數形狀正確（{len(calls)} 次請求）")
 
 
+def test_an_overlong_chunk_is_rejected_instead_of_truncated():
+    """迴歸：要 N 個 byte 卻拿到更多，代表讀到的是別的東西的殘留。
+
+    實機踩過：4 MB 的請求讓 PTP 資料相位失去同步，之後每次都回同一坨
+    122,868 bytes。當時的程式碼寫 got[:want] 默默截斷，於是拼出一個大小
+    完全正確、內容全錯的 27 MB 檔案 —— 一直到解析 QuickTime 結構才發現。
+    """
+    import recording
+    import types as _t
+
+    class Cam:
+        _session = 1
+        _transaction = 1
+
+        def recv(self, ptp):
+            return _t.SimpleNamespace(Data=b"\x00" * 122868)
+
+    movie = recording.MovieFile(filename="A.MOV", path_name="C",
+                                format="MOV", size=4096)
+    try:
+        recording.download_movie(Cam(), movie)
+    except recording.RecordingError as e:
+        assert "失去同步" in str(e) and "122,868" in str(e), e
+        print("✓ 過長的回應被當成錯誤，不會截斷後繼續")
+    else:
+        raise AssertionError("應該要丟 RecordingError")
+
+
 def test_a_truncated_movie_download_is_an_error():
     """相機提前停止回傳時要報錯，不能默默交出半個檔案。"""
     import recording

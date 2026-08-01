@@ -274,9 +274,14 @@ def record_clip(cam, seconds: float = 1.5) -> dict[str, Any]:
 # 個 byte 之後），第 4 個是長度。第 1、3 個必須是 0 —— 第 3 個推測是偏移的
 # 高 32 位，設成 1 會直接失敗。
 
-#: 單次請求的大小。實測 16 MB 也可以，但一次要太多會讓 USB transaction
-#: 佔住相機太久 —— 這個 bridge 還要同時跑 live view。
-MOVIE_CHUNK_BYTES = 4 << 20
+#: 單次請求的大小。
+#:
+#: 別把這個值調大到沒有驗證過內容的程度。先前設 4 MB，理由是「探測時要 1/4/16
+#: MB 都回傳了剛好的位元組數」—— 但那次只比對了長度。實際上大請求根本不回
+#: 影片資料，而且會讓 PTP 的資料相位永久失去同步：之後每個
+#: SigmaGetPartialMovieFile 都回同一坨 122,868 bytes 的殘留，直到重開 session。
+#: 拼出來的檔案大小完全正確、內容全錯。
+MOVIE_CHUNK_BYTES = 64 << 10
 
 #: 影片檔案大小的合理上限。純粹是「解錯版面」的防線，跟照片那道同樣理由。
 MAX_MOVIE_BYTES = 64 << 30
@@ -379,7 +384,14 @@ def download_movie(cam, movie: MovieFile, save_dir=None,
         if not got:
             raise RecordingError(
                 f"下載中斷：已取得 {len(out):,} / {movie.size:,} bytes")
-        out += got[:want]
+        if len(got) > want:
+            # 要 N 個 byte 卻拿到更多，代表讀到的是別的東西的殘留。
+            # 這裡曾經寫成 got[:want] 默默截斷 —— 結果是大小正確、內容全錯
+            # 的檔案，而且一路到最後才發現。寧可在第一塊就停。
+            raise RecordingError(
+                f"資料相位失去同步：要求 {want:,} bytes，相機回了 {len(got):,}。"
+                "請重啟 bridge。")
+        out += got
         if progress is not None:
             progress(len(out), movie.size)
 
