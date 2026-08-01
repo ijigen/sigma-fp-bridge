@@ -1407,8 +1407,14 @@ async def _do_record(action: str, request: web.Request) -> web.Response:
         return web.json_response({"ok": True, "status": after})
 
     if action == "status":
+        # image_id 可指定 —— 狀態是分項目的，查 0 不一定看得到待取那筆
+        try:
+            image_id = int(request.query.get("image_id", 0))
+        except ValueError:
+            return web.json_response({"error": "image_id 必須是整數"}, status=400)
         info = await worker.call(
-            lambda: recording.capture_status(state.camera), priority=Priority.STATUS
+            lambda: recording.capture_status(state.camera, image_id),
+            priority=Priority.STATUS,
         )
         return web.json_response(info)
 

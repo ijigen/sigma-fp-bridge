@@ -116,14 +116,14 @@ def clear_slot(cam, image_id: int = 0) -> None:
         print(f"警告：清除影像資料庫項目 {image_id} 失敗：{e}", file=sys.stderr)
 
 
-def wait_until_done(cam, timeout_s: float = CAPTURE_TIMEOUT_S) -> str:
-    """等這次拍攝的結果出現。
+def wait_until_done(cam, timeout_s: float = CAPTURE_TIMEOUT_S) -> tuple[int, str]:
+    """等這次拍攝的結果出現，回傳 (image_id, 狀態名稱)。
 
-    結果查的是 slot 0 —— 實測那裡才會出現 ImageGenCompleted / ImageGenFailed；
-    用 ImageDBTail 當 id 去查，一律讀到 Cleared。（tail 是資料庫尾端的位置，
-    不是查詢狀態用的 id。）
+    狀態是分項目的，而待取的項目落在 [ImageDBHead, ImageDBTail) 這個區間 ——
+    head 是下一筆還沒被取走的，tail 是尾端。實測 head=4 / tail=6 時，
+    查 slot 0 一律是 Cleared，因為那個位置早就被取走了。
 
-    呼叫端必須在拍攝前先清掉 slot 0，否則會讀到上一次的殘留結果。
+    所以每輪把 0 和待取區間裡的每個 id 都問一次，哪個回報完成就用哪個。
 
     Raises:
         CaptureError: 相機回報失敗狀態，或等到逾時。
@@ -131,12 +131,18 @@ def wait_until_done(cam, timeout_s: float = CAPTURE_TIMEOUT_S) -> str:
     deadline = time.monotonic() + timeout_s
     last = "?"
     while time.monotonic() < deadline:
-        st = _status(cam, 0)
-        last = _status_name(st)
-        if last in _FAILED:
-            raise CaptureError(f"相機回報拍攝失敗：{last}")
-        if last in _DONE:
-            return last
+        base = _status(cam)
+        head = int(getattr(base, "ImageDBHead", 0) or 0)
+        tail = int(getattr(base, "ImageDBTail", 0) or 0)
+        for image_id in [0] + list(range(head, tail + 1)):
+            st = base if image_id == 0 else _status(cam, image_id)
+            name = _status_name(st)
+            if name in _DONE:
+                return image_id, name
+            if name in _FAILED:
+                raise CaptureError(f"相機回報拍攝失敗：{name}（影像 {image_id}）")
+            if name != "Cleared":
+                last = name
         time.sleep(0.2)
     raise CaptureError(f"等待影像產生逾時（最後狀態 {last}）")
 
@@ -181,10 +187,10 @@ def capture(cam, save_dir: Path | None = None,
 
     mode = CaptureMode.GeneralCapt if autofocus else CaptureMode.NonAFCapt
     cam.snap_command(SnapCommand(CaptureMode=mode, CaptureAmount=1))
-    wait_until_done(cam)
-    # 要釋放的是資料庫裡新增的那一筆，不是 slot 0。先前這裡傳 0，
-    # 於是真正的項目從來沒被釋放 —— 資料庫塞滿之後就再也拍不成。
-    image_id = wait_for_new_id(cam, tail_before, timeout_s=2.0)
+    image_id, _ = wait_until_done(cam)
+    if not image_id:
+        # 完成狀態出現在 slot 0 時，要釋放的仍是資料庫新增的那一筆
+        image_id = wait_for_new_id(cam, tail_before, timeout_s=2.0)
 
     try:
         info = cam.get_pict_file_info2()
