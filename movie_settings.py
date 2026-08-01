@@ -66,10 +66,9 @@ MOVIE_SETTINGS: tuple[MovieSetting, ...] = (
                       "所以無法用『各錄一段比對產出』的方式判讀。"),
     MovieSetting("movie_resolution", 60, DT.UInt8, "int"),
     MovieSetting("frame_rate", 61, DT.URational, "rational", "fps",
-                 note="⚠ 實測相機會把 NTSC 小數幀率取整：寫 29.97 存成 30、"
-                      "寫 59.94 存成 60，而 23.98 與 25 正常。30 / 60 甚至不在"
-                      "相機自己宣告的合法清單裡。原因未明，可能是機身選單裡"
-                      "有錄影標準（NTSC / PAL）之類的開關在管。"),
+                 note="⚠ 寫 29.97 相機存成 30、寫 59.94 存成 60，而 23.98 / 25 / 50 "
+                      "都正常 —— 儘管相機自己把 29.97 與 59.94 列為合法、"
+                      "30 與 60 反而不在清單裡。原因未知。"),
 )
 
 MOVIE_BY_NAME = {s.name: s for s in MOVIE_SETTINGS}
@@ -180,6 +179,23 @@ def encode(setting: MovieSetting, value) -> Any:
         raise MovieSettingError(f"{setting.name} 需要整數，收到 {value!r}") from None
 
 
+def _capability_raw(info5_ifd, name: str) -> list | None:
+    """合法值的原始編碼（rational 保留 (分子, 分母)）。
+
+    寫回時原封送回相機自己宣告的那組數字，而不是從浮點數重新推導 ——
+    重新推導會引進「我算的分數跟相機講的不同」這個變因。實測相機對
+    25 收到 2500/100 存成 25/1、對 50 收到 5000/100 存成 50/1，
+    可見它確實會重新詮釋我送的形式。
+    """
+    tag = CAPABILITY_TAGS.get(name)
+    if tag is None or info5_ifd is None:
+        return None
+    entry = find_tag(info5_ifd, tag)
+    if entry is None or not entry.values:
+        return None
+    return list(entry.values)
+
+
 def _capability_values(info5_ifd, name: str) -> list | None:
     """從 CanSetInfo5 取這個設定的合法值清單。"""
     tag = CAPABILITY_TAGS.get(name)
@@ -214,8 +230,17 @@ def read_settings(cam) -> dict[str, Any]:
     return out
 
 
+#: 合法值的原始編碼，key 與 read_capabilities() 相同。
+RAW_CAPABILITIES: dict[str, list] = {}
+
+
 def read_capabilities(cam, info5_raw: bytes | None) -> dict[str, list]:
-    """每個錄影設定的合法值清單（來自 CanSetInfo5）。"""
+    """每個錄影設定的合法值清單（來自 CanSetInfo5）。
+
+    同時把原始編碼記進 RAW_CAPABILITIES，寫入時可以原封送回。
+    """
+    RAW_CAPABILITIES.clear()
+    _LAST_CAPABILITIES.clear()
     if not info5_raw:
         return {}
     try:
@@ -227,6 +252,10 @@ def read_capabilities(cam, info5_raw: bytes | None) -> dict[str, list]:
         values = _capability_values(ifd, name)
         if values:
             caps[name] = values
+            _LAST_CAPABILITIES[name] = values
+            raw = _capability_raw(ifd, name)
+            if raw:
+                RAW_CAPABILITIES[name] = raw
     return caps
 
 
@@ -262,10 +291,39 @@ def apply_settings(cam, changes: dict[str, Any],
                 raise MovieSettingError(
                     f"{name}={value} 不在相機接受的清單裡：{allowed}"
                 )
-        entries.append((setting.tag, setting.type, encode(setting, value)))
+        entries.append((setting.tag, setting.type, _encode_preferring_camera_form(setting, value)))
 
     write_raw(cam, entries)
     return dict(changes)
+
+
+def _encode_preferring_camera_form(setting: MovieSetting, value) -> Any:
+    """能對上相機宣告的合法值時，原封送回它的原始編碼。
+
+    對不上才用 encode() 自行推導。這樣「我們送出去的就是相機說它接受的」
+    是一句真話 —— 之後再排查寫入沒生效時，少一個變因要排除。
+    """
+    allowed = (capabilities_for(setting.name) or [])
+    raw = RAW_CAPABILITIES.get(setting.name) or []
+    if len(allowed) == len(raw):
+        try:
+            wanted = float(value)
+        except (TypeError, ValueError):
+            wanted = None
+        if wanted is not None:
+            for decoded, original in zip(allowed, raw):
+                if abs(float(decoded) - wanted) < 1e-9:
+                    return original
+    return encode(setting, value)
+
+
+def capabilities_for(name: str) -> list | None:
+    """最近一次 read_capabilities() 得到的合法值清單。"""
+    return _LAST_CAPABILITIES.get(name)
+
+
+#: read_capabilities() 最近一次的結果，供 _encode_preferring_camera_form 對照
+_LAST_CAPABILITIES: dict[str, list] = {}
 
 
 def describe(capabilities: dict[str, list] | None = None) -> list[dict[str, Any]]:

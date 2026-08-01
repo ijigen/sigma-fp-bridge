@@ -657,11 +657,13 @@ changed and whose values mean nothing to the reader is just clutter — but the
 protocol mapping and API access stay, so anyone who works out what gates it can
 pick up where this left off.
 
-**The camera rounds NTSC frame rates.** Writing 29.97 stores 30, and 59.94
-stores 60, while 23.98 and 25 are kept exactly — and 30 and 60 are not even in
-the list of legal rates the camera reports. What causes it is not known; a
-recording-standard switch in the body menu is the obvious suspect. The value is
-read back and the mismatch reported rather than passed off as success.
+**Two frame rates do not take.** Writing 29.97 stores 30 and 59.94 stores 60,
+while 23.98, 25 and 50 are stored as asked — even though the camera lists 29.97
+and 59.94 as legal and does not list 30 or 60 at all. Tested across both formats
+and both resolutions, with the same result each time. **The cause is unknown.**
+23.98 is an NTSC fractional rate and works, so a recording-standard setting does
+not explain it. The value is read back and the mismatch reported rather than
+passed off as success.
 
 **Aspect ratio, colour space and tone effect do nothing in CINE.** Written and
 discarded, like `shutter_speed`. They are marked stills-only and omitted from the

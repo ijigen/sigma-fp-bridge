@@ -205,6 +205,32 @@ def test_capture_status_errors_are_reported_not_raised():
     print("✓ 拍攝狀態讀不到時回報錯誤而非丟例外")
 
 
+def test_writes_use_the_cameras_own_encoding():
+    """能對上合法清單時，原封送回相機宣告的原始分數。
+
+    自行從浮點推導會引進「我算的分數跟相機講的不同」這個變因 —— 實測相機
+    收到 2500/100 存成 25/1、收到 5000/100 存成 50/1，可見它會重新詮釋。
+    排查寫入沒生效時，少一個變因要排除。
+    """
+    from sigma_ptpy.schema import DirectoryType as DT
+    from sigma_ptpy.schema import _DirectoryEntrySchema
+    enc = type("E", (_DirectoryEntrySchema,), {})()
+    info5 = enc._encode([(161, DT.URational, [(2398, 100), (25, 1), (2997, 100)])])
+    caps = M.read_capabilities(None, info5)
+    assert caps["frame_rate"] == [23.98, 25.0, 29.97]
+    assert M.RAW_CAPABILITIES["frame_rate"] == [(2398, 100), (25, 1), (2997, 100)]
+
+    cam = fake_camera.FakeCamera()
+    M.apply_settings(cam, {"frame_rate": 25}, caps)
+    # 相機宣告的是 (25, 1)，就送 (25, 1)，不是自行推導的 (2500, 100)
+    assert cam.movie[61] == (25, 1), cam.movie[61]
+
+    # 對不上清單的值仍走一般推導（並被合法值檢查擋下）
+    setting = M.MOVIE_BY_NAME["frame_rate"]
+    assert M.encode(setting, 23.98) == (2398, 100)
+    print("✓ 寫入時原封送回相機宣告的原始分數")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):
