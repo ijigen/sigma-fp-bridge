@@ -353,9 +353,21 @@ def movie_files(cam) -> list[MovieFile]:
 def partial_movie(cam, offset: int, length: int) -> bytes:
     """讀影片檔案的一段。參數形狀 (0, offset, 0, length)。
 
-    ⚠️ 相機會進入一種狀態，讓這個指令不再回傳影片資料，而是回一坨固定
-    122,868 bytes 的殘留緩衝區（內容是上一個指令的回應接舊記憶體）。進入之後
-    每次呼叫都一樣，不分尺寸也不分偏移。
+    ⚠️ 相機會進入一種狀態，讓這個指令不再回傳影片資料，改回固定 122,868
+    bytes 的內容。進入之後每次呼叫都一樣，不分尺寸也不分偏移。
+
+    那不是壞掉的封包，是相機正式的回應：
+      - 122,868 + 12 = 122,880 = 120 KB 整。12 bytes 正是 PTP over USB 資料
+        相位的容器標頭（ContainerLength 4 + Type 2 + Code 2 + TransactionID 4），
+        所以相機送回來的是剛好 120 KB 的完整容器。
+      - ptpy 的 recv 會核對 SessionID / TransactionID / OperationCode 三者
+        一致，不符就 __dev.reset() 並拋 PTPError。我們沒有收到錯誤，代表這是
+        相機針對這個請求正式回覆的，不是讀到別人的封包或相位錯開。
+      - 內容會跟著前一個指令的回應變（問過 MovieFileInfo 就以它的 payload
+        開頭），後面接舊資料。
+
+    合起來看：相機有一個 120 KB 的共用傳輸緩衝區，服務不了這個請求時就把
+    緩衝區原樣送回，而沒有先填入影片資料。
 
     **重啟 bridge 沒有用** —— 那已經是新的 PTP session 了，狀態仍在。只有把
     相機斷電重開才會恢復。這件事花了很久才看出來，因為每次失敗我都只重啟

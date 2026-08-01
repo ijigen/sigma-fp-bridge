@@ -986,10 +986,21 @@ with a 1920×1080 `avc1` video track, `sowt` audio and a `tmcd` timecode track.
 #### The camera can stop serving transfers
 
 There is a state the camera enters where 0x9037 stops returning movie data and
-returns a fixed 122,868-byte buffer instead, holding the previous command's reply
-followed by stale memory. Once it starts, every call behaves that way regardless
-of offset or length, while `SigmaGetMovieFileInfo` keeps answering correctly the
-whole time.
+returns a fixed 122,868 bytes instead, regardless of offset or length, while
+`SigmaGetMovieFileInfo` keeps answering correctly the whole time.
+
+That reply is not malformed, and calling it garbage discourages looking at it.
+122,868 + 12 = 122,880, exactly 120 KB, and 12 bytes is precisely the PTP-over-USB
+data-phase container header (length 4, type 2, code 2, transaction 4) — so the
+camera sends a complete 120 KB container. ptpy's `recv` cross-checks the session,
+transaction and operation codes across request, data phase and response, resetting
+the device and raising if any disagree; no error is raised here. The camera is
+answering this request, properly. And the contents track whatever was asked
+immediately before — query `GetMovieFileInfo` first and the buffer starts with its
+85-byte payload.
+
+Read together: there is a shared 120 KB transfer buffer, and when the camera
+cannot serve a movie read it hands that buffer back without filling it.
 
 **Restarting the bridge does not clear it** — that is already a fresh PTP session
 and the state survives. Only power-cycling the camera does.
