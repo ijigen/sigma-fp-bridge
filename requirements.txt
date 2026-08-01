@@ -3,3 +3,4 @@ aiohttp>=3.9
 zeroconf>=0.131
 pyusb>=1.2
 libusb-package>=1.0.26  # fallback libusb: 免裝 Homebrew，且 sudo 下 DYLD_* 被剝掉時仍可用
+esprima>=4.0  # 純 Python 的 JS parser，給 tests/test_ui.py 做語法檢查用

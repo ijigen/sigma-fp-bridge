@@ -450,6 +450,8 @@ python3 tests/test_ifd.py       # IFD parser, pure data
 python3 tests/test_bridge.py    # camera worker + HTTP/WS/MJPEG, fake camera
 python3 tests/test_session.py   # camera session lifecycle
 python3 tests/test_settings.py  # settings encode/decode, batch apply
+python3 tests/test_movie.py     # movie data group, recording probe
+python3 tests/test_ui.py        # browser UI: syntax, wiring, render discipline
 ```
 
 Both run without a Sigma fp attached. `tests/test_bridge.py` pins the properties

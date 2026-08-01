@@ -66,6 +66,8 @@
   .notice.info { background: #12283c; border: 1px solid #1e4467; color: #b8dcff; }
   .notice .fix { margin-top: 7px; }
   .notice-icon { flex: 0 0 auto; }
+  /* 警告區高度變動時，瀏覽器不要為了「維持視覺位置」而捲動頁面 */
+  #notices, #badges { overflow-anchor: none; }
 
   .log { background: #0e0e0e; border: 1px solid #2a2a2a; border-radius: 8px; padding: 9px; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 11px; height: 170px; overflow-y: auto; color: #8a8a8a; }
   .log .r { padding: 1.5px 0; }
@@ -202,10 +204,19 @@
 <script>
 let ws = null, st = {}, schema = null, values = {};
 let shutterUnit = 'time', renderedKey = null, busyUntil = 0, focusRange = null;
+let clipRunning = false;   // 錄製測試片段中；render() 會據此停用按鈕
 
 const $ = id => document.getElementById(id);
 const busy = () => Date.now() < busyUntil;
 function markBusy() { busyUntil = Date.now() + 4000; }
+
+// 狀態廣播是 10Hz，render() 每次都跑。無條件寫 DOM 會讓節點每 100ms 被
+// 銷毀重建 —— 版面因此抖動、捲軸亂飄，按鈕在你按下的瞬間被換掉所以按不到。
+// 下面三個 helper 讓渲染變成冪等：值沒變就完全不碰 DOM。
+function setHTML(el, html) { if (el.__last !== html) { el.innerHTML = html; el.__last = html; } }
+function setText(el, v) { const t = (v === null || v === undefined) ? '—' : String(v); if (el.textContent !== t) el.textContent = t; }
+function setDisabled(el, v) { v = !!v; if (el.disabled !== v) el.disabled = v; }
+function setShown(el, v) { const d = v ? '' : 'none'; if (el.style.display !== d) el.style.display = d; }
 
 function log(text, cls = '') {
   const el = document.createElement('div');
@@ -282,46 +293,51 @@ function render() {
   if (st.camera_mode) b.push(badge('info', st.camera_mode === 'movie' ? 'CINE 錄影模式' : 'STILL 拍照模式'));
   if (st.recording) b.push('<span class="badge rec"><span class="dot pulse"></span>錄影中</span>');
   if (st.focal_length_mm) b.push(badge('', st.focal_length_mm + ' mm'));
-  $('badges').innerHTML = b.join('');
+  setHTML($('badges'), b.join(''));
 
-  $('liveview').style.display = live ? '' : 'none';
-  $('liveview-off').style.display = live ? 'none' : '';
+  setShown($('liveview'), live);
+  setShown($('liveview-off'), !live);
   if (live) { if (!$('liveview').getAttribute('src')) $('liveview').src = '/liveview.mjpeg'; }
-  else { $('liveview').removeAttribute('src'); }
-  $('liveview-off').textContent = st.released
+  else if ($('liveview').getAttribute('src')) { $('liveview').removeAttribute('src'); }
+  setText($('liveview-off'), st.released
     ? '已交還機身操作 — 沒有即時預覽。按「取回控制權」恢復。'
-    : st.wsDown ? 'bridge 連線中斷' : '相機未連線';
+    : st.wsDown ? 'bridge 連線中斷' : '相機未連線');
 
-  $('f-pos').textContent = st.focus_position ?? '—';
-  $('f-state').textContent = st.focus_state === 0 ? 'Idle' : st.focus_state === 1 ? 'Moving' : '—';
-  $('f-mode').textContent = st.focus_mode ?? '—';
-  $('f-len').textContent = st.focal_length_mm ? st.focal_length_mm + ' mm' : '—';
+  setText($('f-pos'), st.focus_position);
+  setText($('f-state'), st.focus_state === 0 ? 'Idle' : st.focus_state === 1 ? 'Moving' : '—');
+  setText($('f-mode'), st.focus_mode);
+  setText($('f-len'), st.focal_length_mm ? st.focal_length_mm + ' mm' : '—');
   if (st.focus_range) applyRange(st.focus_range);
   if (st.focus_position != null && !busy()) {
     $('pos-slider').value = st.focus_position;
     $('pos-input').value = st.focus_position;
   }
 
-  $('btn-rec').textContent = st.recording ? '■ 停止錄影' : '● 開始錄影';
-  $('rec-elapsed').textContent = st.recording && st.recording_seconds != null
-    ? st.recording_seconds.toFixed(1) + ' 秒' : '';
+  setText($('btn-rec'), st.recording ? '■ 停止錄影' : '● 開始錄影');
+  setText($('rec-elapsed'), st.recording && st.recording_seconds != null
+    ? Math.round(st.recording_seconds) + ' 秒' : '');
 
-  for (const id of ['pos-slider','pos-input','btn-setpos','btn-rec','clip-secs','btn-clip','btn-dist'])
-    $(id).disabled = !live;
-  $('btn-release').disabled = !connected || !!st.released;
-  $('btn-acquire').disabled = !st.released;
+  // 錄影按鈕只看連線，不看 recording —— 否則要停止的時候反而按不下去
+  for (const id of ['pos-slider','pos-input','btn-setpos','clip-secs','btn-dist'])
+    setDisabled($(id), !live || st.recording);
+  setDisabled($('btn-rec'), !live);
+  setDisabled($('btn-clip'), !live || st.recording || clipRunning);
+  setDisabled($('btn-release'), !connected || !!st.released);
+  setDisabled($('btn-acquire'), !st.released);
   // 錄影中不讓人改設定：曝光在錄製途中變動會毀掉這一鏡
   document.querySelectorAll('#settings [data-setting]').forEach(el => {
-    el.disabled = !live || !!st.recording;
+    setDisabled(el, !live || !!st.recording);
   });
-  $('cal-hint').textContent = st.calibration_points
-    ? st.calibration_points + ' 個校準點' : '尚未校準 — 依距離對焦需要至少 2 點';
+  setText($('cal-hint'), st.calibration_points
+    ? st.calibration_points + ' 個校準點' : '尚未校準 — 依距離對焦需要至少 2 點');
 
   renderNotices();
 }
 
 function renderNotices() {
   const out = [];
+  if (transient && Date.now() < transient.until) out.push(notice(transient.kind, transient.text, ''));
+  else if (transient) transient = null;
   if (st.released) {
     out.push(notice('warn', '機身操作已交還給你',
       'bridge 仍在執行但完全放開相機 —— 沒有預覽、沒有對焦控制。取回時相機會被重置，' +
@@ -345,7 +361,7 @@ function renderNotices() {
     out.push(notice('info', 'CINE 模式：快門由快門角度控制',
       '這個模式下 <code>shutter_speed</code> 寫不進去（相機會收下然後丟棄），已從清單移除。'));
   }
-  $('notices').innerHTML = out.join('');
+  setHTML($('notices'), out.join(''));
 }
 
 function notice(kind, title, body, fix) {
@@ -354,9 +370,13 @@ function notice(kind, title, body, fix) {
     title + '</b><br>' + (body || '') + (fix ? '<div class="fix">' + fix + '</div>' : '') + '</div></div>';
 }
 
+// 暫時訊息要納入 renderNotices 的計算，不能直接插進 DOM ——
+// 否則下一次 10Hz 的重繪就把它抹掉了（原本的寫法就是這樣，訊息幾乎看不到）。
+let transient = null;
 function flash(kind, text) {
-  $('notices').insertAdjacentHTML('afterbegin', notice(kind, text, ''));
-  setTimeout(renderNotices, 6000);
+  transient = {kind: kind, text: text, until: Date.now() + 6000};
+  renderNotices();
+  setTimeout(renderNotices, 6100);
 }
 
 // ── 對焦 ──────────────────────────────────────────────────────────
@@ -484,7 +504,7 @@ async function recordClip() {
   if (!(secs > 0 && secs <= 30)) { flash('err', '秒數要在 0–30 之間'); return; }
   if (!confirm('錄 ' + secs + ' 秒到記憶卡？')) return;
   log('錄製 ' + secs + ' 秒…', 'send');
-  $('btn-clip').disabled = true;
+  clipRunning = true; render();
   try {
     const r = await fetch('/api/record/clip?seconds=' + secs, {method: 'POST'});
     const d = await r.json();
@@ -498,7 +518,7 @@ async function recordClip() {
   } catch (e) {
     log('錄影請求失敗：' + e, 'err');
   } finally {
-    $('btn-clip').disabled = false;
+    clipRunning = false; render();
   }
 }
 
