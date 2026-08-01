@@ -211,6 +211,43 @@ async def test_dump_endpoints_parse_ifd():
     print("✓ /api/dump/{info5,movie} 解析並回傳 IFD")
 
 
+async def test_movie_shutter_angle_through_bridge():
+    """CINE 模式的快門只能經由 DataGroupMovie 設定。"""
+    reset()
+    async with running_worker():
+        B.state.movie_capabilities = {"shutter_angle": [11.2, 90.0, 172.8, 180.0]}
+        result = await B.cam_apply_settings({"shutter_angle": 90})
+        assert not result["rejected"], result
+        assert CAM.movie[7] == (900, 3600), CAM.movie
+        got = await B.cam_read_settings()
+        assert got["shutter_angle"] == 90.0, got
+    print("✓ 快門角度經由 DataGroupMovie 寫入")
+
+
+async def test_movie_rejection_hints_at_exposure_mode():
+    """實測：ProgramAuto 下寫快門角度沒作用，切 Manual 才行 —— 要講出來。"""
+    reset()
+    from sigma_ptpy import enum as E
+    CAM.groups[2]["ExposureMode"] = E.ExposureMode.ProgramAuto
+    async with running_worker():
+        B.state.movie_capabilities = {"shutter_angle": [11.2, 180.0]}
+        # 讓假相機忽略這次寫入，模擬自動曝光把值搶回去
+        original = CAM.send
+
+        def ignore(ptp, payload):
+            CAM._tick("send:" + ptp.OperationCode)
+
+        CAM.send = ignore
+        try:
+            result = await B.cam_apply_settings({"shutter_angle": 180})
+        finally:
+            CAM.send = original
+    detail = result["rejected"].get("shutter_angle")
+    assert detail, result
+    assert "ProgramAuto" in (detail["hint"] or ""), detail
+    print("✓ 錄影快門被自動曝光蓋掉時會提示切 Manual")
+
+
 async def test_settings_roundtrip_through_bridge():
     reset()
     async with running_worker():

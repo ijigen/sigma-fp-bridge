@@ -50,6 +50,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import movie_settings
 from ifd import parse_ifd, to_json
 from camera_settings import (
+    AUTO_OVERRIDE_HINTS,
     SettingError,
     apply_settings,
     describe,
@@ -601,12 +602,20 @@ def _apply_and_verify(changes: dict) -> dict:
                                       state.capabilities, state.frame_rate))
 
     actual = _read_all_settings()
+    mode = actual.get("exposure_mode")
     rejected = {}
     for name, wanted in applied.items():
         got = actual.get(name)
         if got is None or _roughly_equal_setting(got, wanted):
             continue
-        rejected[name] = {"requested": wanted, "actual": got, "hint": None}
+        # 錄影快門跟靜態快門一樣會被自動曝光搶走 —— 實測：ProgramAuto 下
+        # 寫 shutter_angle 沒作用，切到 Manual 就成功。給出同樣的提示。
+        modes = AUTO_OVERRIDE_HINTS.get(name)
+        hint = None
+        if modes and mode not in modes:
+            hint = (f"曝光模式目前是 {mode}，自動曝光會覆蓋手動設的 {name}。"
+                    f"先把 exposure_mode 設成 {' 或 '.join(modes)} 再試。")
+        rejected[name] = {"requested": wanted, "actual": got, "hint": hint}
     # 靜態設定的「被自動曝光蓋掉」提示比較講究，沿用原本那套
     for name, detail in verify_applied(state.camera, still_changes,
                                        state.frame_rate).items():

@@ -620,6 +620,14 @@ list is the standard cine sequence — 11.2, 22.5, 45, 60, 72, 75, 86.4, 90, 108
 Writes are restricted to values the camera itself declared legal. That is the
 only defensible safety net when writing to an undocumented data group.
 
+**Set `exposure_mode` to `Manual` first.** Shutter angle behaves like every other
+manual exposure value: in ProgramAuto the camera picks the angle and overwrites
+anything you write. Verified on a live body — the same write that did nothing in
+ProgramAuto succeeded immediately in Manual. Rejections say so.
+
+Changing `frame_rate` resets the shutter angle, since the angle is defined
+relative to the frame.
+
 Movie mode also changes the limits on ordinary settings — exposure compensation
 narrows from ±5 EV to ±3, and shutter is capped at 1/25 by the frame rate. This
 is why ranges are read from the camera rather than tabulated.
