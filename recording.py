@@ -23,6 +23,24 @@ class RecordingError(RuntimeError):
     """錄影指令失敗。"""
 
 
+def _as_sequence(value, attribute: str) -> list:
+    """ptpy 的陣列型回傳直接就是序列，不是包一層的物件。
+
+    這裡兩種都接：實測 get_storage_ids() 回的是 [65537] 而不是帶
+    .StorageIDs 的容器，但別的 ptpy 版本未必如此。
+    """
+    if value is None:
+        return []
+    if hasattr(value, attribute):
+        value = getattr(value, attribute)
+    if isinstance(value, (str, bytes)):
+        return []
+    try:
+        return list(value)
+    except TypeError:
+        return []
+
+
 @dataclass
 class ObjectEntry:
     handle: int
@@ -99,14 +117,14 @@ def list_objects(cam, limit: int = 40) -> list[ObjectEntry]:
     有可能查不到資訊。
     """
     entries: list[ObjectEntry] = []
-    storage = cam.get_storage_ids()
-    ids = getattr(storage, "StorageIDs", None)
+    ids = _as_sequence(cam.get_storage_ids(), "StorageIDs")
     if not ids:
         # API 模式下相機不一定開放標準 PTP 的儲存列舉
-        raise RecordingError(f"相機沒有回報 StorageIDs（收到 {storage!r}）")
+        raise RecordingError("相機沒有回報任何 StorageID")
     for storage_id in ids:
         try:
-            handles = cam.get_object_handles(storage_id, all_formats=True).ObjectHandles
+            handles = _as_sequence(
+                cam.get_object_handles(storage_id, all_formats=True), "ObjectHandles")
         except Exception:
             continue
         for handle in list(handles)[-limit:]:

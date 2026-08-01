@@ -137,6 +137,29 @@ def test_recording_does_not_autofocus_by_default():
     print("✓ 錄影預設不觸發 AF")
 
 
+def test_listing_accepts_plain_arrays():
+    """ptpy 的陣列型回傳直接就是序列。
+
+    先前這裡假設會包成帶 .StorageIDs / .ObjectHandles 的物件，假相機也照著
+    包，於是測試全過但實機回 502。兩種形狀都要接。
+    """
+    import types
+
+    import recording
+    cam = fake_camera.FakeCamera()
+    cam.files = [(101, "A001_C001.DNG", 0x3000, 4096)]
+
+    assert recording.list_objects(cam)[0].filename == "A001_C001.DNG"
+
+    # 換成包一層的形狀也要能用
+    plain_ids, plain_handles = cam.get_storage_ids, cam.get_object_handles
+    cam.get_storage_ids = lambda: types.SimpleNamespace(StorageIDs=plain_ids())
+    cam.get_object_handles = lambda sid, **kw: types.SimpleNamespace(
+        ObjectHandles=plain_handles(sid))
+    assert recording.list_objects(cam)[0].filename == "A001_C001.DNG"
+    print("✓ 檔案列舉同時接受裸陣列與包一層的回傳")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

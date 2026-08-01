@@ -220,10 +220,13 @@ class FakeCamera:
             self.recording = False
 
     def get_storage_ids(self):
-        return types.SimpleNamespace(StorageIDs=[0x00010001])
+        # 照 ptpy 實際行為：直接回傳陣列，不是包一層的物件。
+        # （先前這裡包了 .StorageIDs，把錯誤假設複製進測試，
+        #   結果測試全過但實機 502。）
+        return [0x00010001]
 
     def get_object_handles(self, storage_id, **kw):
-        return types.SimpleNamespace(ObjectHandles=[h for h, _, _, _ in self.files])
+        return [h for h, _, _, _ in self.files]
 
     def get_object_info(self, handle):
         for h, name, fmt, size in self.files:
