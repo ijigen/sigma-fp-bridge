@@ -1023,12 +1023,20 @@ async def handle_ws_command(req: dict) -> dict | None:
             result = await cam_apply_settings(changes)
         except (SettingError, movie_settings.MovieSettingError) as e:
             return {"type": "error", "id": request_id, "error": str(e)}
+        # 合法值會互相牽動：改了錄影格式，可選的幀率與位元深度就跟著變
+        # （實測：record_format 1 -> 幀率少掉 29.97、位元深度清單整個消失）。
+        # 所以套用後重讀能力並把新的 schema 一起回去，UI 不必自己猜。
+        await refresh_capabilities()
         return {
             "type": "ack",
             "id": request_id,
             "applied": result["applied"],
             "rejected": result["rejected"],
             "settings": await cam_read_settings(),
+            "schema": describe(state.capabilities, state.camera_mode)
+                      + (movie_settings.describe(state.movie_capabilities)
+                         if state.camera_mode == "movie" else []),
+            "camera_mode": state.camera_mode,
         }
 
     if cmd == "set_position":

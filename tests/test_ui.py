@@ -49,6 +49,34 @@ def test_every_element_id_exists():
     print(f"✓ JS 取用的 {len(used)} 個元素 id 都存在")
 
 
+def test_body_mode_is_not_presented_as_settable():
+    """機身模式是實體撥桿，PTP 改不了。
+
+    做成可按的按鈕會讓使用者按了沒反應還以為壞掉。它必須是鎖定的指示。
+    """
+    js = _script(HTML.read_text())
+    assert "'__mode'" in js and "locked: true" in js, "機身模式沒有標成 locked"
+    assert "if (b.dataset.set === '__mode') return;" in js, "機身模式的按鈕沒有擋掉送出"
+    print("✓ 機身模式呈現為鎖定指示，不是可按的設定")
+
+
+def test_manual_only_settings_are_marked():
+    """P/A/S 模式下寫快門或光圈會被自動曝光覆蓋，按鈕要先停用並說明。"""
+    js = _script(HTML.read_text())
+    assert "NEEDS_MANUAL" in js
+    for name in ("shutter_speed", "shutter_angle", "aperture"):
+        assert name in js[js.index("NEEDS_MANUAL"):js.index("NEEDS_MANUAL") + 200], name
+    assert "需切換成 M 模式" in js
+    print("✓ 只有 M 模式可設的項目會停用並說明")
+
+
+def test_inferred_labels_are_marked_uncertain():
+    """推測而非實測的標籤要標記，不能跟確認過的混為一談。"""
+    js = _script(HTML.read_text())
+    assert "inferred_labels" in js and "+ '?'" in js, "推測標籤沒有標上問號"
+    print("✓ 推測的標籤會標記為未確認")
+
+
 def test_state_updates_do_not_rebuild_dom():
     """狀態廣播是 10Hz。無條件寫 innerHTML 會讓節點每 100ms 被銷毀重建 ——
     版面抖動、捲軸亂飄，按鈕在按下的瞬間被換掉所以按不到。實測踩過。

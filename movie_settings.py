@@ -79,6 +79,14 @@ VALUE_LABELS: dict[str, dict[int, str]] = {
     "movie_resolution": {2: "UHD"},
 }
 
+#: 推測但沒有實測確認的標籤。跟 VALUE_LABELS 分開放，這樣「哪些是證據、
+#: 哪些是推論」在程式裡就分得清楚。UI 顯示時會標註未確認。
+INFERRED_LABELS: dict[str, dict[int, str]] = {
+    # 合法值只有 [2, 1]，2 已確認是 UHD，fp 的錄影解析度也只有這兩種，
+    # 所以 1 幾乎確定是 FHD —— 但沒有實際錄一段量過尺寸。
+    "movie_resolution": {1: "FHD"},
+}
+
 #: CanSetInfo5 裡對應的「合法值清單」tag，用來限制可設的範圍。
 CAPABILITY_TAGS = {
     "shutter_angle": 214,
@@ -268,6 +276,7 @@ def describe(capabilities: dict[str, list] | None = None) -> list[dict[str, Any]
             "note": s.note,
             "choices": caps.get(s.name),
             "labels": VALUE_LABELS.get(s.name),
+            "inferred_labels": INFERRED_LABELS.get(s.name),
         }
         for s in MOVIE_SETTINGS
     ]

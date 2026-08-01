@@ -84,6 +84,30 @@
   .seg button { border: none; border-radius: 0; padding: 5px 11px; font-size: 12px; background: #202020; }
   .seg button.on { background: #2563eb; }
   code { background: #2a2a2a; padding: 1px 4px; border-radius: 3px; font-size: 11.5px; }
+
+  /* 階層式選單：每一列是一個設定，選項橫向排開 */
+  .opt { padding: 10px 0; border-bottom: 1px solid #262626; }
+  .opt:last-child { border-bottom: none; }
+  .opt-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+  .opt-name { font-size: 11px; color: #8a8a8a; text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
+  .opt-cur { font-size: 11.5px; color: #fff; font-family: ui-monospace, SFMono-Regular, monospace; }
+  .opt-note { font-size: 11px; color: #6d6d6d; margin-left: auto; }
+  .opts { display: flex; flex-wrap: wrap; gap: 5px; }
+  .opts.scroll { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 5px; scrollbar-width: thin; }
+  .opts.scroll::-webkit-scrollbar { height: 6px; }
+  .opts.scroll::-webkit-scrollbar-thumb { background: #3a3a3a; border-radius: 3px; }
+  .o {
+    flex: 0 0 auto; background: #2a2a2a; border: 1px solid #383838; color: #c8c8c8;
+    padding: 5px 11px; border-radius: 6px; font-size: 12.5px; cursor: pointer;
+    font-family: ui-monospace, SFMono-Regular, monospace; white-space: nowrap;
+  }
+  .o:hover:not(:disabled) { background: #353535; border-color: #4a4a4a; }
+  .o.on { background: #2563eb; border-color: #3b82f6; color: #fff; font-weight: 600; }
+  .o:disabled { opacity: .3; cursor: not-allowed; }
+  .o.locked { cursor: default; }
+  .o.locked:hover { background: #2a2a2a; border-color: #383838; }
+  .o.locked.on { background: #334155; border-color: #475569; }
+  .lockicon { font-size: 10px; opacity: .8; }
 </style>
 </head>
 <body>
@@ -157,7 +181,8 @@
 
       <div class="panel">
         <h2>相機設定</h2>
-        <div class="btnrow" style="margin-bottom:12px">
+        <div id="settings"></div>
+        <div class="btnrow" style="margin-top:14px; padding-top:12px; border-top:1px solid #2a2a2a">
           <span class="hint">快門顯示</span>
           <span class="seg">
             <button id="su-time" onclick="setShutterUnit('time')">秒</button>
@@ -166,8 +191,8 @@
           <span class="hint" style="margin-left:4px">換算幀率</span>
           <input type="number" id="fps-input" value="24" step="0.01" style="min-width:78px"
                  onchange="send({cmd:'set_frame_rate', frame_rate: parseFloat(this.value)})">
+          <span class="hint" id="fps-hint"></span>
         </div>
-        <div id="settings"></div>
       </div>
 
       <div class="panel">
@@ -260,6 +285,8 @@ function handle(m) {
     case 'calibration': renderCal(m); break;
     case 'capture_status': $('rec-status').textContent = m.status.status || m.status.error || '—'; break;
     case 'ack':
+      if (m.schema) schema = m.schema;
+      if (m.camera_mode) st.camera_mode = m.camera_mode;
       if (m.settings) { values = m.settings; renderSettings(); }
       reportRejections(m.rejected);
       if (m.clamped) log('⚠ ' + m.requested + ' 超出合法範圍，已修正為 ' + m.position, 'warn');
@@ -325,8 +352,10 @@ function render() {
   setDisabled($('btn-release'), !connected || !!st.released);
   setDisabled($('btn-acquire'), !st.released);
   // 錄影中不讓人改設定：曝光在錄製途中變動會毀掉這一鏡
-  document.querySelectorAll('#settings [data-setting]').forEach(el => {
-    setDisabled(el, !live || !!st.recording);
+  const lockSettings = !live || !!st.recording;
+  document.querySelectorAll('#settings [data-set]').forEach(el => {
+    if (el.classList && el.classList.contains('locked')) return;   // 機身模式一直是鎖的
+    setDisabled(el, lockSettings || el.dataset.lockedByMode === '1');
   });
   setText($('cal-hint'), st.calibration_points
     ? st.calibration_points + ' 個校準點' : '尚未校準 — 依距離對焦需要至少 2 點');
@@ -406,14 +435,52 @@ function stepPos(d) {
   commitPos();
 }
 
-// ── 設定 ──────────────────────────────────────────────────────────
-const GROUPS = [
-  ['曝光', ['exposure_mode','aperture','shutter_speed','shutter_angle','iso','iso_auto','exposure_compensation','metering_mode']],
-  ['白平衡', ['white_balance','color_temp']],
-  ['錄影格式', ['record_format','movie_resolution','frame_rate','cinema_dng_quality','mov_image_quality']],
-  ['照片格式', ['image_quality','dng_quality','resolution','aspect_ratio']],
-  ['其他', ['color_mode','color_space','tone_effect','drive_mode']],
+// ── 設定：階層式按鈕選單 ──────────────────────────────────────
+// 由上而下：機身模式 → 曝光模式 → 影像規格 → 大小 → 幀率 → 位元深度 → 曝光數值。
+// 每一列的選項都來自相機當下回報的合法值，所以上層一改，下層自動跟著變。
+const ORDER = [
+  ['exposure_mode',         '曝光模式'],
+  ['record_format',         '影像規格'],
+  ['image_quality',         '影像規格'],
+  ['movie_resolution',      '影像大小'],
+  ['resolution',            '影像大小'],
+  ['frame_rate',            '幀率'],
+  ['cinema_dng_quality',    '色彩位元'],
+  ['dng_quality',           '色彩位元'],
+  ['mov_image_quality',     '影片畫質'],
+  ['iso_auto',              'ISO 模式'],
+  ['iso',                   'ISO'],
+  ['aperture',              '光圈'],
+  ['shutter_speed',         '快門'],
+  ['shutter_angle',         '快門角度'],
+  ['exposure_compensation', '曝光補償'],
+  ['metering_mode',         '測光'],
+  ['white_balance',         '白平衡'],
+  ['color_temp',            '色溫'],
+  ['color_mode',            '色彩模式'],
+  ['aspect_ratio',          '長寬比'],
+  ['color_space',           '色彩空間'],
+  ['tone_effect',           '色調'],
+  ['drive_mode',            '驅動模式'],
 ];
+
+// 太長的清單改成橫向捲動，不然一列會佔掉半個畫面
+const SCROLL_IF_OVER = 9;
+
+const FRIENDLY = {
+  exposure_mode: {ProgramAuto:'P', AperturePriority:'A', ShutterPriority:'S', Manual:'M'},
+  iso_auto: {Auto:'自動', Manual:'手動'},
+  image_quality: {DNG:'RAW DNG', JPEGFine:'JPEG 高', JPEGNormal:'JPEG 中',
+                  JPEGBasic:'JPEG 低', DNGAndJPEG:'RAW+JPEG'},
+  resolution: {High:'大', Medium:'中', Low:'小'},
+  white_balance: {Auto:'自動', Sunlight:'日光', Shade:'陰影', Overcast:'陰天',
+                  Incandescent:'白熾', Fluorescent:'螢光', Flash:'閃燈', ColorTemp:'色溫'},
+  metering_mode: {Evaluative:'權衡', CenterWeightedAverage:'中央重點',
+                  CenterArea:'中央', Spot:'點測'},
+};
+
+// 只有 M 模式能手動設的項目（實測：其他模式下寫入會被自動曝光覆蓋）
+const NEEDS_MANUAL = {shutter_speed: 1, shutter_angle: 1, aperture: 1};
 
 function visibleSettings() {
   return (schema || []).filter(s => {
@@ -423,69 +490,125 @@ function visibleSettings() {
   });
 }
 
-function fmt(v, unit, labels) {
-  if (labels && labels[v] !== undefined) return labels[v] + ' (' + v + ')';
-  if (unit === 's' && typeof v === 'number' && v > 0 && v < 1) return '1/' + Math.round(1 / v);
-  if (unit === 'f') return 'f/' + v;
-  if (unit === 'deg') return v + '°';
-  if (unit === 'ISO') return 'ISO ' + v;
-  if (unit === 'K') return v + 'K';
+function labelFor(s, v) {
+  const f = FRIENDLY[s.name];
+  if (f && f[v] !== undefined) return f[v];
+  if (s.labels && s.labels[v] !== undefined) return s.labels[v];
+  if (s.inferred_labels && s.inferred_labels[v] !== undefined) return s.inferred_labels[v] + '?';
+  if (s.unit === 's' && typeof v === 'number' && v > 0 && v < 1) return '1/' + Math.round(1 / v);
+  if (s.unit === 'f') return 'f/' + v;
+  if (s.unit === 'deg') return v + '°';
+  if (s.unit === 'K') return v + 'K';
+  if (s.unit === 'bit') return v + ' bit';
+  if (s.unit === 'fps') return v;
   return String(v);
 }
 
-function buildSettings() {
+function escapeHTML(t) {
+  return String(t).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+
+function optRow(name, title, opts) {
+  // opts: {current, choices:[{value,label,title}], locked, disabled, note}
+  const many = opts.choices.length > SCROLL_IF_OVER;
+  const btns = opts.choices.map(c => {
+    const on = String(c.value) === String(opts.current) ? ' on' : '';
+    const lock = opts.locked ? ' locked' : '';
+    const dis = (opts.disabled || opts.locked) ? ' disabled' : '';
+    const t = c.title ? ' title="' + escapeHTML(c.title) + '"' : '';
+    return '<button class="o' + on + lock + '"' + dis + t +
+      ' data-set="' + name + '" data-val="' + escapeHTML(c.value) + '">' +
+      escapeHTML(c.label) + '</button>';
+  }).join('');
+  const cur = opts.current === null || opts.current === undefined ? '—'
+    : escapeHTML(opts.currentLabel !== undefined ? opts.currentLabel : opts.current);
+  return '<div class="opt"><div class="opt-head">' +
+    '<span class="opt-name">' + title + '</span>' +
+    '<span class="opt-cur">' + cur + '</span>' +
+    (opts.note ? '<span class="opt-note">' + escapeHTML(opts.note) + '</span>' : '') +
+    '</div><div class="opts' + (many ? ' scroll' : '') + '">' + btns + '</div></div>';
+}
+
+function settingsHTML() {
+  if (!schema) return '<div class="hint">載入中…</div>';
   const byName = {};
   visibleSettings().forEach(s => byName[s.name] = s);
-  const listed = new Set();
-  const html = [];
-  for (const [title, names] of GROUPS) {
-    const present = names.filter(n => byName[n]);
-    if (!present.length) continue;
-    html.push('<h3>' + title + '</h3>');
-    for (const n of present) {
-      listed.add(n);
-      const note = byName[n].note || '';
-      html.push('<div class="row"><span class="label">' + n.replace(/_/g, ' ') +
-        (note ? '<small>' + (note.length > 58 ? note.slice(0, 56) + '…' : note) + '</small>' : '') +
-        '</span><span id="ctl-' + n + '"></span></div>');
-    }
-  }
-  $('settings').innerHTML = html.join('');
+  const manual = values.exposure_mode === 'Manual';
+  const rows = [];
 
-  for (const s of visibleSettings()) {
-    const holder = $('ctl-' + s.name);
-    if (!holder) continue;
-    let el;
+  // 最上層：機身模式。撥桿控制，PTP 改不了 —— 做成鎖定的指示而不是按鈕，
+  // 免得使用者按了沒反應還以為壞了。
+  rows.push(optRow('__mode', '機身模式', {
+    current: st.camera_mode || '',
+    currentLabel: st.camera_mode === 'movie' ? 'CINE' : st.camera_mode === 'stills' ? 'STILL' : '—',
+    locked: true,
+    note: '由機身撥桿控制',
+    choices: [
+      {value: 'stills', label: 'STILL', title: '拍照模式 — 由機身撥桿切換'},
+      {value: 'movie',  label: 'CINE',  title: '錄影模式 — 由機身撥桿切換'},
+    ],
+  }));
+
+  for (const [name, title] of ORDER) {
+    const s = byName[name];
+    if (!s) continue;
+    const cur = values[name];
+
     if (s.choices && s.choices.length) {
-      el = document.createElement('select');
-      el.appendChild(new Option('—', ''));
-      for (const c of s.choices) el.appendChild(new Option(fmt(c, s.unit, s.labels), String(c)));
+      const needsM = NEEDS_MANUAL[name] && !manual;
+      rows.push(optRow(name, title, {
+        current: cur,
+        currentLabel: cur === null || cur === undefined ? '—' : labelFor(s, cur),
+        disabled: needsM,
+        note: needsM ? '需切換成 M 模式' : (s.inferred_labels ? '? = 推測未確認' : ''),
+        choices: s.choices.map(v => ({value: v, label: labelFor(s, v)})),
+      }));
     } else {
-      el = document.createElement('input');
-      el.type = 'number';
+      // 沒有離散選項的（色溫）維持數字輸入
+      rows.push('<div class="opt"><div class="opt-head">' +
+        '<span class="opt-name">' + title + '</span>' +
+        '<span class="opt-cur">' + (cur === null || cur === undefined ? '—' : cur) + '</span></div>' +
+        '<div class="opts"><input type="number" data-set="' + name + '" ' +
+        'value="' + (cur === null || cur === undefined ? '' : cur) + '" style="min-width:110px"></div></div>');
     }
-    el.dataset.setting = s.name;
-    el.dataset.numeric = (!s.choices || typeof s.choices[0] === 'number') ? '1' : '';
-    if (s.note) el.title = s.note;
-    el.onchange = () => {
-      if (el.value === '') return;
-      markBusy();
-      const v = el.dataset.numeric ? parseFloat(el.value) : el.value;
-      send({cmd: 'set_settings', settings: {[s.name]: v}});
-    };
-    holder.appendChild(el);
   }
+  return rows.join('');
 }
 
 function renderSettings() {
   if (!schema) return;
-  const key = shutterUnit + '|' + visibleSettings().map(s => s.name).join(',');
-  if (key !== renderedKey) { buildSettings(); renderedKey = key; }
-  document.querySelectorAll('#settings [data-setting]').forEach(el => {
-    if (el === document.activeElement) return;
-    const v = values[el.dataset.setting];
-    el.value = (v === null || v === undefined) ? '' : String(v);
-  });
+  const html = settingsHTML();
+  const box = $('settings');
+  if (box.__last !== html) {
+    // 重建前記住捲動位置，免得使用者剛捲到的地方被重設
+    const scrolls = {};
+    box.querySelectorAll('.opts.scroll').forEach((el, i) => scrolls[i] = el.scrollLeft);
+    box.innerHTML = html;
+    box.__last = html;
+    box.querySelectorAll('.opts.scroll').forEach((el, i) => {
+      if (scrolls[i] !== undefined) el.scrollLeft = scrolls[i];
+      else { const on = el.querySelector('.o.on'); if (on) on.scrollIntoView({block:'nearest', inline:'center'}); }
+    });
+    box.querySelectorAll('.o[data-set]').forEach(b => {
+      b.onclick = () => {
+        if (b.dataset.set === '__mode') return;
+        markBusy();
+        const s = (schema || []).find(x => x.name === b.dataset.set);
+        const numeric = s && (!s.choices || typeof s.choices[0] === 'number');
+        send({cmd: 'set_settings',
+              settings: {[b.dataset.set]: numeric ? parseFloat(b.dataset.val) : b.dataset.val}});
+      };
+    });
+    box.querySelectorAll('input[data-set]').forEach(el => {
+      el.onchange = () => {
+        if (el.value === '') return;
+        markBusy();
+        send({cmd: 'set_settings', settings: {[el.dataset.set]: parseFloat(el.value)}});
+      };
+    });
+  }
+  $('fps-hint').textContent = values.frame_rate
+    ? '相機幀率 ' + values.frame_rate : '';
   renderNotices();
 }
 
