@@ -21,6 +21,7 @@
 """
 from __future__ import annotations
 
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -72,8 +73,40 @@ class CapturedImage:
         }
 
 
-def wait_until_ready(cam, timeout_s: float = CAPTURE_TIMEOUT_S) -> str:
-    """等相機把影像產生完成。回傳最後看到的狀態名稱。
+def _status(cam, image_id: int = 0):
+    try:
+        return cam.get_cam_capt_status(image_id)
+    except Exception as e:
+        raise CaptureError(f"讀取拍攝狀態失敗：{e}") from e
+
+
+def _status_name(st) -> str:
+    status = getattr(st, "CaptStatus", None)
+    return getattr(status, "name", str(status))
+
+
+def clear_slot(cam, image_id: int = 0) -> None:
+    """清掉相機影像資料庫裡的一筆拍攝結果。
+
+    失敗不丟例外 —— 這個指令的 payload 在 sigma-ptpy 裡註明 undocumented，
+    不同韌體未必吃，而清不掉不代表這次拍攝不能進行。
+    """
+    try:
+        cam.clear_image_db_single(image_id)
+    except Exception as e:
+        print(f"警告：清除影像資料庫項目 {image_id} 失敗：{e}", file=sys.stderr)
+
+
+def wait_until_done(cam, timeout_s: float = CAPTURE_TIMEOUT_S) -> tuple[int, str]:
+    """等相機把影像產生完成。回傳 (image_id, 狀態名稱)。
+
+    呼叫端必須在拍攝**之前**先 clear_slot()，讓起始狀態回到 Cleared ——
+    否則上一張留下的完成狀態會讓這裡立刻回傳，於是把上一張的殘留 buffer
+    當成新照片下載。實際踩過：連拍三次只有第一次真的按了快門，三次卻都
+    「下載成功」，因為讀到的是同一張。
+
+    刻意不用 ImageDBTail 當判斷依據：它對錄影會前進，但實測靜態拍攝之後
+    它仍是 0，語意不明。
 
     Raises:
         CaptureError: 相機回報失敗狀態，或等到逾時。
@@ -81,16 +114,12 @@ def wait_until_ready(cam, timeout_s: float = CAPTURE_TIMEOUT_S) -> str:
     deadline = time.monotonic() + timeout_s
     last = "?"
     while time.monotonic() < deadline:
-        try:
-            st = cam.get_cam_capt_status(0)
-        except Exception as e:
-            raise CaptureError(f"讀取拍攝狀態失敗：{e}") from e
-        status = getattr(st, "CaptStatus", None)
-        last = getattr(status, "name", str(status))
-        if last in _DONE:
-            return last
+        st = _status(cam)
+        last = _status_name(st)
         if last in _FAILED:
             raise CaptureError(f"相機回報拍攝失敗：{last}")
+        if last in _DONE:
+            return int(getattr(st, "ImageId", 0) or 0), last
         time.sleep(0.2)
     raise CaptureError(f"等待影像產生逾時（最後狀態 {last}）")
 
@@ -128,9 +157,12 @@ def capture(cam, save_dir: Path | None = None,
     Raises:
         CaptureError: 拍攝失敗、逾時、或下載中斷。
     """
+    # 先清掉上一張的結果，這次看到的完成狀態才確定是自己的
+    clear_slot(cam, int(getattr(_status(cam), "ImageId", 0) or 0))
+
     mode = CaptureMode.GeneralCapt if autofocus else CaptureMode.NonAFCapt
     cam.snap_command(SnapCommand(CaptureMode=mode, CaptureAmount=1))
-    wait_until_ready(cam)
+    image_id, _ = wait_until_done(cam)
 
     try:
         info = cam.get_pict_file_info2()
@@ -152,4 +184,7 @@ def capture(cam, save_dir: Path | None = None,
     if save_dir is not None:
         save_dir.mkdir(parents=True, exist_ok=True)
         (save_dir / image.filename).write_bytes(image.data)
+    # 取走了就釋放位置。是否真的必要還沒證實 —— 實測連拍三次只有第一次
+    # 按了快門，資料庫沒清是最像的解釋，但也可能另有原因。
+    clear_slot(cam, image_id)
     return image

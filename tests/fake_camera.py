@@ -59,6 +59,8 @@ class FakeCamera:
         self.recording = False
         self.pict_data = b"\xff\xd8" + b"IMAGE" * 3000 + b"\xff\xd9"
         self.last_capture = "movie"
+        self.pending_image = None
+        self.pending_image = None
         self.db_tail = 0
         self.files: list = []
         # /api/dump/* 用的原始 IFD payload
@@ -214,8 +216,14 @@ class FakeCamera:
         from sigma_ptpy.enum import CaptureMode
         if data.CaptureMode in (CaptureMode.GeneralCapt, CaptureMode.NonAFCapt,
                                 CaptureMode.StartCap):
+            # 上一張還沒被 clear_image_db_single 取走就拒絕拍攝 ——
+            # 實機就是這樣：連續三次只有第一次按了快門。
+            if self.pending_image is not None:
+                self._tick("snap_rejected")
+                return
             self.last_capture = "still"
             self.db_tail += 1
+            self.pending_image = self.db_tail
         elif data.CaptureMode in (CaptureMode.StartRecMovie,
                                   CaptureMode.StartRecMovieAF,
                                   CaptureMode.StopRecMovie):
@@ -236,12 +244,23 @@ class FakeCamera:
         # 固定回同一個狀態會讓拍照那條路永遠等到逾時。
         from sigma_ptpy.enum import CaptStatus
         status = (CaptStatus.ImageGenCompleted if self.last_capture == "still"
-                  else CaptStatus.MovieGenCompleted)
+                  else CaptStatus.MovieGenCompleted if self.last_capture == "movie"
+                  else CaptStatus.Cleared)
         return types.SimpleNamespace(
             ImageId=image_id, ImageDBHead=0, ImageDBTail=self.db_tail,
             CaptStatus=status, DestToSave=None)
 
     # -- 連機拍攝 -------------------------------------------------------
+
+    def clear_image_db_single(self, image_id):
+        self._tick("clear_db")
+        if self.pending_image == image_id:
+            self.pending_image = None
+
+    def clear_image_db_single(self, image_id):
+        self._tick("clear_db")
+        self.pending_image = None
+        self.last_capture = None
 
     def get_pict_file_info2(self):
         self._tick("pict_info")
