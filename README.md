@@ -833,11 +833,18 @@ curl -X POST 'http://localhost:8765/api/capture?af=1'       # autofocus first
 Autofocus is off by default: this project drives focus over PTP, and letting the
 camera focus before the frame would discard the position you set.
 
-**Movies cannot be pulled back this way.** `SigmaGetPartialMovieFile` (0x9037)
-exists as an opcode but sigma-ptpy does not wrap it and its parameters are
-undocumented, so it needs the same reverse-engineering `DataGroupMovie` did.
-`SigmaGetMovieFileInfo` reports a file size but no address to read from, so there
-is nothing to build on yet.
+**Movies have not been pulled back yet** — which is not the same as knowing they
+can't be. The SDK gives them their own pair of opcodes, `SigmaGetMovieFileInfo`
+(0x9036) and `SigmaGetPartialMovieFile` (0x9037); sigma-ptpy wraps neither, and
+0x9037's parameters are undocumented, so that route needs the same
+reverse-engineering `DataGroupMovie` did. 0x9036 does report a filename and size
+over a raw transfer, but no address to read from, so there is nothing to feed
+0x9037 with yet.
+
+What has *not* been tried is the stills route on a movie. The documentation for
+`SigmaGetPictFileInfo2` and `SigmaGetBigPartialPictFile` says "image file" and
+never mentions stills specifically, so whether they report anything after a
+recording is an open question, not a settled no.
 
 ### Live view
 
