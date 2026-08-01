@@ -60,6 +60,7 @@ class FakeCamera:
         self.pict_data = b"\xff\xd8" + b"IMAGE" * 3000 + b"\xff\xd9"
         self.last_capture = "movie"
         self.pending_image = None
+        self.images = {}
         self.pending_image = None
         self.db_tail = 0
         self.files: list = []
@@ -218,12 +219,11 @@ class FakeCamera:
                                 CaptureMode.StartCap):
             # 上一張還沒被 clear_image_db_single 取走就拒絕拍攝 ——
             # 實機就是這樣：連續三次只有第一次按了快門。
-            if self.pending_image is not None:
-                self._tick("snap_rejected")
-                return
+            from sigma_ptpy.enum import CaptStatus
             self.last_capture = "still"
             self.db_tail += 1
             self.pending_image = self.db_tail
+            self.images[self.db_tail] = CaptStatus.ImageGenCompleted
         elif data.CaptureMode in (CaptureMode.StartRecMovie,
                                   CaptureMode.StartRecMovieAF,
                                   CaptureMode.StopRecMovie):
@@ -240,12 +240,16 @@ class FakeCamera:
             self.recording = False
 
     def get_cam_capt_status(self, image_id=0):
-        # 依最後一次拍的是靜態還是影片回報 —— 真相機也是這樣，
-        # 固定回同一個狀態會讓拍照那條路永遠等到逾時。
+        # 狀態是綁在 image_id 上的：查 0 一律回 Cleared，要查真正那筆才有結果。
+        # 實機就是這樣 —— 拍三張 ImageDBTail 每次都前進，但 status(0) 全程
+        # 回 Cleared，害等待邏輯以為什麼都沒發生。
         from sigma_ptpy.enum import CaptStatus
-        status = (CaptStatus.ImageGenCompleted if self.last_capture == "still"
-                  else CaptStatus.MovieGenCompleted if self.last_capture == "movie"
-                  else CaptStatus.Cleared)
+        if image_id and image_id in self.images:
+            status = self.images[image_id]
+        elif self.last_capture == "movie" and not image_id:
+            status = CaptStatus.MovieGenCompleted
+        else:
+            status = CaptStatus.Cleared
         return types.SimpleNamespace(
             ImageId=image_id, ImageDBHead=0, ImageDBTail=self.db_tail,
             CaptStatus=status, DestToSave=None)
@@ -259,8 +263,9 @@ class FakeCamera:
 
     def clear_image_db_single(self, image_id):
         self._tick("clear_db")
-        self.pending_image = None
-        self.last_capture = None
+        self.images.pop(image_id, None)
+        if self.pending_image == image_id:
+            self.pending_image = None
 
     def get_pict_file_info2(self):
         self._tick("pict_info")

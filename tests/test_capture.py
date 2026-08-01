@@ -73,16 +73,22 @@ def test_truncated_download_is_an_error():
 
 
 def test_failed_capture_status_is_an_error():
+    """影像產生了但相機回報失敗，要中止而不是繼續下載。"""
     from sigma_ptpy.enum import CaptStatus
     import types as _t
     cam = fake_camera.FakeCamera()
-    cam.get_cam_capt_status = lambda i=0: _t.SimpleNamespace(
-        CaptStatus=CaptStatus.ImageGenFailed, ImageId=0, ImageDBHead=0,
-        ImageDBTail=0, DestToSave=None)
+    # tail 要前進，流程才會走到查詢該筆狀態那一步
+    def failing(image_id=0):
+        return _t.SimpleNamespace(
+            CaptStatus=(CaptStatus.ImageGenFailed if image_id
+                        else CaptStatus.Cleared),
+            ImageId=image_id, ImageDBHead=0,
+            ImageDBTail=1 if cam.calls else 0, DestToSave=None)
+    cam.get_cam_capt_status = failing
     try:
         capture.capture(cam)
     except capture.CaptureError as e:
-        assert "ImageGenFailed" in str(e)
+        assert "ImageGenFailed" in str(e), e
         print("✓ 相機回報失敗狀態時中止")
     else:
         raise AssertionError("應該要丟 CaptureError")
@@ -135,15 +141,18 @@ def test_consecutive_captures_each_take_a_new_photo():
     print("✓ 連續拍攝每次都是新照片")
 
 
-def test_capture_clears_before_shooting():
-    """先清才拍 —— 否則上一張的完成狀態會被誤認成這次的結果。"""
+def test_status_is_polled_for_the_new_image_not_slot_zero():
+    """狀態綁在 image_id 上：查 0 一律回 Cleared。
+
+    實測拍三張，ImageDBTail 每次都前進（影像確實產生），但一律查 slot 0
+    的話狀態全程是 Cleared，等待邏輯以為什麼都沒發生而逾時。
+    """
     cam = fake_camera.FakeCamera()
-    cam.last_capture = "still"          # 假裝上一張還留著完成狀態
-    cam.pending_image = 1
-    capture.capture(cam)
-    order = [c[0] for c in cam.calls if c[0] in ("clear_db", "snap:NonAFCapt")]
-    assert order[0] == "clear_db", f"拍攝前沒有先清除：{order}"
-    print("✓ 拍攝前先清除資料庫")
+    img = capture.capture(cam)
+    assert img.data
+    # 新影像的 id 來自 ImageDBTail，狀態要用那個 id 查
+    assert cam.db_tail >= 1
+    print("✓ 用新影像的 id 查狀態，而非固定查 slot 0")
 
 
 if __name__ == "__main__":

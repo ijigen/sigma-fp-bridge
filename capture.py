@@ -85,6 +85,26 @@ def _status_name(st) -> str:
     return getattr(status, "name", str(status))
 
 
+def wait_for_new_id(cam, tail_before: int | None,
+                    timeout_s: float = 10.0) -> int:
+    """等相機的影像資料庫多出一筆，回傳新那筆的 id。
+
+    ImageDBTail 是資料庫尾端，拍成一張就會 +1。實測拍三張是 0→1→2→3。
+    （先前以為靜態拍攝不會動它 —— 那次讀到 0 是因為相機在錄影模式。）
+
+    Raises:
+        CaptureError: 等到逾時都沒有新項目，代表相機沒有真的拍。
+    """
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        tail = getattr(_status(cam), "ImageDBTail", None)
+        if tail is not None and tail != tail_before:
+            return int(tail)
+        time.sleep(0.2)
+    raise CaptureError(
+        f"相機沒有產生新影像（ImageDBTail 停在 {tail_before}）")
+
+
 def clear_slot(cam, image_id: int = 0) -> None:
     """清掉相機影像資料庫裡的一筆拍攝結果。
 
@@ -97,16 +117,13 @@ def clear_slot(cam, image_id: int = 0) -> None:
         print(f"警告：清除影像資料庫項目 {image_id} 失敗：{e}", file=sys.stderr)
 
 
-def wait_until_done(cam, timeout_s: float = CAPTURE_TIMEOUT_S) -> tuple[int, str]:
-    """等相機把影像產生完成。回傳 (image_id, 狀態名稱)。
+def wait_until_done(cam, image_id: int,
+                    timeout_s: float = CAPTURE_TIMEOUT_S) -> str:
+    """等指定的影像產生完成。
 
-    呼叫端必須在拍攝**之前**先 clear_slot()，讓起始狀態回到 Cleared ——
-    否則上一張留下的完成狀態會讓這裡立刻回傳，於是把上一張的殘留 buffer
-    當成新照片下載。實際踩過：連拍三次只有第一次真的按了快門，三次卻都
-    「下載成功」，因為讀到的是同一張。
-
-    刻意不用 ImageDBTail 當判斷依據：它對錄影會前進，但實測靜態拍攝之後
-    它仍是 0，語意不明。
+    **一定要帶那張影像的 id。** 一律查 0 會永遠讀到 Cleared —— 實測拍三張，
+    ImageDBTail 每次都前進（有影像），但 get_cam_capt_status(0) 全程回
+    Cleared，於是等待邏輯以為什麼都沒發生。
 
     Raises:
         CaptureError: 相機回報失敗狀態，或等到逾時。
@@ -114,14 +131,14 @@ def wait_until_done(cam, timeout_s: float = CAPTURE_TIMEOUT_S) -> tuple[int, str
     deadline = time.monotonic() + timeout_s
     last = "?"
     while time.monotonic() < deadline:
-        st = _status(cam)
+        st = _status(cam, image_id)
         last = _status_name(st)
         if last in _FAILED:
             raise CaptureError(f"相機回報拍攝失敗：{last}")
         if last in _DONE:
-            return int(getattr(st, "ImageId", 0) or 0), last
+            return last
         time.sleep(0.2)
-    raise CaptureError(f"等待影像產生逾時（最後狀態 {last}）")
+    raise CaptureError(f"等待影像 {image_id} 產生逾時（最後狀態 {last}）")
 
 
 def download(cam, info) -> bytes:
@@ -157,12 +174,15 @@ def capture(cam, save_dir: Path | None = None,
     Raises:
         CaptureError: 拍攝失敗、逾時、或下載中斷。
     """
-    # 先清掉上一張的結果，這次看到的完成狀態才確定是自己的
-    clear_slot(cam, int(getattr(_status(cam), "ImageId", 0) or 0))
+    # 記下資料庫尾端 —— 拍成一張它就會 +1，這才是「真的拍了」的證據。
+    # 不預先清除 slot 0：先前那樣做等於把自己要查的位置清空，然後
+    # 回頭輪詢它，於是狀態永遠是 Cleared。
+    tail_before = getattr(_status(cam), "ImageDBTail", None)
 
     mode = CaptureMode.GeneralCapt if autofocus else CaptureMode.NonAFCapt
     cam.snap_command(SnapCommand(CaptureMode=mode, CaptureAmount=1))
-    image_id, _ = wait_until_done(cam)
+    image_id = wait_for_new_id(cam, tail_before)
+    wait_until_done(cam, image_id)
 
     try:
         info = cam.get_pict_file_info2()
