@@ -1363,8 +1363,14 @@ async def handle_dump(request: web.Request) -> web.Response:
     CLI 版的 --dump-* 根本連不上；而且 HTTP 不需要 root。
     """
     which = request.match_info.get("which", "info5")
-    if not state.camera_connected:
+
+    # 交還期間也允許讀取。那個窗口裡相機處於「使用者自己的設定」狀態，
+    # 而重新進入 API 模式會把設定重置掉 —— 想觀察機身端的變更，
+    # 只有這個窗口看得到。相機不一定會在非 API 模式下回應，失敗就回錯誤。
+    cam = state.camera or state.released_camera
+    if cam is None:
         return web.json_response({"error": "not connected"}, status=503)
+    released = state.camera is None
 
     readers = {"info5": read_info5_raw, "movie": read_movie_group_raw}
     reader = readers.get(which)
@@ -1374,16 +1380,23 @@ async def handle_dump(request: web.Request) -> web.Response:
         )
 
     try:
-        raw = await worker.call(lambda: reader(state.camera), priority=Priority.STATUS)
+        raw = await worker.call(lambda: reader(cam), priority=Priority.STATUS,
+                                needs_camera=False)
     except Exception as e:
-        return web.json_response({"error": f"{type(e).__name__}: {e}"}, status=502)
+        return web.json_response(
+            {"error": f"{type(e).__name__}: {e}", "released": released},
+            status=502)
 
     if not raw:
-        return web.json_response({"error": "相機回了空的 payload", "raw_hex": ""})
+        return web.json_response(
+            {"error": "相機回了空的 payload", "raw_hex": "", "released": released})
     try:
-        return web.json_response(to_json(parse_ifd(raw)))
+        out = to_json(parse_ifd(raw))
+        out["released"] = released
+        return web.json_response(out)
     except Exception as e:
-        return web.json_response({"error": str(e), "raw_hex": raw.hex()})
+        return web.json_response({"error": str(e), "raw_hex": raw.hex(),
+                                  "released": released})
 
 
 async def handle_release(request: web.Request) -> web.Response:

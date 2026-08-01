@@ -360,6 +360,31 @@ async def test_schema_endpoint_refreshes_capabilities():
     print("✓ schema 端點會重讀相機能力，不用快取")
 
 
+async def test_dump_works_while_released():
+    """交還期間也要能讀原始資料群組。
+
+    那個窗口是唯一能看到「使用者自己在機身上設了什麼」的地方 ——
+    重新進入 API 模式會把設定重置掉。
+    """
+    reset()
+    async with running_worker():
+        runner = web.AppRunner(B.make_app())
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        base = f"http://127.0.0.1:{runner.addresses[0][1]}"
+        try:
+            await B.release_camera()
+            assert B.state.camera is None and B.state.released_camera is not None
+            async with aiohttp.ClientSession() as s:
+                d = await (await s.get(f"{base}/api/dump/movie")).json()
+                assert d.get("released") is True, d
+                assert d.get("entries"), d
+        finally:
+            await runner.cleanup()
+    print("✓ 交還期間仍可讀取原始資料群組")
+
+
 async def test_settings_roundtrip_through_bridge():
     reset()
     async with running_worker():
