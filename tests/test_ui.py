@@ -183,8 +183,11 @@ def test_format_size_and_depth_share_a_row():
     for name in ("record_format", "image_quality", "movie_resolution",
                  "cinema_dng_quality", "dng_quality"):
         assert f"'{name}'" not in body, f"{name} 不該還在一般的 ORDER 迴圈裡"
-    assert "grp-l" in js, "同列的多個群組沒有標籤區隔"
-    print("✓ 規格 / 大小 / 位元合併成一列，分群標示")
+    assert "frame_rate" in js[js.index("function formatRow"):js.index("function settingsHTML")], \
+        "幀率沒有併進同一列"
+    assert "'frame_rate'" not in body, "frame_rate 不該還在一般的 ORDER 迴圈裡"
+    assert ".grp + .grp" in HTML.read_text(), "群組之間沒有分隔線"
+    print("✓ 規格 / 大小 / 位元 / 幀率合併成一列，以分隔線區分")
 
 
 def test_locked_option_groups_do_not_vanish():
@@ -195,7 +198,7 @@ def test_locked_option_groups_do_not_vanish():
     """
     js = _script(HTML.read_text())
     block = js[js.index("function formatRow"):js.index("function settingsHTML")]
-    assert ".filter(g => g[1]);" in block, "沒有可選值的群組仍被濾掉"
+    assert ".filter(Boolean);" in block, "沒有可選值的群組仍被濾掉"
     assert "locked = true" in block, "空清單沒有標成鎖定"
     assert "相機不開放調整這一項" in block
     assert "灰色項目在此組合下鎖定" in js

@@ -111,7 +111,6 @@
   .opts select { min-width: 120px; max-width: 160px; }
   /* 同一列裡的多個小群組：用細標籤與分隔線區隔，免得三排按鈕黏成一團 */
   .grp { display: flex; align-items: center; gap: 5px; }
-  .grp-l { font-size: 10.5px; color: #6d6d6d; margin-right: 1px; white-space: nowrap; }
   .grp + .grp { margin-left: 4px; padding-left: 10px; border-left: 1px solid #333; }
 </style>
 </head>
@@ -441,7 +440,6 @@ function stepPos(d) {
 const ORDER = [
   ['exposure_mode',         '曝光模式'],
   ['__format',              '影像規格'],
-  ['frame_rate',            '幀率'],
   ['mov_image_quality',     '影片畫質'],
   ['__iso',                 'ISO'],
   ['__aperture',            '光圈'],
@@ -498,7 +496,7 @@ function labelFor(s, v) {
   if (s.unit === 'K') return v + 'K';
   if (s.unit === 'bit') return v + ' bit';
   if (s.unit === 'EV') return (v > 0 ? '+' : '') + Number(v).toFixed(1);
-  if (s.unit === 'fps') return v;
+  if (s.unit === 'fps') return v + 'p';
   return String(v);
 }
 
@@ -629,23 +627,25 @@ function formatRow(byName) {
   // 保留沒有可選值的群組 —— 相機在某些組合下會鎖死某個項目
   // （實測：UHD 下不開放調整色彩位元）。整組消失會讓人以為功能壞了，
   // 所以改成顯示目前值並標明不可調。
+  // 不放群組標籤 —— 值本身就自我說明（CinemaDNG / FHD / 8 bit / 23.98），
+  // 標題列又已經照同樣順序列出目前組合，分隔線足夠區分。
   const groups = [
-    ['規格', byName.record_format || byName.image_quality],
-    ['大小', byName.movie_resolution || byName.resolution],
-    ['位元', byName.cinema_dng_quality || byName.dng_quality],
-  ].filter(g => g[1]);
+    byName.record_format || byName.image_quality,
+    byName.movie_resolution || byName.resolution,
+    byName.cinema_dng_quality || byName.dng_quality,
+    byName.frame_rate,
+  ].filter(Boolean);
   if (!groups.length) return '';
 
   const cur = groups
-    .map(g => {
-      const v = values[g[1].name];
-      return (v === null || v === undefined) ? null : labelFor(g[1], v);
+    .map(s => {
+      const v = values[s.name];
+      return (v === null || v === undefined) ? null : labelFor(s, v);
     })
     .filter(Boolean).join(' · ');
 
   let locked = false;
-  const body = groups.map(g => {
-    const s = g[1];
+  const body = groups.map(s => {
     const v = values[s.name];
     let btns;
     if (s.choices && s.choices.length) {
@@ -660,7 +660,7 @@ function formatRow(byName) {
         escapeHTML('目前的規格 / 大小組合下，相機不開放調整這一項') + '">' +
         escapeHTML(shown) + '</button>';
     }
-    return '<span class="grp"><span class="grp-l">' + g[0] + '</span>' + btns + '</span>';
+    return '<span class="grp">' + btns + '</span>';
   }).join('');
 
   return '<div class="opt"><div class="opt-head">' +
