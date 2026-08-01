@@ -970,18 +970,18 @@ the byte offset and 4 is the length, both established by overlap rather than by
 trusting the reply: bytes read from N match bytes N onward of a read from 0.
 Parameters 1 and 3 must be zero.
 
-Verified end to end — a 4 s FHD clip came back as 29,245,864 bytes in 12 s,
-matching the declared size, and parses cleanly:
+Verified end to end on a 30 s FHD take — 224,711,440 bytes in 4.0 s, about
+56 MB/s, matching the declared size and parsing cleanly:
 
 ```
-ftyp  offset            0            24 bytes
-moov  offset           24        13,304 bytes
-free  offset       13,328       117,728 bytes
-mdat  offset      131,056    29,114,808 bytes
+ftyp  offset             0             24 bytes
+moov  offset            24         17,152 bytes
+free  offset        17,176        113,880 bytes
+mdat  offset       131,056    224,580,384 bytes
 ```
 
-`mvhd` reports timescale 24000 and duration 72072 — exactly 3.00 s at 23.98 fps —
-with a 1920×1080 `avc1` video track, `sowt` audio and a `tmcd` timecode track.
+`mvhd` gives 29.03 s at timescale 24000, with a 1920×1080 `avc1` video track,
+`sowt` audio and a `tmcd` timecode track.
 
 #### One movie per API session, and never ask when there is none
 
