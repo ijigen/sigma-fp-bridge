@@ -247,6 +247,10 @@ class FakeCamera:
         self._tick("close_application")
         self.api_mode = False
 
+    def config_api(self):
+        self._tick("config_api")
+        self.api_mode = True
+
     def _shutdown(self):
         """對應 ptpy USBTransport._shutdown()：釋放 USB interface。"""
         self._tick("shutdown")
@@ -297,6 +301,8 @@ def install(camera: FakeCamera | None = None) -> FakeCamera:
         c._shutdown()
 
     mod.close_camera = close_camera
+    mod.leave_api_mode = lambda c: c.close_application()
+    mod.enter_api_mode = lambda c: c.config_api()
     mod.get_focus_state = get_focus_state
     def read_info5_raw(c):
         c._tick("info5_raw")

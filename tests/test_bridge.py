@@ -157,17 +157,22 @@ async def test_acquire_after_release_reconnects():
     reset()
     async with running_worker():
         await B.release_camera()
-        assert CAM.count("shutdown") == 1, "沒釋放 USB interface"
-        assert not CAM.usb_claimed
+        # 交還時只退出 API 模式，USB 不放 —— 放開的話 macOS 會立刻搶走裝置，
+        # 之後同一個行程再也 acquire 不回來（實測連續八次全失敗）。
+        assert CAM.count("close_application") >= 1, "沒退出 API 模式"
+        assert CAM.count("shutdown") == 0, "不該在交還時放開 USB"
+        assert CAM.usb_claimed, "USB claim 應該保留"
         ok = await B.acquire_camera()
         assert ok, "acquire 應該要成功"
         assert B.state.camera_connected
+        assert CAM.count("config_api") >= 1, "沒有重新進入 API 模式"
 
         # 連續來回幾次也不能漏
         for _ in range(3):
             await B.release_camera()
             assert await B.acquire_camera()
-    print("✓ release → acquire 可反覆連回（USB interface 有真的釋放）")
+        assert CAM.count("shutdown") == 0
+    print("✓ release 只退出 API 模式、保留 USB，acquire 可反覆重用")
 
 
 async def test_rejected_settings_are_reported():

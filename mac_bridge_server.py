@@ -59,6 +59,8 @@ from camera_settings import (
     verify_applied,
 )
 from sigma_fp_focus import (
+    enter_api_mode,
+    leave_api_mode,
     open_camera,
     read_capabilities,
     read_info5_raw,
@@ -156,6 +158,8 @@ class BridgeState:
     movie_capabilities: dict = field(default_factory=dict)
     #: release 前的設定快照，acquire 後用來還原（見 release_camera）
     settings_snapshot: dict | None = None
+    #: 交還期間保留的相機連線。放開 USB 會被 macOS 搶走，所以只退出 API 模式。
+    released_camera: object | None = None
     #: "stills" | "movie" | None —— 機身撥桿位置（推測而來，見 refresh_capabilities）
     camera_mode: str | None = None
     #: 錄影中與否。bridge 自己記，因為相機沒有可直接查詢的「正在錄影」旗標
@@ -734,10 +738,20 @@ async def release_camera() -> None:
     state.camera_connected = False
     state.focus_range = None
     state.capabilities = {}
+    state.movie_capabilities = {}
+
+    # 只退出 API 模式，不放開 USB —— 放開的話 macOS 會立刻搶走裝置，
+    # 之後就再也 acquire 不回來（實測踩過）。物件留著給 acquire 重用。
     if cam is not None:
-        with suppress(Exception):
-            await worker.call(lambda: close_camera(cam), needs_camera=False)
-    log.info("已交還相機，機身操作恢復（bridge 仍在執行）")
+        try:
+            await worker.call(lambda: leave_api_mode(cam), needs_camera=False)
+            state.released_camera = cam
+        except Exception as e:
+            log.warning(f"退出 API 模式失敗，改為完整關閉：{e}")
+            with suppress(Exception):
+                await worker.call(lambda: close_camera(cam), needs_camera=False)
+            state.released_camera = None
+    log.info("已交還相機，機身操作恢復（bridge 仍持有 USB）")
     await broadcast_state({"event": "camera_released"})
 
 
@@ -749,7 +763,26 @@ async def acquire_camera(restore: bool = True) -> bool:
             —— 還原會把那些變更蓋掉。
     """
     state.released_by_user = False
-    if not await try_connect_camera():
+
+    # 交還時保留下來的連線可以直接重新進入 API 模式，省掉一次 USB 爭奪
+    cam = state.released_camera
+    state.released_camera = None
+    if cam is not None:
+        try:
+            await worker.call(lambda: enter_api_mode(cam), needs_camera=False)
+            state.camera = cam
+            state.camera_connected = True
+            log.info("已取回相機（重用既有連線）")
+            await refresh_focus_range()
+            await refresh_capabilities()
+            await broadcast_state({"event": "camera_connected"})
+        except Exception as e:
+            log.warning(f"重用既有連線失敗，改為重新連線：{e}")
+            with suppress(Exception):
+                await worker.call(lambda: close_camera(cam), needs_camera=False)
+            if not await try_connect_camera():
+                return False
+    elif not await try_connect_camera():
         return False
 
     snapshot = state.settings_snapshot

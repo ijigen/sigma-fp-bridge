@@ -484,6 +484,26 @@ def dump_info5(cam: SigmaPTPy) -> None:
         )
 
 
+def leave_api_mode(cam: SigmaPTPy) -> None:
+    """退出 API 模式，讓機身按鍵恢復作用 —— 但保留 USB claim 與 PTP session。
+
+    這是「暫時把相機還給使用者」該用的操作。不要用 close_camera()：
+    它會連 USB interface 一起放掉，而 macOS 的 ptpcamerad 會在放手的瞬間
+    重新綁定裝置，之後同一個行程就再也搶不回來了（實測：連續八次 acquire
+    全部失敗，相機在 USB 上看得到卻 claim 不到）。
+    """
+    cam.close_application()
+
+
+def enter_api_mode(cam: SigmaPTPy) -> None:
+    """重新進入 API 模式。
+
+    注意這會讓相機把設定重置成預設值 —— 那是 sgm_ConfigApi 的行為，
+    不是我們能選擇的。
+    """
+    cam.config_api()
+
+
 def read_movie_group_raw(cam: SigmaPTPy) -> bytes:
     """發 SigmaGetCamDataGroupMovie (0x9033)，取回原始 payload。
 

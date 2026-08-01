@@ -201,6 +201,12 @@ back **without** stopping the bridge, use `release` (WebSocket) or
 there is no live view, no status polling and no focus control — the bridge is
 genuinely off the camera.
 
+`release` sends `sgm_CloseApplication` but **keeps the USB interface claimed**.
+Letting go of it means macOS rebinds the camera to `ptpcamerad` within moments,
+and this process cannot get it back — eight consecutive re-acquires failed with
+the camera plainly visible on the bus. Holding the claim also makes re-acquiring
+a single `sgm_ConfigApi` instead of a fresh USB fight.
+
 Re-acquiring runs `sgm_ConfigApi` again, which resets the camera to defaults, so
 `release` snapshots the settings and `acquire` restores them. Without that,
 stepping away to press a button on the body would silently cost you every setting
