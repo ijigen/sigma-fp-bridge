@@ -205,6 +205,33 @@ async def test_ptp_probe_returns_raw_bytes_and_rejects_nonsense():
     print("✓ 原始 PTP 探測端點可用，並擋掉不合法的輸入")
 
 
+async def test_a_long_download_gets_a_bigger_deadline_than_a_normal_command():
+    """下載是長時間操作，不能套用一般指令的 120 秒上限。
+
+    30 秒的 FHD 影片約 290 MB，實測速度 2.4 MB/s 要 120 秒 —— 剛好卡在
+    CameraStuck 的門檻上，會被自己的看門狗砍掉，而且訊息還會叫使用者去
+    把相機斷電重開。
+    """
+    reset()
+    async with running_worker() as w:
+        seen = {}
+        original = w.submit
+
+        def spy(fn, **kw):
+            seen.update(kw)
+            return original(fn, **kw)
+
+        w.submit = spy
+        big = 290 * 1024 * 1024
+        budget = 120.0 + big / (512 * 1024)
+        assert budget > 600, f"290 MB 的預算只有 {budget:.0f} 秒，太緊"
+        # 一般指令仍然用預設上限
+        await w.submit(lambda: None, needs_camera=False)
+        assert seen.get("timeout", B.DEFAULT_JOB_TIMEOUT_S) == B.DEFAULT_JOB_TIMEOUT_S
+    print(f"✓ 290 MB 的下載預算 {budget:.0f} 秒，遠大於一般指令的 "
+          f"{B.DEFAULT_JOB_TIMEOUT_S:.0f} 秒")
+
+
 async def test_set_position_coalesces():
     reset()
     async with running_worker():

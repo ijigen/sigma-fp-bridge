@@ -1495,12 +1495,17 @@ async def _do_record(action: str, request: web.Request) -> web.Response:
         def report(done, total):
             state.movie_progress = {"done": done, "total": total}
 
+        # 下載是長時間操作，不能套用一般指令的 120 秒上限 —— 30 秒的 FHD
+        # 影片就有約 290 MB，光是傳輸就會超過，會被自己的看門狗砍掉。
+        # 依大小給預算，並假設最差 0.5 MB/s（實測 2.4 MB/s，留了近五倍餘裕）。
+        budget = 120.0 + movies[index].size / (512 * 1024)
+
         try:
             movie = await worker.call(
                 lambda: recording.download_movie(
                     state.camera, movies[index],
                     movies_dir if save else None, progress=report),
-                priority=Priority.CONTROL)
+                priority=Priority.CONTROL, timeout=budget)
         except recording.RecordingError as e:
             return web.json_response({"error": str(e)}, status=502)
         except Exception as e:
