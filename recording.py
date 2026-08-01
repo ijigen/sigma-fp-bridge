@@ -274,31 +274,15 @@ def record_clip(cam, seconds: float = 1.5) -> dict[str, Any]:
 # 個 byte 之後），第 4 個是長度。第 1、3 個必須是 0 —— 第 3 個推測是偏移的
 # 高 32 位，設成 1 會直接失敗。
 
-#: 單次請求的大小。⚠️ 影片下載目前是**沒有驗證成功過的**，見下面。
+#: 單次請求的大小。實測 4 MB 也能正確取回，1 MB 是為了不讓單一 USB
+#: transaction 佔住相機太久 —— 這個 bridge 還要同時跑 live view。
 #:
-#: SigmaGetPartialMovieFile(0, offset, 0, length) 只成功過一次。那一次讀出來
-#: 的是貨真價實的影片資料 —— 偏移 1 / 16 / 512 / 2048 的重疊比對全部相符，
-#: 不可能是巧合。但那之後每一次嘗試，第一個 0x9037 呼叫就回同一坨 122,868
-#: bytes 的殘留緩衝區（內容是上一個指令的回應接舊記憶體），而且不會恢復，
-#: 要重啟 bridge。
+#: 這個常數繞了很大一圈。曾經因為下載失敗而先後被歸咎於「4 MB 太大」「64 KB
+#: 太大」「只有 4 KB 以下安全」，三個都是錯的：在健康的相機上，256 bytes 到
+#: 4 MB 全部通過內容與重疊驗證。
 #:
-#: 已經提出又被推翻的解釋，依序是：
-#:   1.「4 MB 太大」→ 64 KB 一樣壞
-#:   2.「64 KB 太大、小的沒事」→ 全新 session 第一發 4096 也壞，而 4096 正是
-#:      成功那次驗證過內容的尺寸
-#:   3.「MovieFileInfo 要帶索引才會選定檔案」→ 帶 [0] 沒有差別
-#: 也確認過 transaction ID 沒問題（ptpy 的 _transaction 是會自動遞增的
-#: property）。所以尺寸本身解釋不了。
-#:
-#: 還沒控制的最大變因是 live view：瀏覽器開著介面時它會持續向相機要影格，
-#: 而 fp 的 live view JPEG 大約就是 120 KB —— 跟 122,868 很接近。相機可能
-#: 不允許串流和影片傳輸並行。下次要在關掉介面的情況下做對照。
-#:
-#: 另外記一筆方法論：4 MB 當初被當成「驗證過」，依據是「要 1/4/16 MB 都回傳了
-#: 剛好的位元組數」。那次只比對長度沒看內容 —— 相機很樂意回你要的位元組數，
-#: 內容卻是垃圾，於是拼出一個大小分毫不差、內容全錯的 27 MB 檔案。
-#: 長度不是證據。
-MOVIE_CHUNK_BYTES = 4096
+#: 真正的原因跟尺寸無關 —— 見下面 partial_movie() 的說明。
+MOVIE_CHUNK_BYTES = 1 << 20
 
 #: 影片檔案大小的合理上限。純粹是「解錯版面」的防線，跟照片那道同樣理由。
 MAX_MOVIE_BYTES = 64 << 30
@@ -367,7 +351,19 @@ def movie_files(cam) -> list[MovieFile]:
 
 
 def partial_movie(cam, offset: int, length: int) -> bytes:
-    """讀影片檔案的一段。參數形狀 (0, offset, 0, length)。"""
+    """讀影片檔案的一段。參數形狀 (0, offset, 0, length)。
+
+    ⚠️ 相機會進入一種狀態，讓這個指令不再回傳影片資料，而是回一坨固定
+    122,868 bytes 的殘留緩衝區（內容是上一個指令的回應接舊記憶體）。進入之後
+    每次呼叫都一樣，不分尺寸也不分偏移。
+
+    **重啟 bridge 沒有用** —— 那已經是新的 PTP session 了，狀態仍在。只有把
+    相機斷電重開才會恢復。這件事花了很久才看出來，因為每次失敗我都只重啟
+    bridge，於是一直在同一個壞狀態裡測，還連續三次把原因誤判成請求尺寸。
+
+    觸發條件目前不明。download_movie() 會在收到過長的回應時立刻停下並指出
+    要重開相機，這是目前唯一可靠的辨識方式。
+    """
     from construct import Container
 
     ptp = Container(
@@ -406,8 +402,9 @@ def download_movie(cam, movie: MovieFile, save_dir=None,
             # 這裡曾經寫成 got[:want] 默默截斷 —— 結果是大小正確、內容全錯
             # 的檔案，而且一路到最後才發現。寧可在第一塊就停。
             raise RecordingError(
-                f"資料相位失去同步：要求 {want:,} bytes，相機回了 {len(got):,}。"
-                "請重啟 bridge。")
+                f"相機沒有回傳影片資料：要求 {want:,} bytes，卻回了 {len(got):,}。"
+                "相機進入了不再服務影片傳輸的狀態 —— 重啟 bridge 沒有用，"
+                "要把相機斷電重開。")
         out += got
         if progress is not None:
             progress(len(out), movie.size)

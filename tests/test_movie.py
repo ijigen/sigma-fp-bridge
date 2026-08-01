@@ -378,9 +378,9 @@ def test_movie_download_uses_the_verified_parameter_shape():
 def test_an_overlong_chunk_is_rejected_instead_of_truncated():
     """迴歸：要 N 個 byte 卻拿到更多，代表讀到的是別的東西的殘留。
 
-    實機踩過：4 MB 的請求讓 PTP 資料相位失去同步，之後每次都回同一坨
-    122,868 bytes。當時的程式碼寫 got[:want] 默默截斷，於是拼出一個大小
-    完全正確、內容全錯的 27 MB 檔案 —— 一直到解析 QuickTime 結構才發現。
+    實機踩過：相機進入某個狀態之後，每次都回同一坨 122,868 bytes 的殘留
+    緩衝區。當時的程式碼寫 got[:want] 默默截斷，於是拼出一個大小完全正確、
+    內容全錯的 27 MB 檔案 —— 一直到解析 QuickTime 結構才發現。
     """
     import recording
     import types as _t
@@ -397,7 +397,7 @@ def test_an_overlong_chunk_is_rejected_instead_of_truncated():
     try:
         recording.download_movie(Cam(), movie)
     except recording.RecordingError as e:
-        assert "失去同步" in str(e) and "122,868" in str(e), e
+        assert "斷電重開" in str(e) and "122,868" in str(e), e
         print("✓ 過長的回應被當成錯誤，不會截斷後繼續")
     else:
         raise AssertionError("應該要丟 RecordingError")

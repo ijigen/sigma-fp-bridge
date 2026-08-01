@@ -43,6 +43,7 @@ Useful for:
 | Movie settings (shutter angle, frame rate, CinemaDNG) | ✅ Working |
 | Recording start / stop | ✅ Working |
 | Tethered capture (JPEG / DNG / both) | ✅ Working |
+| Movie download over USB | ✅ Working |
 | WebSocket + REST + MJPEG | ✅ Working |
 | Calibration persistence | ✅ Working |
 | Bonjour mDNS | ✅ Working |
@@ -931,6 +932,69 @@ One more thing that fell out of decoding this: the filename is data from the
 device, and it was being joined straight onto the save directory. A misparse
 turned it into `/DCIM/100SIGMA` and the write went to the root of the disk. It is
 now reduced to a basename before use.
+
+### Pulling movies back
+
+`GET /api/record/download` fetches the clip the camera last recorded into
+`~/.sigma_fp_bridge/movies/`, with progress readable from `/api/status`.
+`GET /api/record/movies` lists what is available.
+
+Both opcodes are undocumented and unwrapped by sigma-ptpy, so this came from
+reading bytes. `SigmaGetMovieFileInfo` (0x9036) turns out to use the same shape
+as `PictFileInfo2` — length, count, offset table, records — but with 64-bit
+fields, and its record carries **no** `FileAddress`, because movies are read by
+offset instead:
+
+```
+0   uint64  DataLength
+8   uint64  FileCount
+16  uint64  RecordOffset[FileCount]
+    record: char[8] Format, uint64 FileSize,
+            uint64 PathNameOffset, uint64 FileNameOffset
+```
+
+`SigmaGetPartialMovieFile` (0x9037) takes `(0, offset, 0, length)`. Parameter 2 is
+the byte offset and 4 is the length, both established by overlap rather than by
+trusting the reply: bytes read from N match bytes N onward of a read from 0.
+Parameters 1 and 3 must be zero.
+
+Verified end to end — a 4 s FHD clip came back as 29,245,864 bytes in 12 s,
+matching the declared size, and parses cleanly:
+
+```
+ftyp  offset            0            24 bytes
+moov  offset           24        13,304 bytes
+free  offset       13,328       117,728 bytes
+mdat  offset      131,056    29,114,808 bytes
+```
+
+`mvhd` reports timescale 24000 and duration 72072 — exactly 3.00 s at 23.98 fps —
+with a 1920×1080 `avc1` video track, `sowt` audio and a `tmcd` timecode track.
+
+#### The camera can stop serving transfers
+
+There is a state the camera enters where 0x9037 stops returning movie data and
+returns a fixed 122,868-byte buffer instead, holding the previous command's reply
+followed by stale memory. Once it starts, every call behaves that way regardless
+of offset or length, while `SigmaGetMovieFileInfo` keeps answering correctly the
+whole time.
+
+**Restarting the bridge does not clear it** — that is already a fresh PTP session
+and the state survives. Only power-cycling the camera does. What triggers it is
+still unknown.
+
+This cost a lot of time, and why is worth recording. Every failure was diagnosed
+by restarting the bridge and retrying with a smaller chunk, so every retry
+happened inside the same bad camera state, and request size took the blame three
+times over: 4 MB is too big, then 64 KB is too big, then only 4 KB and under are
+safe. On a healthy camera every size from 256 bytes to 4 MB passes content
+verification. Size never mattered.
+
+The download stops at the first reply longer than requested and says to
+power-cycle. That check exists because the original loop did `out += got[:want]`:
+asking for 1 KB and receiving 122,868 bytes is unambiguous evidence of reading
+someone else's buffer, and truncating turned it into a correctly-sized corrupt
+file that only failed at QuickTime parsing.
 
 ### Live view
 
