@@ -443,7 +443,6 @@ const ORDER = [
   // mov_image_quality 不列在 UI：實測相機在所有格式 / 大小 / 幀率組合下
   // 都不開放調整它，值 1 / 2 的意義也沒有證據。顯示一個按不動又看不懂的
   // 控制項只會造成困惑。它仍可透過 API 讀寫，協定層的對應也留著。
-  ['__iso',                 'ISO'],
   ['metering_mode',         '測光'],
   ['__wb',                  '白平衡'],
   ['color_mode',            '色彩模式'],
@@ -525,55 +524,6 @@ function optRow(name, title, opts) {
     '</div><div class="opts' + (many ? ' scroll' : '') + '">' + btns + '</div></div>';
 }
 
-// ISO 的模式與數值合併成一列：按鈕切自動/手動，數值用下拉選單。
-// 選項太多（實測 25 個）不適合橫排按鈕，而且它跟其他設定不同 ——
-// 使用者通常心裡已經有目標值，用選的比用捲的快。
-function isoRow(byName) {
-  const auto = byName.iso_auto, iso = byName.iso, ev = byName.exposure_compensation;
-  if (!auto && !iso && !ev) return '';
-  const isAuto = values.iso_auto === 'Auto';
-  const cur = values.iso;
-  const curEv = values.exposure_compensation;
-  const parts = [];
-  if (auto || iso) parts.push(isAuto ? '自動' : '手動');
-  if (cur !== null && cur !== undefined) parts.push('ISO ' + cur);
-  if (ev && curEv !== null && curEv !== undefined) parts.push('EV ' + labelFor(ev, curEv));
-  const head = '<div class="opt-head"><span class="opt-name">ISO / EV</span>' +
-    '<span class="opt-cur">' + (parts.join(' · ') || '—') + '</span>' +
-    (isAuto ? '<span class="opt-note">手動模式才能指定 ISO 數值</span>' : '') +
-    '</div>';
-
-  let btns = '';
-  if (auto) {
-    btns = (auto.choices || ['Auto', 'Manual']).map(v => {
-      const on = String(v) === String(values.iso_auto) ? ' on' : '';
-      return '<button class="o' + on + '" data-set="iso_auto" data-val="' + v + '">' +
-        (v === 'Auto' ? '自動' : '手動') + '</button>';
-    }).join('');
-  }
-
-  let sel = '';
-  if (iso && iso.choices && iso.choices.length) {
-    const opts = iso.choices.map(v =>
-      '<option value="' + v + '"' + (String(v) === String(cur) ? ' selected' : '') + '>ISO ' + v + '</option>'
-    ).join('');
-    sel = '<select data-set="iso"' + (isAuto ? ' disabled' : '') + '>' +
-      '<option value="">—</option>' + opts + '</select>';
-  }
-
-  // 曝光補償併在同一排 —— 它跟 ISO 一樣是「讓畫面亮一點暗一點」的旋鈕，
-  // 分成兩列反而要多找一次。
-  let evSel = '';
-  if (ev && ev.choices && ev.choices.length) {
-    const opts = ev.choices.map(v =>
-      '<option value="' + v + '"' + (String(v) === String(curEv) ? ' selected' : '') +
-      '>EV ' + escapeHTML(labelFor(ev, v)) + '</option>').join('');
-    evSel = '<select data-set="exposure_compensation">' +
-      '<option value="">—</option>' + opts + '</select>';
-  }
-  return '<div class="opt">' + head + '<div class="opts">' + btns + sel + evSel + '</div></div>';
-}
-
 // 影像規格 / 大小 / 色彩位元合併成一列。它們是同一個決策的三個面向，
 // 而且相機讓它們互相牽動 —— 改規格會改變可選的大小與位元深度，
 // 分成三列反而看不出這層關係。
@@ -631,7 +581,7 @@ function exposureRow(byName) {
   const mode = byName.exposure_mode;
   const ap = byName.aperture;
   const speed = byName.shutter_speed, angle = byName.shutter_angle;
-  if (!mode && !ap && !speed && !angle) return '';
+  if (!mode && !ap && !speed && !angle && !byName.iso) return '';
 
   const cur = values.exposure_mode;
   const manual = cur === 'Manual';
@@ -653,6 +603,39 @@ function exposureRow(byName) {
       '<button class="o' + (String(v) === String(cur) ? ' on' : '') + '"' +
       ' data-set="exposure_mode" data-val="' + escapeHTML(v) + '">' +
       escapeHTML(labelFor(mode, v)) + '</button>').join('') + '</span>';
+  }
+
+  // ISO / EV —— 緊接在模式後面：模式決定相機接不接受手動 ISO
+  const isoAuto = byName.iso_auto, iso = byName.iso, ev = byName.exposure_compensation;
+  const autoIso = values.iso_auto === 'Auto';
+  if (isoAuto || iso || ev) {
+    let g = '';
+    if (isoAuto) {
+      g += (isoAuto.choices || ['Auto', 'Manual']).map(v =>
+        '<button class="o' + (String(v) === String(values.iso_auto) ? ' on' : '') + '"' +
+        ' data-set="iso_auto" data-val="' + v + '">' +
+        (v === 'Auto' ? '自動' : '手動') + '</button>').join('');
+    }
+    if (iso && iso.choices && iso.choices.length) {
+      const v = values.iso;
+      if (v !== null && v !== undefined) parts.push('ISO ' + v);
+      g += '<select data-set="iso"' + (autoIso ? ' disabled' : '') +
+        ' title="' + escapeHTML(autoIso ? 'ISO 自動時由相機決定' : 'ISO') + '">' +
+        '<option value="">—</option>' +
+        iso.choices.map(c => '<option value="' + c + '"' +
+          (String(c) === String(v) ? ' selected' : '') + '>ISO ' + c + '</option>').join('') +
+        '</select>';
+    }
+    if (ev && ev.choices && ev.choices.length) {
+      const v = values.exposure_compensation;
+      if (v !== null && v !== undefined) parts.push('EV ' + labelFor(ev, v));
+      g += '<select data-set="exposure_compensation" title="曝光補償">' +
+        '<option value="">—</option>' +
+        ev.choices.map(c => '<option value="' + c + '"' +
+          (String(c) === String(v) ? ' selected' : '') + '>EV ' +
+          escapeHTML(labelFor(ev, c)) + '</option>').join('') + '</select>';
+    }
+    if (g) body += '<span class="grp">' + g + '</span>';
   }
 
   // 光圈
@@ -758,7 +741,6 @@ function settingsHTML() {
   }));
 
   for (const [name, title] of ORDER) {
-    if (name === '__iso') { const r = isoRow(byName); if (r) rows.push(r); continue; }
     if (name === '__format') { const r = formatRow(byName); if (r) rows.push(r); continue; }
     if (name === '__exposure') { const r = exposureRow(byName); if (r) rows.push(r); continue; }
     if (name === '__wb') { const r = wbRow(byName); if (r) rows.push(r); continue; }

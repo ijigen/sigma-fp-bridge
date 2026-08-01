@@ -77,26 +77,25 @@ def test_inferred_labels_are_marked_uncertain():
     print("✓ 推測的標籤會標記為未確認")
 
 
-def test_iso_row_is_merged_and_uses_a_dropdown():
-    """ISO 的模式與數值在同一列，數值用下拉選單。
+def test_iso_sits_inside_the_exposure_row_after_the_mode():
+    """ISO 與 EV 併進曝光那一列，緊接在模式後面。
 
-    ISO 有 25 個合法值，橫排按鈕會佔掉整列；而且使用者多半心裡已經有目標值，
-    用選的比用捲的快。自動模式下數值不可調 —— 選了也會被相機覆蓋。
+    模式決定相機接不接受手動 ISO，兩者相鄰才看得出關係。數值用下拉是因為
+    ISO 有 25 個合法值，橫排按鈕會佔掉整列；自動時停用，選了也會被覆蓋。
     """
     js = _script(HTML.read_text())
-    assert "function isoRow" in js, "沒有合併的 ISO 列"
-    assert "'__iso'" in js, "ORDER 沒有指向合併列"
-    assert "iso_auto" not in js[js.index("const ORDER"):js.index("const SCROLL_IF_OVER")], \
-        "iso_auto 不該還在一般的 ORDER 迴圈裡"
-    assert "<select data-set=\"iso\"" in js, "ISO 數值不是下拉選單"
-    assert "isAuto ? ' disabled' : ''" in js, "自動模式下沒有停用數值選單"
-    assert "select[data-set]" in js, "select 沒有綁事件"
-    # 曝光補償併在同一排：它跟 ISO 一樣是調亮暗的旋鈕
-    assert 'data-set="exposure_compensation"' in js, "EV 沒有併進 ISO 那列"
-    assert "ISO / EV" in js
+    block = js[js.index("function exposureRow"):js.index("function wbRow")]
+    assert "iso_auto" in block and "data-set=\"iso\"" in block, "ISO 沒併進曝光列"
+    assert 'data-set="exposure_compensation"' in block, "EV 沒併進曝光列"
+    assert "autoIso ? ' disabled' : ''" in block, "自動時沒有停用 ISO 數值"
+    # ISO 群組要排在模式群組後面、光圈之前
+    assert block.index('data-set="exposure_mode"') < block.index('data-set="iso_auto"')
+    assert block.index('data-set="iso_auto"') < block.index('data-set="aperture"')
     body = js[js.index("const ORDER"):js.index("const SCROLL_IF_OVER")]
-    assert "exposure_compensation" not in body, "EV 不該還在一般的 ORDER 迴圈裡"
-    print("✓ ISO 與 EV 合併成一列，數值皆用下拉選單")
+    for t in ("'iso'", "'iso_auto'", "'exposure_compensation'", "'__iso'"):
+        assert t not in body, f"{t} 不該還在一般的 ORDER 迴圈裡"
+    assert "select[data-set]" in js, "select 沒有綁事件"
+    print("✓ ISO / EV 併入曝光列，緊接模式之後")
 
 
 def test_exposure_row_merges_mode_aperture_and_shutter():
@@ -107,7 +106,7 @@ def test_exposure_row_merges_mode_aperture_and_shutter():
     """
     js = _script(HTML.read_text())
     assert "function exposureRow" in js and "'__exposure'" in js
-    block = js[js.index("function exposureRow"):js.index("function settingsHTML")]
+    block = js[js.index("function exposureRow"):js.index("function wbRow")]
     for token in ("exposure_mode", "aperture", "shutter_speed", "shutter_angle"):
         assert token in block, token
     assert "apOK" in block and "shOK" in block, "沒有依模式決定可不可設"
@@ -252,6 +251,19 @@ def test_white_balance_and_colour_temp_share_a_row():
     for token in ("'white_balance'", "'color_temp'"):
         assert token not in body, f"{token} 不該還在一般的 ORDER 迴圈裡"
     print("✓ 白平衡改下拉並與色溫合併，非色溫模式下 K 值停用")
+
+
+def test_row_slices_use_the_next_function_defined():
+    """這些測試靠切片檢查每個 row builder 的內容，切片邊界必須真的在它後面。
+
+    寫錯過一次：邊界指向定義在前面的函式，切出空字串，斷言全部無聲通過。
+    """
+    js = _script(HTML.read_text())
+    order = ["function formatRow", "function exposureRow",
+             "function wbRow", "function settingsHTML"]
+    positions = [js.index(x) for x in order]
+    assert positions == sorted(positions), f"函式定義順序變了：{order}"
+    print("✓ row builder 的定義順序符合測試切片假設")
 
 
 def test_state_updates_do_not_rebuild_dom():
