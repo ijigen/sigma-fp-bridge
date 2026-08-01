@@ -24,7 +24,10 @@ def test_capture_downloads_the_whole_image():
     img = capture.capture(cam)
     assert img.data == cam.pict_data, "抓回來的資料跟相機的不一致"
     assert img.size == len(cam.pict_data)
-    assert img.filename == "SDIM0001.JPG"
+    # 實機的字串欄位是 CString → bytes；str() 會得到 "b'SDIM0001.JPG'"，
+    # 檔名就會用那個字面值寫到磁碟上
+    assert img.filename == "SDIM0001.JPG", f"檔名沒有正確解碼：{img.filename!r}"
+    assert img.format == "JPG" and img.path_name == "/DCIM/100SIGMA"
     assert cam.count("pict_chunk") >= 1
     print(f"✓ 完整下載 {img.size:,} bytes（{cam.count('pict_chunk')} 個分塊）")
 

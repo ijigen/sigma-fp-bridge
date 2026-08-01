@@ -784,11 +784,11 @@ it holds after a Camera Control mode shot — `PictFileInfo2` for the address an
 size, then `GetBigPartialPictFile` in chunks.
 
 `dest_to_save` (DataGroup3) is a separate setting: `InCamera` (card),
-`InComputer` ("drive in PC side") or `Both`. It governs whether the card also
-gets a copy, not how the download works. **Whether the buffer is still readable
-with it set to `InCamera` has not been tested** — the download may work
-regardless, or may require the PC to be one of the destinations. Do not assume
-either from this text.
+`InComputer` ("drive in PC side") or `Both`. **It does not gate the download** —
+tested on all three values, and the buffer read back the same 8.9 MB frame every
+time, `InCamera` included. Whether the card also receives a copy could not be
+checked from the host: PTP object enumeration reports an empty card while the
+camera is in API mode, whatever has been written.
 
 ```bash
 curl -X POST 'http://localhost:8765/api/capture'            # shoot and download

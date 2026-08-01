@@ -44,6 +44,16 @@ class CaptureError(RuntimeError):
     """拍攝或下載失敗。"""
 
 
+def _text(value) -> str:
+    """PictFileInfo2 的字串欄位是 CString，解出來是 bytes。
+
+    直接 str() 會得到 "b'SDIM0001.JPG'" —— 檔名就會用那個字面值寫到磁碟上。
+    """
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value).split(b"\x00")[0].decode("ascii", "replace")
+    return "" if value is None else str(value)
+
+
 @dataclass
 class CapturedImage:
     filename: str
@@ -128,9 +138,9 @@ def capture(cam, save_dir: Path | None = None,
         raise CaptureError(f"取得影像資訊失敗：{e}") from e
 
     image = CapturedImage(
-        filename=str(getattr(info, "FileName", "") or "capture"),
-        path_name=str(getattr(info, "PathName", "") or ""),
-        format=str(getattr(info, "PictureFormat", "") or ""),
+        filename=_text(getattr(info, "FileName", "")) or "capture",
+        path_name=_text(getattr(info, "PathName", "")),
+        format=_text(getattr(info, "PictureFormat", "")),
         width=int(getattr(info, "SizeX", 0) or 0),
         height=int(getattr(info, "SizeY", 0) or 0),
         size=int(getattr(info, "FileSize", 0) or 0),

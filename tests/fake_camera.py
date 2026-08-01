@@ -247,8 +247,10 @@ class FakeCamera:
         self._tick("pict_info")
         return types.SimpleNamespace(
             FileAddress=0x1000, FileSize=len(self.pict_data),
-            PathName="/DCIM/100SIGMA", FileName="SDIM0001.JPG",
-            PictureFormat="JPG", SizeX=6000, SizeY=4000)
+            # 實機回的是 CString → bytes，假相機也要照做，
+            # 不然「檔名被寫成 b'...'」這個 bug 測不出來
+            PathName=b"/DCIM/100SIGMA\x00", FileName=b"SDIM0001.JPG\x00",
+            PictureFormat=b"JPG\x00", SizeX=6000, SizeY=4000)
 
     def get_big_partial_pict_file(self, store_address, start_address, max_length):
         self._tick("pict_chunk")
