@@ -939,6 +939,18 @@ now reduced to a basename before use.
 `~/.sigma_fp_bridge/movies/`, with progress readable from `/api/status`.
 `GET /api/record/movies` lists what is available.
 
+**Record with `dest_to_save` set to `InCamera` or `Both` if you want the file.**
+For stills that setting only decides whether the card gets a copy, because the
+camera holds the frame in a buffer either way. Movies have no such buffer — a
+30 s FHD clip is around 290 MB — so with `InComputer` or `Null` there is nothing
+to fetch afterwards: `GetMovieFileInfo` reports no file at all once recording
+stops. Same eight-second take, recorded twice: `InCamera` gave a 48,128,384 byte
+file, `InComputer` gave nothing.
+
+Whether `InComputer` streams the data out during the take is unresolved. It
+cannot be read with 0x9037 mid-recording — that returns the stale buffer
+described below and leaves the camera unable to serve transfers at all.
+
 Both opcodes are undocumented and unwrapped by sigma-ptpy, so this came from
 reading bytes. `SigmaGetMovieFileInfo` (0x9036) turns out to use the same shape
 as `PictFileInfo2` — length, count, offset table, records — but with 64-bit
@@ -980,8 +992,13 @@ of offset or length, while `SigmaGetMovieFileInfo` keeps answering correctly the
 whole time.
 
 **Restarting the bridge does not clear it** — that is already a fresh PTP session
-and the state survives. Only power-cycling the camera does. What triggers it is
-still unknown.
+and the state survives. Only power-cycling the camera does.
+
+One trigger is now reproduced: asking for a transfer when the camera has no
+movie to serve. It happened during a `dest_to_save=InComputer` recording, which
+leaves no file at all, so "while recording" and "no file exists" were both true
+and have not been separated. The bridge refuses a download in either case, since
+the cost of finding out is a power cycle.
 
 This cost a lot of time, and why is worth recording. Every failure was diagnosed
 by restarting the bridge and retrying with a smaller chunk, so every retry

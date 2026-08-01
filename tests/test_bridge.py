@@ -232,6 +232,36 @@ async def test_a_long_download_gets_a_bigger_deadline_than_a_normal_command():
           f"{B.DEFAULT_JOB_TIMEOUT_S:.0f} 秒")
 
 
+async def test_download_is_refused_while_recording():
+    """錄影中要求傳輸會讓相機進入必須斷電才能復原的狀態，實測重現過。
+
+    那次錄影用的是 dest_to_save=InComputer —— 那種錄影不會留下任何檔案，
+    所以「錄影中」和「沒有檔案」當時同時成立，真正的條件還沒分辨清楚。
+    兩種情況都擋掉。
+    """
+    reset()
+    async with running_worker():
+        runner = web.AppRunner(B.make_app())
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        base = f"http://127.0.0.1:{runner.addresses[0][1]}"
+        try:
+            async with aiohttp.ClientSession() as session:
+                assert (await session.post(f"{base}/api/record/start")).status == 200
+                assert B.state.recording
+
+                resp = await session.get(f"{base}/api/record/download")
+                assert resp.status == 409, resp.status
+                body = await resp.json()
+                assert "錄影中" in body["error"] and "斷電" in body["error"], body
+
+                await session.post(f"{base}/api/record/stop")
+        finally:
+            await runner.cleanup()
+    print("✓ 錄影中拒絕下載，並說明後果")
+
+
 async def test_set_position_coalesces():
     reset()
     async with running_worker():

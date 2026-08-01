@@ -1475,11 +1475,22 @@ async def _do_record(action: str, request: web.Request) -> web.Response:
     if action == "download":
         # 影片下載。檔案很大（FHD 三秒約 19 MB，UHD 更多），所以走 CONTROL
         # 優先權，並把進度記在 state 上讓 /api/status 看得到。
+        if state.recording:
+            # 錄影中要求傳輸會讓相機進入不再服務影片傳輸的狀態，實測重現過。
+            # 那個狀態只有把相機斷電才會好，所以這裡直接擋掉。
+            return web.json_response(
+                {"error": "錄影中不能下載 —— 實測會讓相機進入必須斷電才能"
+                          "復原的狀態。請先停止錄影。"},
+                status=409)
+
         movies = await worker.call(
             lambda: recording.movie_files(state.camera), priority=Priority.STATUS)
         if not movies:
+            # 沒有影片還硬讀 0x9037 也會把相機弄壞，所以這裡也是防線不是提示。
             return web.json_response(
-                {"error": "相機沒有可下載的影片 —— 這個 session 內錄過嗎？"},
+                {"error": "相機沒有可下載的影片。dest_to_save 設成 InComputer "
+                          "或 Null 錄的影片不會留下檔案 —— 要下載請用 InCamera "
+                          "或 Both。"},
                 status=404)
         try:
             index = int(request.query.get("index", 0))
