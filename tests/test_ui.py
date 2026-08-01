@@ -217,6 +217,20 @@ def test_unidentified_values_say_so():
     print("✓ 未確認意義的數值會標明")
 
 
+def test_unsettable_unidentified_setting_is_hidden():
+    """mov_image_quality 在所有測過的組合下都不可調，值的意義也沒有證據。
+
+    留在畫面上就是一個按不動又看不懂的控制項。協定層的對應保留，
+    API 仍可讀寫 —— 隱藏的只是 UI。
+    """
+    js = _script(HTML.read_text())
+    body = js[js.index("const ORDER"):js.index("const SCROLL_IF_OVER")]
+    assert "'mov_image_quality'" not in body, "mov_image_quality 不該列在 UI"
+    src = (Path(__file__).resolve().parent.parent / "movie_settings.py").read_text()
+    assert '"mov_image_quality"' in src, "協定層的對應不該一起拿掉"
+    print("✓ 不可調且未識別的設定不列在 UI，但協定對應保留")
+
+
 def test_state_updates_do_not_rebuild_dom():
     """狀態廣播是 10Hz。無條件寫 innerHTML 會讓節點每 100ms 被銷毀重建 ——
     版面抖動、捲軸亂飄，按鈕在按下的瞬間被換掉所以按不到。實測踩過。

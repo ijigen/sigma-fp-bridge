@@ -440,7 +440,9 @@ function stepPos(d) {
 const ORDER = [
   ['exposure_mode',         '曝光模式'],
   ['__format',              '影像規格'],
-  ['mov_image_quality',     '影片畫質'],
+  // mov_image_quality 不列在 UI：實測相機在所有格式 / 大小 / 幀率組合下
+  // 都不開放調整它，值 1 / 2 的意義也沒有證據。顯示一個按不動又看不懂的
+  // 控制項只會造成困惑。它仍可透過 API 讀寫，協定層的對應也留著。
   ['__iso',                 'ISO'],
   ['__aperture',            '光圈'],
   ['__shutter',             '快門'],

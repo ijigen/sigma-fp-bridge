@@ -652,8 +652,10 @@ left unlabelled rather than guessed at.
 established. The method that identified `record_format` — set each value, record
 a clip, look at what came out — could not be run: the camera reported no settable
 values for it in MOV and CinemaDNG, at UHD and FHD, and at 23.98, 29.97 and
-59.94 fps. Whatever gates it was not found. It is exposed with its raw numbers
-and marked as unidentified rather than hidden, since the camera does report it.
+59.94 fps. Whatever gates it was not found. It is hidden from the UI — a control that cannot be
+changed and whose values mean nothing to the reader is just clutter — but the
+protocol mapping and API access stay, so anyone who works out what gates it can
+pick up where this left off.
 
 **Judge a recording by `CaptStatus` and `ImageDBTail`, never by the movie file
 info.** `SigmaGetMovieFileInfo` describes MOV only, so it is blind to CinemaDNG,
