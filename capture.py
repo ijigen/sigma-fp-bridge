@@ -37,9 +37,10 @@ PictFileInfo2 —— 回報的檔名與大小與前一張完全相同。判斷�
 """
 from __future__ import annotations
 
+import os
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -97,6 +98,19 @@ def _text(value) -> str:
     return "" if value is None else str(value)
 
 
+def safe_filename(name: str, fallback: str = "capture") -> str:
+    """相機給的檔名不能直接拿去接路徑。
+
+    解錯版面時這裡曾經變成 "/DCIM/100SIGMA"，寫檔就跑到根目錄去了。就算
+    版面是對的，檔名仍是裝置送來的資料 —— 含 "/" 或 ".." 的話會寫到
+    save_dir 之外。只取最後一段，不合用就退回 fallback。
+    """
+    base = os.path.basename(name.replace("\\", "/")).strip()
+    if not base or base in (".", "..") or base.startswith("."):
+        return fallback
+    return base
+
+
 @dataclass
 class CapturedImage:
     filename: str
@@ -105,14 +119,20 @@ class CapturedImage:
     width: int
     height: int
     size: int
+    address: int = 0
     data: bytes | None = None
+    #: 同一次拍攝產生的其他檔案（DNGAndJPEG 會有兩個）
+    companions: list["CapturedImage"] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        out = {
             "filename": self.filename, "path": self.path_name,
             "format": self.format, "width": self.width, "height": self.height,
             "size": self.size, "downloaded": self.data is not None,
         }
+        if self.companions:
+            out["companions"] = [c.as_dict() for c in self.companions]
+        return out
 
 
 def _status(cam, image_id: int = 0):
@@ -183,6 +203,72 @@ def wait_until_done(cam, image_id: int,
     raise CaptureError(f"等待影像產生逾時（影像 {image_id}，最後狀態 {last}）")
 
 
+#: 記錄本體的固定欄位長度（address/size/兩個字串偏移/格式/寬高）
+_RECORD_BYTES = 24
+
+
+def _u32(raw: bytes, off: int) -> int:
+    return int.from_bytes(raw[off:off + 4], "little")
+
+
+def _u16(raw: bytes, off: int) -> int:
+    return int.from_bytes(raw[off:off + 2], "little")
+
+
+def _cstring(raw: bytes, off: int) -> str:
+    if not 0 <= off < len(raw):
+        return ""
+    end = raw.find(b"\x00", off)
+    return raw[off:end if end >= 0 else len(raw)].decode("ascii", "replace")
+
+
+def parse_pict_file_info(raw: bytes) -> list["CapturedImage"]:
+    """解 SigmaGetPictFileInfo2 的 payload。實機位元組反推，非官方文件。
+
+        0   uint32  DataLength（payload 長度 - 4）
+        4   uint32  FileCount
+        8   uint32  RecordOffset[FileCount]   ← 偏移表，長度隨檔案數變動
+        然後每筆記錄：
+            +0   uint32  FileAddress
+            +4   uint32  FileSize
+            +8   uint32  PathNameOffset   （從 payload 開頭算的絕對位置）
+            +12  uint32  FileNameOffset
+            +16  char[4] PictureFormat
+            +20  uint16  SizeX
+            +22  uint16  SizeY
+
+    sigma-ptpy 把開頭寫死成 12 個未知位元組，那只有 FileCount == 1 時才對 ——
+    那時偏移表只有一項，記錄剛好落在偏移 12。DNGAndJPEG 有兩個檔案，偏移表
+    變成 8 bytes、記錄從 16 開始，所有欄位往後位移 4：FileAddress 就被讀成
+    FileSize。實測那個「1,646,170,112 bytes 的檔案」其實是 DNG 的位址。
+
+    拍攝結果被釋放之後相機只回 8 bytes 的空殼，這時回空清單。
+    """
+    if len(raw) < 12:
+        return []
+    count = _u32(raw, 4)
+    if not 0 < count < 16:          # 檔案數不合理就當作沒解對，別硬湊
+        return []
+    out: list[CapturedImage] = []
+    for i in range(count):
+        table = 8 + i * 4
+        if table + 4 > len(raw):
+            break
+        rec = _u32(raw, table)
+        if rec + _RECORD_BYTES > len(raw):
+            break
+        out.append(CapturedImage(
+            filename=_cstring(raw, _u32(raw, rec + 12)),
+            path_name=_cstring(raw, _u32(raw, rec + 8)),
+            format=_cstring(raw, rec + 16),
+            width=_u16(raw, rec + 20),
+            height=_u16(raw, rec + 22),
+            size=_u32(raw, rec + 4),
+            address=_u32(raw, rec),
+        ))
+    return out
+
+
 def pict_file_info_raw(cam) -> bytes:
     """發 SigmaGetPictFileInfo2 取回未經解析的原始位元組。
 
@@ -201,14 +287,12 @@ def pict_file_info_raw(cam) -> bytes:
     return bytes(cam.recv(ptp).Data)
 
 
-def download(cam, info) -> bytes:
+def download(cam, address: int, total: int) -> bytes:
     """把相機緩衝區裡的影像分塊抓下來。
 
     Raises:
         CaptureError: 相機提前停止回傳資料。
     """
-    total = int(info.FileSize)
-    address = int(info.FileAddress)
     out = bytearray()
     while len(out) < total:
         want = min(CHUNK_BYTES, total - len(out))
@@ -255,38 +339,41 @@ def capture(cam, save_dir: Path | None = None,
 
     _step("get_pict_file_info2")
     try:
-        info = cam.get_pict_file_info2()
+        raw = pict_file_info_raw(cam)
     except Exception as e:
         raise CaptureError(f"取得影像資訊失敗：{e}") from e
 
-    image = CapturedImage(
-        filename=_text(getattr(info, "FileName", "")) or "capture",
-        path_name=_text(getattr(info, "PathName", "")),
-        format=_text(getattr(info, "PictureFormat", "")),
-        width=int(getattr(info, "SizeX", 0) or 0),
-        height=int(getattr(info, "SizeY", 0) or 0),
-        size=int(getattr(info, "FileSize", 0) or 0),
-    )
+    files = parse_pict_file_info(raw)
+    if not files:
+        raise CaptureError(
+            f"相機沒有回報影像資訊（payload {len(raw)} bytes）—— "
+            "拍攝結果可能已經被釋放了")
+
+    # 第一筆當主檔。DNGAndJPEG 的順序是 DNG 在前、JPEG 在後。
+    image = files[0]
+    image.companions = files[1:]
+
     try:
-        if fetch and image.size:
-            if image.size > MAX_IMAGE_BYTES:
+        for one in files:
+            if not (fetch and one.size):
+                continue
+            if one.size > MAX_IMAGE_BYTES:
                 # 這個值不可能是真的。硬拉下去會讓相機不再回應，所以停手。
-                # 檢查放在這裡而不是更早：擋下載就夠了，而拍攝本身要能完成，
-                # 資料庫項目也才會在 finally 裡釋放掉。fetch=0 因此仍可用來
-                # 在這個模式下取樣 —— 破解版面就是靠它拿到原始位元組的。
                 raise CaptureError(
-                    f"影像資訊看起來沒解對：FileSize 回報 {image.size:,} bytes，"
-                    f"上限是 {MAX_IMAGE_BYTES:,}。"
-                    "已知 DNGAndJPEG 模式會這樣 —— 改用 DNG 或 JPEG 單一格式。")
-            _step(f"download({image.size:,} bytes)")
-            image.data = download(cam, info)
+                    f"影像資訊看起來沒解對：{one.filename} 的 FileSize 回報 "
+                    f"{one.size:,} bytes，上限是 {MAX_IMAGE_BYTES:,}。")
+            _step(f"download({one.filename} {one.size:,} bytes)")
+            one.data = download(cam, one.address, one.size)
             if save_dir is not None:
                 save_dir.mkdir(parents=True, exist_ok=True)
-                (save_dir / image.filename).write_bytes(image.data)
+                one.filename = safe_filename(one.filename)
+                (save_dir / one.filename).write_bytes(one.data)
     finally:
         # 一定要釋放，即使下載失敗 —— 沒釋放的話下一次拍攝快門不會動作。
-        _step("clear_slot")
+        # 用 release_pending 而不是只清 image_id：DNGAndJPEG 一次拍攝會建立
+        # 兩筆項目，只清一筆的話剩下那筆照樣擋住後續拍攝。
+        _step("release")
         if release:
-            clear_slot(cam, image_id)
+            release_pending(cam)
         _step(None)
     return image

@@ -20,6 +20,79 @@ except ImportError as e:
 
 import fake_camera
 
+#: 實機抓到的 SigmaGetPictFileInfo2 payload（fp 韌體 5.02）。
+#: 手寫的假資料只能證明解析器跟我對版面的理解一致；這兩份能證明它跟相機一致。
+REAL_SINGLE = bytes.fromhex(
+    "38000000010000000c0000008008505d"
+    "59268c00240000002d0000004a504700"
+    "7017a00f3130305349474d4100534449"
+    "4d303030352e4a504700" "0100")
+REAL_DOUBLE = bytes.fromhex(
+    "6c00000002000000100000004000000"
+    "0" "00901e62a2e9b50128000000310000"
+    "00444e4700b017ca0f3130305349474d41"
+    "005344494d303030362e444e4700000"
+    "0" "8008505d215a8a005800000061000000"
+    "4a504700" "7017a00f3130305349474d41"
+    "005344494d303030362e4a504700" "0000")
+
+
+def _payload_with_size(size, name="SDIM0001.JPG", fmt="JPG"):
+    """組一份單檔 payload，大小可指定 —— 用來重現「解錯版面」的後果。"""
+    import struct
+    head, strings = 12, b""
+    string_base = head + 24
+    path_off = string_base
+    strings += b"/DCIM/100SIGMA\x00"
+    name_off = string_base + len(strings)
+    strings += name.encode() + b"\x00"
+    rec = struct.pack("<IIII", 0x1000, size, path_off, name_off)
+    rec += fmt.encode().ljust(4, b"\x00") + struct.pack("<HH", 6000, 4000)
+    body = struct.pack("<II", 1, head) + rec + strings
+    return struct.pack("<I", len(body)) + body
+
+
+def test_parses_a_real_single_file_payload():
+    """實機的純 JPEG payload：一個檔案，記錄落在偏移 12。"""
+    files = capture.parse_pict_file_info(REAL_SINGLE)
+    assert len(files) == 1, files
+    one = files[0]
+    assert one.filename == "SDIM0005.JPG", one.filename
+    assert one.path_name == "100SIGMA", one.path_name
+    assert one.format == "JPG" and (one.width, one.height) == (6000, 4000)
+    assert one.size == 9_184_857, one.size
+    assert one.address == 1_565_526_144, one.address
+    print(f"✓ 單檔 payload：{one.filename} {one.size:,} bytes")
+
+
+def test_parses_a_real_two_file_payload():
+    """實機的 DNGAndJPEG payload：兩個檔案，偏移表 8 bytes，記錄從 16 開始。
+
+    這正是 sigma-ptpy 解錯的那個版面。它把開頭寫死成 12 個未知位元組，
+    於是把 DNG 的 FileAddress（1,646,170,112）讀成了 FileSize —— 拿那個值
+    去下載，相機就不再回應。
+    """
+    files = capture.parse_pict_file_info(REAL_DOUBLE)
+    assert len(files) == 2, files
+    dng, jpg = files
+    assert dng.filename == "SDIM0006.DNG" and dng.format == "DNG"
+    assert dng.size == 28_699_042, dng.size
+    assert dng.address == 1_646_170_112, dng.address
+    assert (dng.width, dng.height) == (6064, 4042), (dng.width, dng.height)
+    assert jpg.filename == "SDIM0006.JPG" and jpg.format == "JPG"
+    assert jpg.size == 9_067_041, jpg.size
+    assert (jpg.width, jpg.height) == (6000, 4000)
+    # 被誤讀成大小的那個值其實是 DNG 的位址
+    assert dng.address == 1_646_170_112 and dng.size < capture.MAX_IMAGE_BYTES
+    print(f"✓ 雙檔 payload：{dng.filename} {dng.size:,} + {jpg.filename} {jpg.size:,}")
+
+
+def test_an_emptied_payload_parses_to_nothing():
+    """項目釋放之後實機只回 8 bytes 的空殼，不能當成一個檔案。"""
+    assert capture.parse_pict_file_info(bytes.fromhex("0400000000000000")) == []
+    assert capture.parse_pict_file_info(b"") == []
+    print("✓ 空殼 payload 解成空清單")
+
 
 def test_capture_downloads_the_whole_image():
     """分塊下載必須湊齊 FileSize 宣告的長度。"""
@@ -161,23 +234,16 @@ def test_stale_entries_are_released_before_shooting():
 
 
 def test_an_absurd_file_size_is_refused_before_downloading():
-    """迴歸：DNGAndJPEG 模式下 PictFileInfo2 回報 1,646,170,112 bytes。
+    """迴歸：解錯版面時 FileSize 會變成 1,646,170,112（其實是 DNG 的位址）。
 
-    download() 照單全收，拿著一個同樣沒解對的位址去要 1.6 GB，相機從此不再
+    download() 照單全收，拿著同樣沒解對的位址去要 1.6 GB，相機從此不再
     回應 —— 整座橋停擺，要重啟才活得過來。實測那次 RSS 完全沒成長，代表
     連第一塊都沒拿到，不是「下載很慢」而是請求本身把相機打死了。
 
-    這種值不可能是真的，所以在送出請求之前就要停手。
+    版面已經修好，但這道防線要留著：下一個沒見過的模式仍可能解不對。
     """
     cam = fake_camera.FakeCamera()
-    original = cam.get_pict_file_info2
-
-    def absurd():
-        info = original()
-        info.FileSize = 1_646_170_112
-        return info
-
-    cam.get_pict_file_info2 = absurd
+    cam._pict_payload = lambda: _payload_with_size(1_646_170_112)
     before = cam.count("pict_chunk")
     try:
         capture.capture(cam)
@@ -193,18 +259,11 @@ def test_an_absurd_file_size_is_refused_before_downloading():
 def test_shooting_without_fetching_works_even_with_a_bad_file_size():
     """破解未知版面要靠這條路：拍得成、不下載、項目正常釋放。
 
-    大小檢查只擋下載。擋在更早的話，DNGAndJPEG 模式連拍都拍不了，
-    也就拿不到原始位元組可以分析。
+    大小檢查只擋下載。擋在更早的話，版面不明的模式連拍都拍不了，
+    也就拿不到原始位元組可以分析 —— DNGAndJPEG 就是這樣解出來的。
     """
     cam = fake_camera.FakeCamera()
-    original = cam.get_pict_file_info2
-
-    def absurd():
-        info = original()
-        info.FileSize = 1_646_170_112
-        return info
-
-    cam.get_pict_file_info2 = absurd
+    cam._pict_payload = lambda: _payload_with_size(1_646_170_112)
     img = capture.capture(cam, fetch=False)
     assert img.data is None and img.size == 1_646_170_112
     assert cam.shutter_fires == 1, "沒有真的拍"
@@ -212,12 +271,54 @@ def test_shooting_without_fetching_works_even_with_a_bad_file_size():
     print("✓ fetch=0 在版面未知的模式下仍可安全取樣")
 
 
-def test_a_normal_file_size_still_downloads():
-    """上面的檢查不能把正常的 27 MB DNG 也擋掉。"""
+def test_dng_and_jpeg_downloads_both_files_and_releases_both_entries():
+    """DNGAndJPEG 一次拍攝產生兩個檔案、兩筆資料庫項目（實測 head/tail 6→8）。
+
+    只釋放 tail_before 那一筆的話，剩下那筆會擋住之後每一次拍攝的快門。
+    """
+    import tempfile
     cam = fake_camera.FakeCamera()
-    assert len(cam.pict_data) < capture.MAX_IMAGE_BYTES
-    assert capture.capture(cam).data, "正常大小被誤擋"
-    print(f"✓ 正常大小照常下載（上限 {capture.MAX_IMAGE_BYTES:,} bytes）")
+    cam.image_quality = "DNGAndJPEG"
+    with tempfile.TemporaryDirectory() as d:
+        img = capture.capture(cam, Path(d))
+        assert len(img.companions) == 1, f"沒有回報第二個檔案：{img.companions}"
+        both = [img] + img.companions
+        assert [f.format for f in both] == ["DNG", "JPG"], [f.format for f in both]
+        for f in both:
+            assert f.data, f"{f.filename} 沒下載"
+            assert (Path(d) / f.filename).read_bytes() == f.data
+        assert "companions" in img.as_dict()
+    assert cam.db_head == cam.db_tail, f"項目沒清乾淨：{cam.db_head}/{cam.db_tail}"
+
+    # 兩筆都釋放了，下一張才拍得成
+    before = cam.shutter_fires
+    assert capture.capture(cam, fetch=False) is not None
+    assert cam.shutter_fires == before + 1, "殘留的第二筆擋住了下一次拍攝"
+    print("✓ DNGAndJPEG 兩個檔案都取回，兩筆項目都釋放")
+
+
+def test_a_camera_supplied_filename_cannot_escape_the_save_directory():
+    """檔名是裝置送來的資料，不能直接接路徑。
+
+    版面解錯時它實際變成過 "/DCIM/100SIGMA"，寫檔就跑到根目錄去了。
+    """
+    import tempfile
+    assert capture.safe_filename("/DCIM/100SIGMA") == "100SIGMA"
+    assert capture.safe_filename("../../etc/passwd") == "passwd"
+    assert capture.safe_filename("") == "capture"
+    assert capture.safe_filename("..") == "capture"
+
+    cam = fake_camera.FakeCamera()
+    cam._pict_payload = lambda: _payload_with_size(
+        len(cam.pict_data), name="../../escaped.JPG")
+    with tempfile.TemporaryDirectory() as d:
+        root = Path(d) / "photos"
+        img = capture.capture(cam, root)
+        written = root / img.filename
+        assert written.exists(), f"沒寫進去：{written}"
+        assert written.resolve().parent == root.resolve(), "寫到目錄外面了"
+        assert not (Path(d).parent / "escaped.JPG").exists()
+    print("✓ 相機給的檔名不會寫出指定目錄")
 
 
 def test_capture_releases_the_entry_even_without_downloading():

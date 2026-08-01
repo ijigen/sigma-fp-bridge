@@ -863,33 +863,60 @@ thumbnail with the full-size image in a SubIFD, which is ordinary DNG layout.
 `ImageQuality` is another bitmask: `JPEGFine` 2, `JPEGNormal` 4, `JPEGBasic` 8,
 `DNG` 16, `DNGAndJPEG` 18 (16 | 2).
 
-**`DNGAndJPEG` does not work over PTP** — use `DNG` or a JPEG grade on its own.
-The shot itself is fine; what breaks is reading it back. `PictFileInfo2` returns
-a `FileSize` of 1,646,170,112 bytes for that mode, and `FileAddress` is presumably
-just as wrong, because sigma-ptpy's fixed layout — twelve unknown bytes, then
-address, size, path offset — evidently is not what the camera sends when a shot
-produces two files. Asking for 1.6 GB at a bogus address stops the camera
-responding entirely: memory never grew during the attempt, so not even the first
-chunk arrived.
+#### PictFileInfo2 really has a file table
 
-`capture()` now refuses any `FileSize` over 256 MB (about ten times the largest
-real still) instead of sending that request, so the mode fails with a message
-rather than taking the bridge down. `GET /api/dump/pict` returns the raw
-`PictFileInfo2` bytes next to the current schema's reading of them, which is what
-decoding the real layout would start from.
+sigma-ptpy models the reply as twelve unknown bytes followed by address, size
+and path offset. That is right only by accident. The real payload starts with a
+**count and an offset table**, so the header grows with the number of files:
 
-**Movies have not been pulled back yet** — which is not the same as knowing they
-can't be. The SDK gives them their own pair of opcodes, `SigmaGetMovieFileInfo`
-(0x9036) and `SigmaGetPartialMovieFile` (0x9037); sigma-ptpy wraps neither, and
-0x9037's parameters are undocumented, so that route needs the same
-reverse-engineering `DataGroupMovie` did. 0x9036 does report a filename and size
-over a raw transfer, but no address to read from, so there is nothing to feed
-0x9037 with yet.
+```
+0   uint32   DataLength          (payload length - 4)
+4   uint32   FileCount
+8   uint32   RecordOffset[FileCount]     <- table, absolute from payload start
+    each record:
+      +0   uint32   FileAddress
+      +4   uint32   FileSize
+      +8   uint32   PathNameOffset       (absolute)
+      +12  uint32   FileNameOffset       (absolute)
+      +16  char[4]  PictureFormat
+      +20  uint16   SizeX
+      +22  uint16   SizeY
+```
 
-What has *not* been tried is the stills route on a movie. The documentation for
-`SigmaGetPictFileInfo2` and `SigmaGetBigPartialPictFile` says "image file" and
-never mentions stills specifically, so whether they report anything after a
-recording is an open question, not a settled no.
+With one file the table is a single entry, the record lands at offset 12, and the
+fixed twelve-byte guess happens to line up. `DNGAndJPEG` produces **two** files:
+the table becomes eight bytes, the first record starts at 16, and every field
+shifts by four. That is where the 1.6 GB came from — it is the DNG's
+`FileAddress` read as a size. Asking the camera for that many bytes at an equally
+wrong address is what stopped it responding.
+
+Real bytes from firmware 5.02, one file and two:
+
+```
+38000000 01000000 0c000000 | 8008505d 59268c00 24000000 2d000000 4a504700 7017a00f
+   len=56  count=1  rec@12 |  address     size    path=36   name=45    "JPG"  6000x4000
+
+6c000000 02000000 10000000 40000000 | ... two records at 16 and 64
+   len=108 count=2  rec@16   rec@64
+```
+
+The second sample decodes to `SDIM0006.DNG`, 28,699,042 bytes, 6064×4042 and
+`SDIM0006.JPG`, 9,067,041 bytes, 6000×4000 — the raw keeps the sensor border, the
+JPEG does not.
+
+**A shot in this mode also creates two database entries**, not one: head/tail went
+6 → 8. Releasing only the entry at `tail_before` leaves the other one pending,
+and a pending entry stops the shutter on every capture after it.
+
+So `capture()` parses the table, downloads every record, and releases the whole
+pending range. `DNGAndJPEG` returns both files; the DNG is the primary result and
+the JPEG comes back under `companions`. `GET /api/dump/pict` returns the raw
+payload if you want to check a mode this parser has not seen.
+
+One more thing that fell out of decoding this: the filename is data from the
+device, and it was being joined straight onto the save directory. A misparse
+turned it into `/DCIM/100SIGMA` and the write went to the root of the disk. It is
+now reduced to a basename before use.
 
 ### Live view
 

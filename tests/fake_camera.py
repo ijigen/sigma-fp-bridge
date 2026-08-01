@@ -67,6 +67,8 @@ class FakeCamera:
         self.db_tail = 0
         #: 真的曝光了幾次。測試用來分辨「拍成了」與「讀到上一張的殘留」
         self.shutter_fires = 0
+        #: 影像格式。DNGAndJPEG 時一次拍攝產生兩個檔案、兩筆資料庫項目。
+        self.image_quality = "JPEGFine"
         self.files: list = []
         # /api/dump/* 用的原始 IFD payload
         self.info5_raw = _sample_ifd([(658, 3, [5974, 11116])])
@@ -185,8 +187,47 @@ class FakeCamera:
 
     # -- DataGroupMovie：走 recv/send 的原始 opcode 路徑 ------------------
 
+    def _pict_payload(self):
+        """照實機的版面組 SigmaGetPictFileInfo2 的 payload。
+
+            uint32 DataLength / uint32 FileCount / uint32 RecordOffset[FileCount]
+            每筆記錄：address, size, pathOffset, nameOffset, format[4], w, h
+
+        釋放之後實機只回 8 bytes 的空殼，這裡照做 —— 「拍完就沒東西可報」
+        是解析器必須處理的狀況。
+        """
+        import struct
+        if self.db_head >= self.db_tail:
+            return struct.pack("<II", 4, 0)
+
+        n = max(1, self.shutter_fires)
+        files = [("DNG", len(self.pict_data) * 3, 6064, 4042, f"SDIM{n:04d}.DNG"),
+                 ("JPG", len(self.pict_data), 6000, 4000, f"SDIM{n:04d}.JPG")]
+        if self.image_quality != "DNGAndJPEG":
+            fmt = "DNG" if self.image_quality == "DNG" else "JPG"
+            files = [f for f in files if f[0] == fmt]
+
+        count = len(files)
+        head = 8 + count * 4
+        records, strings = b"", b""
+        string_base = head + count * 24
+        offsets = []
+        for fmt, size, w, h, name in files:
+            offsets.append(head + len(records))
+            path_off = string_base + len(strings)
+            strings += b"/DCIM/100SIGMA\x00"
+            name_off = string_base + len(strings)
+            strings += name.encode() + b"\x00"
+            records += struct.pack("<IIII", 0x1000, size, path_off, name_off)
+            records += fmt.encode().ljust(4, b"\x00") + struct.pack("<HH", w, h)
+        body = struct.pack("<I", count) + b"".join(
+            struct.pack("<I", o) for o in offsets) + records + strings
+        return struct.pack("<I", len(body)) + body
+
     def recv(self, ptp):
         self._tick("recv:" + ptp.OperationCode)
+        if ptp.OperationCode == "SigmaGetPictFileInfo2":
+            return types.SimpleNamespace(Data=self._pict_payload())
         if ptp.OperationCode == "SigmaGetCamDataGroupMovie":
             return types.SimpleNamespace(Data=self._encode_movie())
         raise RuntimeError(f"假相機不支援 {ptp.OperationCode}")
@@ -226,12 +267,15 @@ class FakeCamera:
             self.last_capture = "still"
             image_id = self.db_tail
             blocked = self.db_head < self.db_tail
-            self.db_tail += 1
-            if blocked:
-                self.entries[image_id] = CaptStatus.ImageGenFailed
-            else:
+            # DNGAndJPEG 一次拍攝產生兩個檔案，資料庫也是兩筆（實測 6→8）
+            produced = 2 if self.image_quality == "DNGAndJPEG" else 1
+            for k in range(produced):
+                self.entries[image_id + k] = (
+                    CaptStatus.ImageGenFailed if blocked
+                    else CaptStatus.ImageGenCompleted)
+            self.db_tail += produced
+            if not blocked:
                 self.shutter_fires += 1
-                self.entries[image_id] = CaptStatus.ImageGenCompleted
         elif data.CaptureMode in (CaptureMode.StartRecMovie,
                                   CaptureMode.StartRecMovieAF,
                                   CaptureMode.StopRecMovie):
@@ -286,8 +330,12 @@ class FakeCamera:
             PictureFormat=b"JPG\x00", SizeX=6000, SizeY=4000)
 
     def get_big_partial_pict_file(self, store_address, start_address, max_length):
+        # 緩衝區照請求的長度重複延伸 —— DNG 比 JPEG 大，兩者要能各自抓滿
         self._tick("pict_chunk")
-        chunk = self.pict_data[start_address:start_address + max_length]
+        buf = self.pict_data
+        while len(buf) < start_address + max_length:
+            buf += self.pict_data
+        chunk = buf[start_address:start_address + max_length]
         return types.SimpleNamespace(AcquiredSize=len(chunk), PartialData=chunk)
 
     def get_storage_ids(self):

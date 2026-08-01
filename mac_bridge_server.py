@@ -1509,15 +1509,19 @@ async def handle_capture(request: web.Request) -> web.Response:
     except Exception as e:
         return web.json_response({"error": f"{type(e).__name__}: {e}"}, status=502)
 
-    if save and image.data:
+    # DNGAndJPEG 一次拍攝會產生兩個檔案，兩個都要把擁有者改回使用者
+    written = [f for f in [image, *image.companions] if f.data]
+    if save and written:
         _restore_ownership(photos)
-        with suppress(Exception):
-            _restore_ownership(photos / image.filename)
+        for one in written:
+            with suppress(Exception):
+                _restore_ownership(photos / one.filename)
 
     out = image.as_dict()
     out["ok"] = True
-    if save and image.data:
+    if save and written:
         out["saved_to"] = str(photos / image.filename)
+        out["saved_files"] = [str(photos / one.filename) for one in written]
     return web.json_response(out)
 
 
