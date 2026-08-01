@@ -657,6 +657,16 @@ changed and whose values mean nothing to the reader is just clutter — but the
 protocol mapping and API access stay, so anyone who works out what gates it can
 pick up where this left off.
 
+**The camera rounds NTSC frame rates.** Writing 29.97 stores 30, and 59.94
+stores 60, while 23.98 and 25 are kept exactly — and 30 and 60 are not even in
+the list of legal rates the camera reports. What causes it is not known; a
+recording-standard switch in the body menu is the obvious suspect. The value is
+read back and the mismatch reported rather than passed off as success.
+
+**Aspect ratio, colour space and tone effect do nothing in CINE.** Written and
+discarded, like `shutter_speed`. They are marked stills-only and omitted from the
+movie schema.
+
 **Judge a recording by `CaptStatus` and `ImageDBTail`, never by the movie file
 info.** `SigmaGetMovieFileInfo` describes MOV only, so it is blind to CinemaDNG,
 and it also goes stale within a PTP session: after five consecutive clips it was

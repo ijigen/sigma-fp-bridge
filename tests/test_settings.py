@@ -272,6 +272,31 @@ def test_describe_hides_settings_for_other_mode():
     print(f"✓ describe 依模式過濾（拍照 {len(stills)} 項 / 錄影 {len(movie)} 項）")
 
 
+def test_readback_tolerance_is_tight_enough_for_frame_rates():
+    """回讀比對的容差只該吸收浮點誤差，不該容忍相機給了別的值。
+
+    實測踩過：寫 29.97 相機存成 30，差 0.1%，被 2% 的容差判定為相等，
+    於是「寫入沒生效」完全不會被報出來 —— 而 29.97 與 30 在影片裡
+    是 drop-frame 與否的差別。
+    """
+    assert not CS._roughly_equal(29.97, 30.0), "29.97 與 30 不該被當成相等"
+    assert not CS._roughly_equal(59.94, 60.0)
+    assert CS._roughly_equal(1 / 50, 0.02), "浮點表示誤差仍要吸收"
+    assert CS._roughly_equal(6400, 6400)
+    print("✓ 回讀容差夠緊，抓得出 29.97 被存成 30")
+
+
+def test_stills_only_settings_are_marked():
+    """實測在錄影模式下寫入無效的設定要標成 stills。"""
+    for name in ("aspect_ratio", "color_space", "tone_effect"):
+        assert CS.BY_NAME[name].applies_to == "stills", name
+        assert "錄影模式下寫入無效" in CS.BY_NAME[name].note, name
+    movie = {d["name"] for d in CS.describe(mode="movie")}
+    for name in ("aspect_ratio", "color_space", "tone_effect"):
+        assert name not in movie, f"{name} 不該出現在錄影模式"
+    print("✓ 錄影模式下無效的拍照設定已標記並排除")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

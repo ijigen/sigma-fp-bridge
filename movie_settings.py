@@ -65,7 +65,11 @@ MOVIE_SETTINGS: tuple[MovieSetting, ...] = (
                       "UHD / FHD 四種組合、以及多個幀率下都不開放調整它，"
                       "所以無法用『各錄一段比對產出』的方式判讀。"),
     MovieSetting("movie_resolution", 60, DT.UInt8, "int"),
-    MovieSetting("frame_rate", 61, DT.URational, "rational", "fps"),
+    MovieSetting("frame_rate", 61, DT.URational, "rational", "fps",
+                 note="⚠ 實測相機會把 NTSC 小數幀率取整：寫 29.97 存成 30、"
+                      "寫 59.94 存成 60，而 23.98 與 25 正常。30 / 60 甚至不在"
+                      "相機自己宣告的合法清單裡。原因未明，可能是機身選單裡"
+                      "有錄影標準（NTSC / PAL）之類的開關在管。"),
 )
 
 MOVIE_BY_NAME = {s.name: s for s in MOVIE_SETTINGS}

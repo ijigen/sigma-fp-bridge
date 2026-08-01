@@ -96,12 +96,18 @@ SETTINGS: tuple[Setting, ...] = (
             note="靜態 DNG 的位元深度。CinemaDNG 的深度看 cinema_dng_quality。"),
     Setting("resolution", 2, "Resolution", "enum", enum_cls=E.Resolution,
             applies_to="stills"),
-    Setting("aspect_ratio", 5, "AspectRatio", "enum", enum_cls=E.AspectRatio),
+    Setting("aspect_ratio", 5, "AspectRatio", "enum", enum_cls=E.AspectRatio,
+            applies_to="stills",
+            note="實測錄影模式下寫入無效（相機收下後不改變）。"),
 
     # ── 影像風格 ─────────────────────────────────────────────────────
     Setting("color_mode", 3, "ColorMode", "enum", enum_cls=E.ColorMode),
-    Setting("color_space", 3, "ColorSpace", "enum", enum_cls=E.ColorSpace),
-    Setting("tone_effect", 5, "ToneEffect", "enum", enum_cls=E.ToneEffect),
+    Setting("color_space", 3, "ColorSpace", "enum", enum_cls=E.ColorSpace,
+            applies_to="stills",
+            note="實測錄影模式下寫入無效。"),
+    Setting("tone_effect", 5, "ToneEffect", "enum", enum_cls=E.ToneEffect,
+            applies_to="stills",
+            note="實測錄影模式下寫入無效。"),
 
     # ── 驅動 ─────────────────────────────────────────────────────────
     Setting("drive_mode", 2, "DriveMode", "enum", enum_cls=E.DriveMode,
@@ -380,13 +386,19 @@ AUTO_OVERRIDE_HINTS = {
 }
 
 
+#: 比對回讀值時允許的相對誤差。只用來吸收浮點表示誤差，不是用來容忍
+#: 相機給了不同的值 —— 先前設 2% 的後果是：寫 29.97 相機存 30，
+#: 差 0.1% 被判定為相等，於是「寫入沒生效」完全不會被報出來。
+VALUE_EPSILON = 1e-6
+
+
 def _roughly_equal(a, b) -> bool:
     if a is None or b is None:
         return a is b
     if isinstance(a, (int, float)) and isinstance(b, (int, float)):
         if a == 0 or b == 0:
             return a == b
-        return abs(a - b) / max(abs(a), abs(b)) < 0.02
+        return abs(a - b) / max(abs(a), abs(b)) < VALUE_EPSILON
     return str(a) == str(b)
 
 
