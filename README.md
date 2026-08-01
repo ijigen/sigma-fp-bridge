@@ -783,18 +783,31 @@ under `~/.sigma_fp_bridge/photos/`. The download asks the camera for the buffer
 it holds after a Camera Control mode shot — `PictFileInfo2` for the address and
 size, then `GetBigPartialPictFile` in chunks.
 
-`dest_to_save` (DataGroup3) is a separate setting: `Null`, `InCamera` (card),
-`InComputer` ("drive in PC side") or `Both`. **It does not gate the download.**
-All four values were set, read back to confirm they applied, and shot once each:
-four captures, four different filenames, four different SHA-1s, all downloaded.
-`Null` and `InCamera` behave no differently from `InComputer` here.
+`dest_to_save` (DataGroup3) picks where a shot ends up: `Null` (0), `InCamera`
+(1), `InComputer` (2) or `Both` (3). Each value was written, read back to confirm
+it applied, and shot once; the card was then checked on the body, since PTP
+enumeration reports an empty card while the camera is in API mode.
 
-So the name is misleading from the host's point of view. Downloading is always
-"ask the camera for the buffer it is holding" — `PictFileInfo2` for the address
-and size, then `GetBigPartialPictFile`. What this setting plausibly controls is
-whether a copy *also* goes to the card, which is not observable over PTP while
-the camera is in API mode: object enumeration reports an empty card no matter
-what has been written.
+| value | card | host download |
+|---|---|---|
+| `Null` (0) | no | **yes** |
+| `InCamera` (1) | yes | **yes** |
+| `InComputer` (2) | no | **yes** |
+| `Both` (3) | yes | **yes** |
+
+The card column behaves exactly as the names promise, and the numbering looks
+like a bitmask: bit 0 writes the card, bit 1 nominates the computer.
+
+**The download works regardless — bit 1 included.** Fetching is always "ask the
+camera for the buffer it is holding after a Camera Control shot", and that buffer
+is there whether or not the host was named as a destination. So the setting is
+really a card switch as far as this bridge is concerned.
+
+Useful consequence: **to shoot tethered without consuming the card, set
+`dest_to_save` to `InComputer` or `Null`.** The image still comes back over USB;
+nothing is written to the card. The camera advances its file numbering either
+way, so a downloaded frame can be named `SDIM0008.JPG` with no such file on the
+card.
 
 > An earlier version of this section claimed three values had been tested and
 > each returned the same frame. The sameness *was* the bug — only the first of

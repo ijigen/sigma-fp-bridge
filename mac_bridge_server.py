@@ -1440,8 +1440,9 @@ async def handle_capture(request: web.Request) -> web.Response:
     """拍一張，並把影像抓回電腦。
 
     dest_to_save 不影響這裡拿不拿得到影像 —— 四個值（含 Null 與 InCamera）
-    都實測過，每個都拍成並下載成功。它決定的應該是要不要順便寫一份到
-    記憶卡，跟電腦端的下載無關。
+    都實測過，每個都拍成並下載成功。它控制的是要不要順便寫進記憶卡：
+    InCamera／Both 會寫，Null／InComputer 不寫（對卡驗證過）。想連機拍攝
+    又不佔卡就設 InComputer。
     """
     if not state.camera_connected:
         return web.json_response({"error": "not connected"}, status=503)

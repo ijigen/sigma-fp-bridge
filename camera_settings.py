@@ -111,9 +111,10 @@ SETTINGS: tuple[Setting, ...] = (
 
     # ── 連機拍攝 ─────────────────────────────────────────────────────
     Setting("dest_to_save", 3, "DestToSave", "enum", enum_cls=E.DestToSave,
-            note="拍下的影像存到哪裡：InCamera（記憶卡）／InComputer（傳到電腦）"
-                 "／Both。注意這個設定不影響 /api/capture 能不能把影像抓回來 ——"
-                 "四個值都實測過，含 Null 在內都下載得到。"),
+            note="控制拍下的影像要不要寫進記憶卡：InCamera／Both 會寫，"
+                 "Null／InComputer 不寫（實機對卡驗證過）。但四個值都不影響 "
+                 "/api/capture 能不能把影像抓回電腦 —— 下載讀的是相機的 buffer。"
+                 "要連機拍攝又不佔卡，設 InComputer 或 Null。"),
 
     # ── 驅動 ─────────────────────────────────────────────────────────
     Setting("drive_mode", 2, "DriveMode", "enum", enum_cls=E.DriveMode,
