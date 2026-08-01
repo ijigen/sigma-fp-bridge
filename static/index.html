@@ -481,12 +481,11 @@ const CHOICE_WHITELIST = {
 // 只有 M 模式能手動設的項目（實測：其他模式下寫入會被自動曝光覆蓋）
 const NEEDS_MANUAL = {shutter_speed: 1, shutter_angle: 1, aperture: 1};
 
+// 不在這裡過濾快門 —— 秒數與角度合併成一列之後，該顯示哪一個由
+// shutterRow() 決定。先前留著舊過濾的後果是：CINE 模式沒有 shutter_speed，
+// 而預設單位是「秒」，於是 shutter_angle 被濾掉，整列憑空消失。
 function visibleSettings() {
-  return (schema || []).filter(s => {
-    if (s.name === 'shutter_speed' && shutterUnit === 'angle') return false;
-    if (s.name === 'shutter_angle' && shutterUnit !== 'angle') return false;
-    return true;
-  });
+  return schema || [];
 }
 
 function labelFor(s, v) {

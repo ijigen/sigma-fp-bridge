@@ -145,6 +145,28 @@ def test_exposure_mode_shows_only_pasm():
     print("✓ 曝光模式只列 P/A/S/M（目前值不在名單時仍保留）")
 
 
+def test_shutter_row_never_disappears():
+    """快門列在四種組合下都必須有東西可顯示。
+
+    實際壞過：visibleSettings() 留著「單位不是角度就濾掉 shutter_angle」的
+    舊邏輯，而 CINE 模式沒有 shutter_speed，於是預設單位下兩個都被濾掉，
+    整列憑空消失。合併成一列之後，該顯示哪一個是 shutterRow 的職責。
+    """
+    js = _script(HTML.read_text())
+    body = js[js.index("function visibleSettings"):js.index("function labelFor")]
+    assert "shutter_angle" not in body and "shutter_speed" not in body, \
+        "visibleSettings() 不該再過濾快門"
+
+    for mode, available in [("CINE", {"shutter_angle"}),
+                            ("STILL", {"shutter_speed", "shutter_angle"})]:
+        for unit in ("time", "angle"):
+            has_speed = "shutter_speed" in available
+            use_angle = unit == "angle" or not has_speed
+            active = "shutter_angle" if use_angle else "shutter_speed"
+            assert active in available, f"{mode} + {unit} 會顯示不存在的 {active}"
+    print("✓ 快門列在 CINE / STILL × 秒 / 角度 都有內容")
+
+
 def test_state_updates_do_not_rebuild_dom():
     """狀態廣播是 10Hz。無條件寫 innerHTML 會讓節點每 100ms 被銷毀重建 ——
     版面抖動、捲軸亂飄，按鈕在按下的瞬間被換掉所以按不到。實測踩過。
