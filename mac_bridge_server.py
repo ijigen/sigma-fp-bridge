@@ -47,6 +47,7 @@ from zeroconf.asyncio import AsyncZeroconf
 
 # 引入 PoC 裡的 patch 跟基礎 helpers
 sys.path.insert(0, str(Path(__file__).parent))
+import capture
 import movie_settings
 import recording
 from ifd import parse_ifd, to_json
@@ -1416,6 +1417,42 @@ async def _do_record(action: str, request: web.Request) -> web.Response:
     return web.json_response({"error": f"unknown action: {action}"}, status=404)
 
 
+async def handle_capture(request: web.Request) -> web.Response:
+    """拍一張，並把影像抓回電腦。
+
+    要真的拿到影像，相機的 dest_to_save 必須是 InComputer 或 Both ——
+    設成 InCamera 的話檔案只會寫進記憶卡，這裡抓不到。
+    """
+    if not state.camera_connected:
+        return web.json_response({"error": "not connected"}, status=503)
+    save = request.query.get("save", "1") not in ("0", "false", "no")
+    autofocus = request.query.get("af", "0") in ("1", "true", "yes")
+    fetch = request.query.get("fetch", "1") not in ("0", "false", "no")
+
+    photos = STATE_DIR / "photos"
+    try:
+        image = await worker.call(
+            lambda: capture.capture(state.camera, photos if save else None,
+                                    autofocus=autofocus, fetch=fetch),
+            priority=Priority.CONTROL,
+        )
+    except capture.CaptureError as e:
+        return web.json_response({"error": str(e)}, status=502)
+    except Exception as e:
+        return web.json_response({"error": f"{type(e).__name__}: {e}"}, status=502)
+
+    if save and image.data:
+        _restore_ownership(photos)
+        with suppress(Exception):
+            _restore_ownership(photos / image.filename)
+
+    out = image.as_dict()
+    out["ok"] = True
+    if save and image.data:
+        out["saved_to"] = str(photos / image.filename)
+    return web.json_response(out)
+
+
 async def handle_probe_movie(request: web.Request) -> web.Response:
     """把單一 tag 寫進 DataGroupMovie，並回報前後的完整內容。
 
@@ -1656,6 +1693,7 @@ def make_app() -> web.Application:
     app.router.add_get("/api/settings", handle_settings_get)
     app.router.add_post("/api/settings", handle_settings_post)
     app.router.add_get("/api/dump/{which}", handle_dump)
+    app.router.add_post("/api/capture", handle_capture)
     app.router.add_post("/api/probe/movie", handle_probe_movie)
     app.router.add_post("/api/record/{action}", handle_record)
     app.router.add_get("/api/record/{action}", handle_record)

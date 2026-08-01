@@ -57,6 +57,8 @@ class FakeCamera:
         self._session = 1
         self._transaction = 1
         self.recording = False
+        self.pict_data = b"\xff\xd8" + b"IMAGE" * 3000 + b"\xff\xd9"
+        self.last_capture = "movie"
         self.db_tail = 0
         self.files: list = []
         # /api/dump/* 用的原始 IFD payload
@@ -210,6 +212,14 @@ class FakeCamera:
     def snap_command(self, data):
         self._tick("snap:" + data.CaptureMode.name)
         from sigma_ptpy.enum import CaptureMode
+        if data.CaptureMode in (CaptureMode.GeneralCapt, CaptureMode.NonAFCapt,
+                                CaptureMode.StartCap):
+            self.last_capture = "still"
+            self.db_tail += 1
+        elif data.CaptureMode in (CaptureMode.StartRecMovie,
+                                  CaptureMode.StartRecMovieAF,
+                                  CaptureMode.StopRecMovie):
+            self.last_capture = "movie"
         if data.CaptureMode in (CaptureMode.StartRecMovie, CaptureMode.StartRecMovieAF):
             self.recording = True
         elif data.CaptureMode == CaptureMode.StopRecMovie:
@@ -222,10 +232,28 @@ class FakeCamera:
             self.recording = False
 
     def get_cam_capt_status(self, image_id=0):
+        # 依最後一次拍的是靜態還是影片回報 —— 真相機也是這樣，
+        # 固定回同一個狀態會讓拍照那條路永遠等到逾時。
         from sigma_ptpy.enum import CaptStatus
+        status = (CaptStatus.ImageGenCompleted if self.last_capture == "still"
+                  else CaptStatus.MovieGenCompleted)
         return types.SimpleNamespace(
             ImageId=image_id, ImageDBHead=0, ImageDBTail=self.db_tail,
-            CaptStatus=CaptStatus.MovieGenCompleted, DestToSave=None)
+            CaptStatus=status, DestToSave=None)
+
+    # -- 連機拍攝 -------------------------------------------------------
+
+    def get_pict_file_info2(self):
+        self._tick("pict_info")
+        return types.SimpleNamespace(
+            FileAddress=0x1000, FileSize=len(self.pict_data),
+            PathName="/DCIM/100SIGMA", FileName="SDIM0001.JPG",
+            PictureFormat="JPG", SizeX=6000, SizeY=4000)
+
+    def get_big_partial_pict_file(self, store_address, start_address, max_length):
+        self._tick("pict_chunk")
+        chunk = self.pict_data[start_address:start_address + max_length]
+        return types.SimpleNamespace(AcquiredSize=len(chunk), PartialData=chunk)
 
     def get_storage_ids(self):
         # 照 ptpy 實際行為：直接回傳陣列，不是包一層的物件。

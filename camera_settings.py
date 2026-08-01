@@ -109,6 +109,11 @@ SETTINGS: tuple[Setting, ...] = (
             applies_to="stills",
             note="實測錄影模式下寫入無效。"),
 
+    # ── 連機拍攝 ─────────────────────────────────────────────────────
+    Setting("dest_to_save", 3, "DestToSave", "enum", enum_cls=E.DestToSave,
+            note="拍下的影像存到哪裡：InCamera（記憶卡）／InComputer（傳到電腦）"
+                 "／Both。InComputer 就是所謂的連機拍攝。"),
+
     # ── 驅動 ─────────────────────────────────────────────────────────
     Setting("drive_mode", 2, "DriveMode", "enum", enum_cls=E.DriveMode,
             applies_to="stills"),

@@ -776,6 +776,27 @@ is why ranges are read from the camera rather than tabulated.
   Change one setting on the body (frame rate, record format), dump again, and
   whichever tag moved is that setting.
 
+### Tethered capture
+
+`dest_to_save` (DataGroup3) chooses where a photo goes: `InCamera`, `InComputer`
+or `Both`. With it on `InComputer` or `Both`, `POST /api/capture` takes a frame
+and pulls the image back over USB, saving it under `~/.sigma_fp_bridge/photos/`.
+
+```bash
+curl -X POST 'http://localhost:8765/api/capture'            # shoot and download
+curl -X POST 'http://localhost:8765/api/capture?fetch=0'    # shoot only
+curl -X POST 'http://localhost:8765/api/capture?af=1'       # autofocus first
+```
+
+Autofocus is off by default: this project drives focus over PTP, and letting the
+camera focus before the frame would discard the position you set.
+
+**Movies cannot be pulled back this way.** `SigmaGetPartialMovieFile` (0x9037)
+exists as an opcode but sigma-ptpy does not wrap it and its parameters are
+undocumented, so it needs the same reverse-engineering `DataGroupMovie` did.
+`SigmaGetMovieFileInfo` reports a file size but no address to read from, so there
+is nothing to build on yet.
+
 ### Live view
 
 ```
