@@ -1212,7 +1212,16 @@ async def _do_record(action: str, request: web.Request) -> web.Response:
                 for e in result["new"]
             ],
             "movie_info": result["movie_info"],
+            "status_before": result["status_before"],
+            "status_after": result["status_after"],
+            "produced_something": result["produced_something"],
         })
+
+    if action == "status":
+        info = await worker.call(
+            lambda: recording.capture_status(state.camera), priority=Priority.STATUS
+        )
+        return web.json_response(info)
 
     if action == "movie_info":
         info = await worker.call(

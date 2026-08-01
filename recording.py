@@ -68,6 +68,40 @@ def stop(cam) -> None:
     cam.snap_command(SnapCommand(CaptureMode=CaptureMode.StopRecMovie, CaptureAmount=1))
 
 
+def capture_status(cam, image_id: int = 0) -> dict[str, Any]:
+    """相機自己回報的拍攝狀態。
+
+    這是判斷「剛才到底錄成了沒」唯一可靠的訊號：
+      - CaptStatus 會走到 MovieGenCompleted，或停在 BufferFull / Failed /
+        Interrupted 之類的失敗狀態。
+      - ImageDBTail 是影像資料庫的尾端，錄成一段就會前進 —— 而且不分格式，
+        CinemaDNG 也算，這點 SigmaGetMovieFileInfo 做不到（它只描述 MOV）。
+    """
+    try:
+        st = cam.get_cam_capt_status(image_id)
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+    status = getattr(st, "CaptStatus", None)
+    return {
+        "status": getattr(status, "name", str(status)),
+        "status_code": getattr(status, "value", None),
+        "image_id": getattr(st, "ImageId", None),
+        "db_head": getattr(st, "ImageDBHead", None),
+        "db_tail": getattr(st, "ImageDBTail", None),
+        "dest_to_save": str(getattr(st, "DestToSave", None)),
+    }
+
+
+#: 走到這些狀態就不用再等了
+_TERMINAL_STATUS = {
+    "MovieGenCompleted", "ImageGenCompleted", "ImageDataStorageCompleted",
+    "ShootSuccess", "Cleared",
+}
+_FAILED_STATUS = {
+    "BufferFull", "Failed", "ImageGenFailed", "Interrupted", "AFFailed", "CWBFailed",
+}
+
+
 def movie_file_info_raw(cam) -> bytes:
     """發 SigmaGetMovieFileInfo (0x9036)，取回最近一段影片的資訊。
 
@@ -158,6 +192,8 @@ def record_clip(cam, seconds: float = 1.5) -> dict[str, Any]:
         # 標準 PTP 列舉不見得能用 —— 還是要錄，改看 Sigma 自己的影片資訊
         before, listing_works = set(), False
 
+    status_before = capture_status(cam)
+
     start(cam)
     try:
         time.sleep(max(0.2, seconds))
@@ -179,10 +215,30 @@ def record_clip(cam, seconds: float = 1.5) -> dict[str, Any]:
     else:
         time.sleep(2.0)
 
+    # 等相機把檔案產生完 —— 這是唯一不分格式都有效的完成訊號
+    status_after = capture_status(cam)
+    deadline = time.monotonic() + 20
+    while time.monotonic() < deadline:
+        name = status_after.get("status")
+        if name in _TERMINAL_STATUS or name in _FAILED_STATUS or "error" in status_after:
+            break
+        time.sleep(0.5)
+        status_after = capture_status(cam)
+
+    tail_before = status_before.get("db_tail")
+    tail_after = status_after.get("db_tail")
+    produced = (
+        bool(new)
+        or (tail_before is not None and tail_after is not None and tail_after != tail_before)
+    )
+
     return {
         "before": len(before),
         "seconds": seconds,
         "new": new,
         "listing_supported": listing_works,
         "movie_info": describe_last_movie(cam),
+        "status_before": status_before,
+        "status_after": status_after,
+        "produced_something": produced,
     }

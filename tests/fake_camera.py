@@ -57,6 +57,7 @@ class FakeCamera:
         self._session = 1
         self._transaction = 1
         self.recording = False
+        self.db_tail = 0
         self.files: list = []
         # /api/dump/* 用的原始 IFD payload
         self.info5_raw = _sample_ifd([(658, 3, [5974, 11116])])
@@ -217,7 +218,14 @@ class FakeCamera:
                 n = len(self.files) + 1
                 name = f"CLIP{n:04d}.MOV" if self.movie.get(50) == 1 else f"A{n:03d}_C001.DNG"
                 self.files.append((100 + n, name, 0x300a, 1024 * n))
+                self.db_tail += 1
             self.recording = False
+
+    def get_cam_capt_status(self, image_id=0):
+        from sigma_ptpy.enum import CaptStatus
+        return types.SimpleNamespace(
+            ImageId=image_id, ImageDBHead=0, ImageDBTail=self.db_tail,
+            CaptStatus=CaptStatus.MovieGenCompleted, DestToSave=None)
 
     def get_storage_ids(self):
         # 照 ptpy 實際行為：直接回傳陣列，不是包一層的物件。

@@ -176,6 +176,35 @@ def test_only_confirmed_labels_are_published():
     print("✓ 只發布實機確認過的數值標籤")
 
 
+def test_clip_reports_whether_anything_was_produced():
+    """SigmaGetMovieFileInfo 只描述 MOV，對 CinemaDNG 是瞎的。
+
+    所以「到底錄成了沒」要看相機自己的拍攝狀態 —— ImageDBTail 前進就是
+    產生了新項目，不分格式。先前只靠 movie_info 判斷，結果 CinemaDNG 那段
+    看起來像沒錄成。
+    """
+    import recording
+    cam = fake_camera.FakeCamera()
+    cam.movie[50] = 2
+    result = recording.record_clip(cam, seconds=0.2)
+    assert result["produced_something"], result
+    assert result["status_after"]["status"] == "MovieGenCompleted", result
+    assert result["status_after"]["db_tail"] > result["status_before"]["db_tail"]
+    print("✓ 用拍攝狀態判斷是否真的產生檔案（不分格式）")
+
+
+def test_capture_status_errors_are_reported_not_raised():
+    import recording
+
+    class Dead:
+        def get_cam_capt_status(self, image_id=0):
+            raise RuntimeError("OperationNotSupported")
+
+    got = recording.capture_status(Dead())
+    assert "error" in got and "OperationNotSupported" in got["error"]
+    print("✓ 拍攝狀態讀不到時回報錯誤而非丟例外")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):
