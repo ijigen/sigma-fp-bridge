@@ -583,6 +583,17 @@ async def cam_wait_idle(timeout_s: float = 2.0, poll_interval_s: float = 0.05) -
     return False
 
 
+def _full_schema() -> list:
+    """完整的設定 schema：靜態 + 錄影，依當下模式與快門單位過濾。
+
+    只有這一個來源。先前 describe_settings、REST、以及 set_settings 的 ack
+    各自組一份，改了前兩個卻漏掉 ack —— 而 ack 正是 UI 每次操作後用來更新
+    schema 的那條路，於是切換快門單位後整組控制項消失。
+    """
+    return describe(state.capabilities, state.camera_mode,
+                    _shutter_speed_allowed()) + _movie_schema()
+
+
 def _movie_schema() -> list:
     """錄影設定的 schema，並依快門單位濾掉當下無效的那一個。
 
@@ -1052,9 +1063,7 @@ async def handle_ws_command(req: dict) -> dict | None:
         return {
             "type": "settings_schema",
             "id": request_id,
-            "settings": describe(state.capabilities, state.camera_mode,
-                                 _shutter_speed_allowed())
-                        + _movie_schema(),
+            "settings": _full_schema(),
             "capabilities": state.capabilities,
             "movie_capabilities": state.movie_capabilities,
             "camera_mode": state.camera_mode,
@@ -1096,9 +1105,7 @@ async def handle_ws_command(req: dict) -> dict | None:
             "applied": result["applied"],
             "rejected": result["rejected"],
             "settings": await cam_read_settings(),
-            "schema": describe(state.capabilities, state.camera_mode)
-                      + (movie_settings.describe(state.movie_capabilities)
-                         if state.camera_mode == "movie" else []),
+            "schema": _full_schema(),
             "camera_mode": state.camera_mode,
         }
 
@@ -1254,9 +1261,7 @@ async def handle_settings_schema(request: web.Request) -> web.Response:
         with suppress(Exception):
             await refresh_capabilities()
     return web.json_response({
-        "settings": describe(state.capabilities, state.camera_mode,
-                             _shutter_speed_allowed())
-                    + _movie_schema(),
+        "settings": _full_schema(),
         "capabilities": state.capabilities,
         "movie_capabilities": state.movie_capabilities,
         "camera_mode": state.camera_mode,

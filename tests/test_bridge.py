@@ -413,6 +413,31 @@ async def test_schema_hides_the_inactive_shutter_representation():
     print("✓ schema 只列當下有效的快門表示法")
 
 
+async def test_all_paths_return_the_same_schema():
+    """describe_settings、REST、以及 set_settings 的 ack 必須給出同一份 schema。
+
+    先前三處各自組，改了前兩個卻漏掉 ack —— 而 ack 是 UI 每次操作後更新
+    schema 的那條路，於是切換快門單位後整組快門控制項消失。
+    """
+    src = (Path(__file__).resolve().parent.parent / "mac_bridge_server.py").read_text()
+    assert src.count("_full_schema()") >= 4, "還有路徑自己組 schema"
+    assert '"schema": describe(' not in src
+    assert '"settings": describe(' not in src
+
+    reset()
+    async with running_worker():
+        B.state.camera_mode = "movie"
+        B.state.movie_capabilities = {"shutter_angle": [11.2, 180.0]}
+        B.state.shutter_unit = 1
+        names = {r["name"] for r in B._full_schema()}
+        assert "shutter_speed" in names, "速度模式下 schema 少了 shutter_speed"
+        assert "shutter_angle" not in names
+        B.state.shutter_unit = 2
+        names = {r["name"] for r in B._full_schema()}
+        assert "shutter_angle" in names and "shutter_speed" not in names
+    print("✓ 所有路徑共用同一份 schema，且隨快門單位切換")
+
+
 async def test_settings_roundtrip_through_bridge():
     reset()
     async with running_worker():
