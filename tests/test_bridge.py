@@ -297,6 +297,40 @@ async def test_acquire_can_skip_restore():
     print("✓ acquire(restore=False) 不還原")
 
 
+async def test_recording_guards():
+    """錄影相關的防呆：不能重複開始、clip 有長度上限、release 前先停。"""
+    reset()
+    async with running_worker():
+        runner = web.AppRunner(B.make_app())
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        base = f"http://127.0.0.1:{runner.addresses[0][1]}"
+        try:
+            async with aiohttp.ClientSession() as s:
+                assert (await s.post(f"{base}/api/record/start")).status == 200
+                assert B.state.recording
+
+                # 已在錄影中不能再開始
+                again = await s.post(f"{base}/api/record/start")
+                assert again.status == 409, again.status
+                clip = await s.post(f"{base}/api/record/clip?seconds=2")
+                assert clip.status == 409, clip.status
+
+                # release 要先把錄影停掉，不然留下沒收尾的檔案
+                await B.release_camera()
+                assert not B.state.recording, "release 前沒有停止錄影"
+                await B.acquire_camera()
+
+                # clip 長度上限：這會寫進使用者的記憶卡
+                too_long = await s.post(f"{base}/api/record/clip?seconds=999")
+                assert too_long.status == 400, too_long.status
+                assert not B.state.recording
+        finally:
+            await runner.cleanup()
+    print("✓ 錄影防呆：重複開始 409、clip 上限、release 先停止")
+
+
 async def test_settings_roundtrip_through_bridge():
     reset()
     async with running_worker():

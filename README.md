@@ -18,7 +18,8 @@ A Python bridge server that talks to Sigma fp over USB PTP and exposes:
 - **REST API** for one-shot HTTP commands
 - **MJPEG live view stream** browsers / OpenCV / OBS can consume
 - **Bonjour / mDNS broadcast** so iOS clients can auto-discover the bridge
-- **Browser test UI** with live preview, slider, and calibration table
+- **Browser UI** with live preview, focus control, exposure and movie settings,
+  recording, and distance calibration
 
 You point your camera at something, slide a number on the screen, and the lens motor moves to that position.
 
@@ -38,6 +39,9 @@ Useful for:
 |---|---|
 | Mac bridge (Python) | ✅ Working |
 | Browser UI | ✅ Working |
+| Exposure / white balance / format control | ✅ Working |
+| Movie settings (shutter angle, frame rate, CinemaDNG) | ✅ Working |
+| Recording start / stop | ✅ Working |
 | WebSocket + REST + MJPEG | ✅ Working |
 | Calibration persistence | ✅ Working |
 | Bonjour mDNS | ✅ Working |

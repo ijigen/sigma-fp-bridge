@@ -3,571 +3,554 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Sigma fp Bridge — Test Panel</title>
+<title>Sigma fp Bridge</title>
 <style>
   * { box-sizing: border-box; }
   body {
-    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "PingFang TC", sans-serif;
-    margin: 0; padding: 24px;
-    background: #1a1a1a; color: #e0e0e0;
+    font: 14px/1.55 -apple-system, BlinkMacSystemFont, "PingFang TC", sans-serif;
+    margin: 0; padding: 20px; background: #161616; color: #e2e2e2;
   }
-  h1 { font-size: 20px; margin: 0 0 8px; color: #fff; }
-  h2 { font-size: 14px; margin: 24px 0 8px; color: #ccc; text-transform: uppercase; letter-spacing: 0.05em; }
-  .grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 24px;
-    max-width: 1200px;
-    margin: 0 auto;
+  .wrap { max-width: 1240px; margin: 0 auto; }
+  .grid { display: grid; grid-template-columns: minmax(380px,1fr) minmax(380px,1fr); gap: 20px; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+
+  h1 { font-size: 19px; margin: 0 0 8px; color: #fff; font-weight: 600; }
+  h2 { font-size: 12px; margin: 0 0 12px; color: #9a9a9a; text-transform: uppercase; letter-spacing: .07em; font-weight: 600; }
+  h3 { font-size: 11px; margin: 16px 0 6px; color: #7a7a7a; text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
+  h3:first-child { margin-top: 0; }
+
+  .panel { background: #202020; border: 1px solid #2e2e2e; border-radius: 10px; padding: 16px; margin-bottom: 20px; }
+  .panel.flush { padding: 0; overflow: hidden; }
+
+  .badges { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 14px; min-height: 26px; }
+  .badge { display: inline-flex; align-items: center; gap: 5px; padding: 3px 10px; border-radius: 20px; font-size: 11.5px; font-weight: 600; background: #2e2e2e; color: #b5b5b5; }
+  .badge.ok { background: #16401f; color: #a8e8b4; }
+  .badge.bad { background: #4a1a1a; color: #ffb8b8; }
+  .badge.warn { background: #4a3c14; color: #ffdf9e; }
+  .badge.info { background: #16304a; color: #a8d4ff; }
+  .badge.rec { background: #5c1414; color: #ff9a9a; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+  .dot.pulse { animation: pulse 1.1s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
+
+  .liveview { width: 100%; aspect-ratio: 16/9; background: #000; display: block; object-fit: contain; }
+  .liveview-off { width: 100%; aspect-ratio: 16/9; background: #0c0c0c; display: flex; align-items: center; justify-content: center; color: #666; font-size: 13px; text-align: center; padding: 20px; }
+
+  .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid #2a2a2a; font-size: 13px; }
+  .row:last-child { border-bottom: none; }
+  .row > .label { color: #8e8e8e; flex: 1 1 auto; min-width: 0; }
+  .row > .label small { display: block; color: #666; font-size: 10.5px; }
+  .row > .value { color: #fff; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12.5px; text-align: right; flex: 0 0 auto; }
+
+  button { background: #3a3a3a; color: #fff; border: 1px solid #484848; padding: 7px 13px; border-radius: 6px; font-size: 13px; cursor: pointer; font-family: inherit; }
+  button:hover:not(:disabled) { background: #464646; }
+  button:disabled { opacity: .35; cursor: not-allowed; }
+  button.primary { background: #2563eb; border-color: #2563eb; }
+  button.primary:hover:not(:disabled) { background: #1d4ed8; }
+  button.danger { background: #b91c1c; border-color: #b91c1c; }
+  button.danger:hover:not(:disabled) { background: #991b1b; }
+  button.sm { padding: 4px 9px; font-size: 12px; }
+  .btnrow { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
+
+  select, input[type=number], input[type=text] {
+    background: #171717; color: #fff; border: 1px solid #3d3d3d; padding: 5px 8px;
+    border-radius: 6px; font-size: 12.5px; font-family: ui-monospace, SFMono-Regular, monospace;
+    min-width: 108px; max-width: 180px;
   }
-  .panel {
-    background: #252525;
-    border: 1px solid #333;
-    border-radius: 8px;
-    padding: 16px;
-  }
-  .status {
-    display: inline-block;
-    padding: 2px 10px;
-    border-radius: 12px;
-    font-size: 12px;
-    margin-left: 8px;
-  }
-  .status.ok { background: #1e5e2e; color: #d0ffd6; }
-  .status.bad { background: #5e1e1e; color: #ffd0d0; }
-  .status.idle { background: #3a3a3a; color: #b0b0b0; }
-  .status.moving { background: #5e4e1e; color: #fffbd0; }
-  .liveview {
-    width: 100%;
-    aspect-ratio: 3/2;
-    background: #000;
-    border-radius: 4px;
-    object-fit: contain;
-  }
-  .field {
-    display: flex;
-    justify-content: space-between;
-    padding: 6px 0;
-    border-bottom: 1px solid #333;
-    font-size: 13px;
-  }
-  .field:last-child { border-bottom: none; }
-  .field span:first-child { color: #888; }
-  .field span:last-child { color: #fff; font-family: SF Mono, monospace; }
-  button {
-    background: #444;
-    color: #fff;
-    border: none;
-    padding: 8px 14px;
-    border-radius: 4px;
-    font-size: 13px;
-    cursor: pointer;
-    margin: 4px 4px 4px 0;
-  }
-  button:hover { background: #555; }
-  button:disabled { opacity: 0.4; cursor: not-allowed; }
-  button.primary { background: #2563eb; }
-  button.primary:hover { background: #1d4ed8; }
-  button.danger { background: #7f1d1d; }
-  input[type="number"], input[type="text"] {
-    background: #1a1a1a;
-    color: #fff;
-    border: 1px solid #444;
-    padding: 6px 8px;
-    border-radius: 4px;
-    font-size: 13px;
-    font-family: SF Mono, monospace;
-    width: 100px;
-  }
-  input[type="range"] {
-    width: 100%;
-    accent-color: #2563eb;
-  }
-  .log {
-    background: #111;
-    border: 1px solid #333;
-    border-radius: 4px;
-    padding: 8px;
-    font-family: SF Mono, monospace;
-    font-size: 11px;
-    height: 180px;
-    overflow-y: auto;
-    color: #999;
-  }
-  .log .row {
-    padding: 2px 0;
-    border-bottom: 1px solid #1a1a1a;
-  }
-  .log .row.send { color: #88c8ff; }
-  .log .row.recv { color: #aaeeaa; }
-  .log .row.err { color: #ff8888; }
+  select:disabled, input:disabled { opacity: .4; cursor: not-allowed; }
+  input[type=range] { width: 100%; accent-color: #2563eb; }
+
+  .notice { border-radius: 8px; padding: 10px 12px; margin-bottom: 10px; font-size: 12.5px; line-height: 1.5; display: flex; gap: 9px; align-items: flex-start; }
+  .notice.warn { background: #38290c; border: 1px solid #5c4416; color: #ffe0a3; }
+  .notice.err { background: #3a1414; border: 1px solid #5e2020; color: #ffc0c0; }
+  .notice.info { background: #12283c; border: 1px solid #1e4467; color: #b8dcff; }
+  .notice .fix { margin-top: 7px; }
+  .notice-icon { flex: 0 0 auto; }
+
+  .log { background: #0e0e0e; border: 1px solid #2a2a2a; border-radius: 8px; padding: 9px; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 11px; height: 170px; overflow-y: auto; color: #8a8a8a; }
+  .log .r { padding: 1.5px 0; }
+  .log .r.send { color: #7fb8ff; }
+  .log .r.recv { color: #8fd89b; }
+  .log .r.err { color: #ff8f8f; }
+  .log .r.warn { color: #ffd479; }
+
   table { width: 100%; border-collapse: collapse; font-size: 12px; }
-  th, td { padding: 4px 8px; text-align: left; border-bottom: 1px solid #333; }
-  th { color: #888; }
+  th, td { padding: 5px 7px; text-align: left; border-bottom: 1px solid #2a2a2a; }
+  th { color: #808080; font-weight: 600; font-size: 11px; }
+  .hint { color: #777; font-size: 11.5px; line-height: 1.5; }
+  .seg { display: inline-flex; border: 1px solid #3d3d3d; border-radius: 6px; overflow: hidden; }
+  .seg button { border: none; border-radius: 0; padding: 5px 11px; font-size: 12px; background: #202020; }
+  .seg button.on { background: #2563eb; }
+  code { background: #2a2a2a; padding: 1px 4px; border-radius: 3px; font-size: 11.5px; }
 </style>
 </head>
 <body>
-<div class="grid">
+<div class="wrap">
 
-  <!-- 左：Live view + Focus -->
-  <div>
-    <h1>Sigma fp Bridge<span id="conn-status" class="status idle">connecting…</span></h1>
-    <img id="liveview" class="liveview" src="/liveview.mjpeg" alt="Live view">
+  <h1>Sigma fp Bridge</h1>
+  <div class="badges" id="badges"></div>
+  <div id="notices"></div>
 
-    <div class="panel" style="margin-top:16px">
-      <h2>Camera Status</h2>
-      <div class="field"><span>Focus Position</span><span id="f-pos">—</span></div>
-      <div class="field"><span>Focus State</span><span id="f-state">—</span></div>
-      <div class="field"><span>Focus Mode</span><span id="f-mode">—</span></div>
-      <div class="field"><span>Focal Length</span><span id="f-len">—</span></div>
-      <div class="field"><span>Focus Range</span><span id="f-range">—</span></div>
-      <div class="field"><span>Active Lens ID</span><span id="f-lens">—</span></div>
-      <div class="field"><span>Calibration Points</span><span id="f-cal">—</span></div>
+  <div class="grid">
+    <div>
+      <div class="panel flush">
+        <img id="liveview" class="liveview" alt="">
+        <div id="liveview-off" class="liveview-off"></div>
+      </div>
+
+      <div class="panel">
+        <h2>對焦</h2>
+        <div class="row">
+          <span class="label">位置</span>
+          <span class="value"><b id="f-pos">—</b> <span id="f-range-hint" class="hint"></span></span>
+        </div>
+        <input type="range" id="pos-slider" min="0" max="2000" value="0" style="margin:12px 0 8px"
+               oninput="onSliderInput()" onchange="onSliderCommit()">
+        <div class="btnrow">
+          <input type="number" id="pos-input" oninput="markBusy()" onfocus="markBusy()">
+          <button class="primary" id="btn-setpos" onclick="commitPos()">設定</button>
+          <button class="sm" onclick="stepPos(-100)">−100</button>
+          <button class="sm" onclick="stepPos(-10)">−10</button>
+          <button class="sm" onclick="stepPos(10)">+10</button>
+          <button class="sm" onclick="stepPos(100)">+100</button>
+        </div>
+        <div class="row" style="margin-top:10px"><span class="label">馬達狀態</span><span class="value" id="f-state">—</span></div>
+        <div class="row"><span class="label">對焦模式</span><span class="value" id="f-mode">—</span></div>
+        <div class="row"><span class="label">鏡頭焦距</span><span class="value" id="f-len">—</span></div>
+      </div>
+
+      <div class="panel">
+        <h2>錄影</h2>
+        <div class="btnrow">
+          <button id="btn-rec" class="danger" onclick="toggleRec()">● 開始錄影</button>
+          <span class="hint" id="rec-elapsed"></span>
+        </div>
+        <h3>測試片段</h3>
+        <div class="btnrow">
+          <input type="number" id="clip-secs" value="2" min="0.5" max="30" step="0.5" style="min-width:70px">
+          <span class="hint">秒</span>
+          <button id="btn-clip" onclick="recordClip()">錄一段並回報產出</button>
+        </div>
+        <div class="hint" style="margin-top:7px">
+          會寫進記憶卡。是否成功以相機的 capture status 與 image DB tail 判斷；
+          movie file info 只認 MOV，而且同一連線內會過期，不可信。
+        </div>
+        <div class="row" style="margin-top:10px"><span class="label">Capture status</span><span class="value" id="rec-status">—</span></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="panel">
+        <h2>相機控制權</h2>
+        <div class="btnrow">
+          <button id="btn-release" onclick="doRelease()">交還機身操作</button>
+          <button id="btn-acquire" class="primary" onclick="send({cmd:'acquire'})">取回控制權</button>
+          <button class="sm" onclick="send({cmd:'get_settings'})">↻ 重讀設定</button>
+        </div>
+        <div class="hint" style="margin-top:8px">
+          bridge 連線時機身按鍵全部失效，這是協定限制不是 bug。交還時設定會自動保存、
+          取回時還原 —— 但你在機身上改的東西不會保留，因為取回會讓相機重置。
+        </div>
+      </div>
+
+      <div class="panel">
+        <h2>相機設定</h2>
+        <div class="btnrow" style="margin-bottom:12px">
+          <span class="hint">快門顯示</span>
+          <span class="seg">
+            <button id="su-time" onclick="setShutterUnit('time')">秒</button>
+            <button id="su-angle" onclick="setShutterUnit('angle')">角度</button>
+          </span>
+          <span class="hint" style="margin-left:4px">換算幀率</span>
+          <input type="number" id="fps-input" value="24" step="0.01" style="min-width:78px"
+                 onchange="send({cmd:'set_frame_rate', frame_rate: parseFloat(this.value)})">
+        </div>
+        <div id="settings"></div>
+      </div>
+
+      <div class="panel">
+        <h2>距離校準</h2>
+        <div class="btnrow" style="margin-bottom:9px">
+          <input type="text" id="lens-id" placeholder="鏡頭 ID" style="min-width:150px">
+          <button class="sm" onclick="setLens()">切換</button>
+        </div>
+        <table id="cal-table"><thead><tr><th>距離 (m)</th><th>Position</th></tr></thead><tbody></tbody></table>
+        <div class="btnrow" style="margin-top:9px">
+          <input type="number" id="cal-dist" placeholder="距離" step="0.1" style="min-width:76px">
+          <input type="number" id="cal-pos" placeholder="position" style="min-width:96px">
+          <button class="sm" onclick="useCurrentPos()">↑ 用當前</button>
+          <button class="sm primary" onclick="addCal()">+ 新增</button>
+          <button class="sm danger" onclick="clearCal()">清空</button>
+        </div>
+        <h3>依距離對焦</h3>
+        <div class="btnrow">
+          <input type="number" id="dist-input" value="2.0" step="0.1" style="min-width:76px">
+          <span class="hint">m</span>
+          <button class="primary sm" id="btn-dist" onclick="setDistance()">對焦</button>
+        </div>
+        <div class="hint" id="cal-hint" style="margin-top:7px"></div>
+      </div>
+
+      <div class="panel">
+        <h2>Log</h2>
+        <div id="log" class="log"></div>
+      </div>
     </div>
   </div>
-
-  <!-- 右：控制 -->
-  <div>
-    <div class="panel">
-      <h2>Set Focus Position (raw)</h2>
-      <div style="font-size:12px; color:#888; margin-bottom:6px">
-        Camera 當前: <span id="pos-current" style="color:#aaeeaa">—</span>　|
-        你的目標: <span id="pos-target" style="color:#88c8ff">—</span>
-      </div>
-      <div style="display:flex; gap:8px; align-items:center">
-        <input type="number" id="pos-input" value="500" step="10"
-               oninput="markInputUsed(); syncTarget()"
-               onfocus="markInputUsed()">
-        <button class="primary" onclick="setPos()">Set</button>
-        <button onclick="syncFromCamera()" title="從相機抓當前值">↓ from cam</button>
-      </div>
-      <input type="range" id="pos-slider" min="0" max="2000" value="500" step="10" style="margin-top:12px"
-             oninput="markSliderUsed(); document.getElementById('pos-input').value=this.value; syncTarget()"
-             onmousedown="markSliderUsed()"
-             ontouchstart="markSliderUsed()"
-             onchange="markSliderUsed(); setPos()">
-      <div style="margin-top:8px">
-        <button onclick="step(-10)">−10</button>
-        <button onclick="step(-100)">−100</button>
-        <button onclick="step(100)">+100</button>
-        <button onclick="step(10)">+10</button>
-      </div>
-    </div>
-
-    <div class="panel" style="margin-top:16px">
-      <h2>Set By Distance (uses calibration)</h2>
-      <div style="display:flex; gap:8px; align-items:center">
-        <input type="number" id="dist-input" value="2.0" step="0.1">
-        <span>m</span>
-        <button class="primary" onclick="setDistance()">Focus</button>
-      </div>
-    </div>
-
-    <div class="panel" style="margin-top:16px">
-      <h2>Calibration</h2>
-      <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px">
-        <input type="text" id="lens-id" placeholder="鏡頭 ID（如 17mm_dgdn）" style="width:200px">
-        <button onclick="setLens()">Switch</button>
-      </div>
-      <table id="cal-table">
-        <thead><tr><th>距離 (m)</th><th>Position</th><th></th></tr></thead>
-        <tbody></tbody>
-      </table>
-      <div style="margin-top:8px; display:flex; gap:8px; align-items:center">
-        <input type="number" id="cal-dist" placeholder="距離" step="0.1" style="width:80px">
-        <input type="number" id="cal-pos" placeholder="當前 pos" style="width:100px">
-        <button onclick="useCurrentPos()">↑ 用當前位置</button>
-        <button class="primary" onclick="addCal()">+ Add</button>
-        <button class="danger" onclick="clearCal()">Clear All</button>
-      </div>
-    </div>
-
-    <div class="panel" style="margin-top:16px">
-      <h2>Camera Settings</h2>
-      <div style="font-size:12px; color:#888; margin-bottom:8px">
-        機身按鍵在 bridge 連線時會全部失效（協定限制）。需要實體操作時按
-        <b>Release</b> 交還，完畢後按 <b>Acquire</b> 收回。
-      </div>
-      <div style="margin-bottom:10px">
-        <button id="btn-release" onclick="send({cmd:'release'})">Release camera</button>
-        <button id="btn-acquire" class="primary" onclick="send({cmd:'acquire'})">Acquire</button>
-        <button onclick="send({cmd:'get_settings'})">↻ Reload</button>
-      </div>
-      <div style="display:flex; gap:8px; align-items:center; margin-bottom:10px;
-                  padding-bottom:10px; border-bottom:1px solid #333">
-        <span style="font-size:12px; color:#888">Shutter as</span>
-        <button id="btn-shutter-time" onclick="setShutterUnit('time')">Time</button>
-        <button id="btn-shutter-angle" onclick="setShutterUnit('angle')">Angle</button>
-        <span style="font-size:12px; color:#888; margin-left:8px">fps</span>
-        <input type="number" id="fps-input" value="24" step="0.001" style="width:80px"
-               onchange="send({cmd:'set_frame_rate', frame_rate: parseFloat(this.value)})">
-      </div>
-      <div id="settings-grid"></div>
-    </div>
-
-    <div class="panel" style="margin-top:16px">
-      <h2>WebSocket Log</h2>
-      <div id="log" class="log"></div>
-    </div>
-  </div>
-
 </div>
 
 <script>
-let ws = null;
-const log = document.getElementById('log');
+let ws = null, st = {}, schema = null, values = {};
+let shutterUnit = 'time', renderedKey = null, busyUntil = 0, focusRange = null;
 
-function logRow(text, cls = '') {
-  const row = document.createElement('div');
-  row.className = 'row ' + cls;
-  row.textContent = `[${new Date().toLocaleTimeString()}] ${text}`;
-  log.appendChild(row);
-  log.scrollTop = log.scrollHeight;
-  while (log.children.length > 200) log.removeChild(log.firstChild);
+const $ = id => document.getElementById(id);
+const busy = () => Date.now() < busyUntil;
+function markBusy() { busyUntil = Date.now() + 4000; }
+
+function log(text, cls = '') {
+  const el = document.createElement('div');
+  el.className = 'r ' + cls;
+  el.textContent = new Date().toLocaleTimeString() + '  ' + text;
+  $('log').appendChild(el);
+  $('log').scrollTop = $('log').scrollHeight;
+  while ($('log').children.length > 250) $('log').removeChild($('log').firstChild);
 }
 
-function connectWS() {
-  const url = `ws://${location.host}/ws`;
-  ws = new WebSocket(url);
+// ── 連線 ──────────────────────────────────────────────────────────
+function connect() {
+  ws = new WebSocket('ws://' + location.host + '/ws');
   ws.onopen = () => {
-    logRow('WS connected', 'recv');
-    setConn(true);
+    log('WebSocket 已連線', 'recv');
+    st.wsDown = false;
     send({cmd: 'calibration_get'});
     send({cmd: 'describe_settings'});
     send({cmd: 'get_settings'});
   };
-  ws.onclose = () => {
-    logRow('WS disconnected, retrying in 2s…', 'err');
-    setConn(false);
-    setTimeout(connectWS, 2000);
-  };
-  ws.onerror = (e) => logRow('WS error', 'err');
-  ws.onmessage = (e) => {
-    const msg = JSON.parse(e.data);
-    if (msg.type === 'state') {
-      updateState(msg);
-    } else if (msg.type === 'calibration') {
-      renderCalibration(msg);
-    } else if (msg.type === 'settings_schema') {
-      settingsSchema = msg.settings;
-      if (msg.frame_rate) document.getElementById('fps-input').value = msg.frame_rate;
-      renderSettings();
-    } else if (msg.type === 'settings') {
-      settingsValues = msg.settings;
-      renderSettings();
-    } else if (msg.type === 'ack') {
-      if (msg.settings) { settingsValues = msg.settings; renderSettings(); }
-      if (msg.rejected && Object.keys(msg.rejected).length) {
-        for (const [k, d] of Object.entries(msg.rejected)) {
-          logRow(`⚠ 相機沒有接受 ${k}=${d.requested}（實際 ${d.actual}）`, 'err');
-          if (d.hint) logRow('   ' + d.hint, 'err');
-        }
-      }
-      if (msg.released !== undefined) setTimeout(() => send({cmd: 'get_settings'}), 300);
-      if (msg.frame_rate !== undefined) setTimeout(() => send({cmd: 'get_settings'}), 100);
-      if (msg.shutter_angle !== undefined && msg.requested === undefined) {
-        logRow(`快門角度實際設為 ${msg.shutter_angle}°`, 'recv');
-      }
-      if (msg.clamped) {
-        logRow(`⚠ ${msg.requested} 超出合法範圍，已修正為 ${msg.position}`, 'err');
-      } else {
-        logRow('ack: ' + JSON.stringify(msg), 'recv');
-      }
-    } else if (msg.type === 'hello') {
-      if (msg.focus_range) applyFocusRange(msg.focus_range);
-      logRow('recv: ' + e.data, 'recv');
-    } else if (msg.type === 'error') {
-      logRow('err: ' + msg.error, 'err');
-    } else {
-      logRow('recv: ' + e.data, 'recv');
-    }
-  };
+  ws.onclose = () => { log('WebSocket 斷線，2 秒後重試', 'err'); st.wsDown = true; render(); setTimeout(connect, 2000); };
+  ws.onerror = () => {};
+  ws.onmessage = e => handle(JSON.parse(e.data));
 }
 
 function send(obj) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) {
-    logRow('WS not ready', 'err');
-    return;
-  }
-  obj.id = Math.floor(Math.random() * 1e6);
+  if (!ws || ws.readyState !== WebSocket.OPEN) { log('WebSocket 尚未就緒', 'err'); return; }
+  obj.id = Math.floor(Math.random() * 1e9);
   ws.send(JSON.stringify(obj));
-  logRow('send: ' + JSON.stringify(obj), 'send');
 }
 
-function setConn(ok) {
-  const el = document.getElementById('conn-status');
-  if (ok) { el.textContent = 'connected'; el.className = 'status ok'; }
-  else { el.textContent = 'disconnected'; el.className = 'status bad'; }
-}
-
-// 追蹤使用者有沒有正在跟 slider 互動
-let userInteractingSlider = false;
-let userInteractingInput = false;
-const slider = () => document.getElementById('pos-slider');
-const input = () => document.getElementById('pos-input');
-
-// 相機回報的合法範圍（CanSetInfo5 tag 658）。null = 相機沒給，退回自己長。
-let focusRange = null;
-let rangeApplied = false;
-
-function applyFocusRange(range) {
-  const [lo, hi] = range;
-  if (focusRange && focusRange[0] === lo && focusRange[1] === hi) return;
-  focusRange = range;
-  const s = slider();
-  s.min = lo;
-  s.max = hi;
-  // 步進取範圍的千分之一，讓拖曳手感跟範圍大小無關
-  s.step = Math.max(1, Math.round((hi - lo) / 1000));
-  document.getElementById('f-range').textContent = `${lo} – ${hi}`;
-  input().step = s.step;
-  logRow(`focus range ${lo}–${hi}（step ${s.step}）`, 'recv');
-
-  // 第一次拿到範圍時，把預設值（寫死的 500）拉進合法區間，
-  // 否則按 Set 會送出一個相機根本不接受的位置
-  if (!rangeApplied) {
-    rangeApplied = true;
-    const cur = parseInt(input().value);
-    if (isNaN(cur) || cur < lo || cur > hi) {
-      const snap = Math.round((lo + hi) / 2);
-      input().value = snap;
-      s.value = snap;
-      syncTarget();
-    }
+function handle(m) {
+  switch (m.type) {
+    case 'state': st = Object.assign({}, m, {wsDown: false}); render(); break;
+    case 'hello': if (m.focus_range) applyRange(m.focus_range); break;
+    case 'settings_schema':
+      schema = m.settings;
+      if (m.frame_rate) $('fps-input').value = m.frame_rate;
+      renderedKey = null; renderSettings(); break;
+    case 'settings': values = m.settings; renderSettings(); break;
+    case 'calibration': renderCal(m); break;
+    case 'capture_status': $('rec-status').textContent = m.status.status || m.status.error || '—'; break;
+    case 'ack':
+      if (m.settings) { values = m.settings; renderSettings(); }
+      reportRejections(m.rejected);
+      if (m.clamped) log('⚠ ' + m.requested + ' 超出合法範圍，已修正為 ' + m.position, 'warn');
+      if (m.recording !== undefined) log(m.recording ? '● 開始錄影' : '■ 停止錄影', 'recv');
+      if (m.frame_rate !== undefined) setTimeout(() => send({cmd: 'get_settings'}), 150);
+      break;
+    case 'error': log('錯誤：' + m.error, 'err'); flash('err', m.error); break;
   }
 }
 
-// 相機沒回報範圍時的後備：跟著觀測值把上限往外長
-function maybeGrowSliderMax(observed) {
-  const s = slider();
-  const headroom = 1000;
-  if (observed > parseInt(s.max) - headroom) {
-    s.max = Math.ceil((observed + headroom) / 1000) * 1000;
+function reportRejections(rejected) {
+  if (!rejected || !Object.keys(rejected).length) return;
+  for (const [k, d] of Object.entries(rejected)) {
+    log('⚠ 相機沒有接受 ' + k + '=' + d.requested + '（實際 ' + d.actual + '）', 'warn');
+    if (d.hint) log('   ' + d.hint, 'warn');
   }
-  // 也讓 min 可以是負（極少數情況）
-  if (observed < parseInt(s.min)) {
-    s.min = Math.floor(observed / 1000) * 1000;
+  flash('warn', '有設定沒有生效，詳見下方 Log');
+}
+
+// ── 頂部狀態 ──────────────────────────────────────────────────────
+const badge = (cls, text) => '<span class="badge ' + cls + '">' + text + '</span>';
+
+function render() {
+  const connected = !!st.connected && !st.wsDown;
+  const live = connected && !st.released;
+
+  const b = [];
+  b.push(badge(connected ? 'ok' : 'bad',
+    st.wsDown ? 'bridge 斷線' : connected ? '相機已連線' : '相機未連線'));
+  if (st.released) b.push(badge('warn', '已交還機身'));
+  if (st.camera_mode) b.push(badge('info', st.camera_mode === 'movie' ? 'CINE 錄影模式' : 'STILL 拍照模式'));
+  if (st.recording) b.push('<span class="badge rec"><span class="dot pulse"></span>錄影中</span>');
+  if (st.focal_length_mm) b.push(badge('', st.focal_length_mm + ' mm'));
+  $('badges').innerHTML = b.join('');
+
+  $('liveview').style.display = live ? '' : 'none';
+  $('liveview-off').style.display = live ? 'none' : '';
+  if (live) { if (!$('liveview').getAttribute('src')) $('liveview').src = '/liveview.mjpeg'; }
+  else { $('liveview').removeAttribute('src'); }
+  $('liveview-off').textContent = st.released
+    ? '已交還機身操作 — 沒有即時預覽。按「取回控制權」恢復。'
+    : st.wsDown ? 'bridge 連線中斷' : '相機未連線';
+
+  $('f-pos').textContent = st.focus_position ?? '—';
+  $('f-state').textContent = st.focus_state === 0 ? 'Idle' : st.focus_state === 1 ? 'Moving' : '—';
+  $('f-mode').textContent = st.focus_mode ?? '—';
+  $('f-len').textContent = st.focal_length_mm ? st.focal_length_mm + ' mm' : '—';
+  if (st.focus_range) applyRange(st.focus_range);
+  if (st.focus_position != null && !busy()) {
+    $('pos-slider').value = st.focus_position;
+    $('pos-input').value = st.focus_position;
   }
+
+  $('btn-rec').textContent = st.recording ? '■ 停止錄影' : '● 開始錄影';
+  $('rec-elapsed').textContent = st.recording && st.recording_seconds != null
+    ? st.recording_seconds.toFixed(1) + ' 秒' : '';
+
+  for (const id of ['pos-slider','pos-input','btn-setpos','btn-rec','clip-secs','btn-clip','btn-dist'])
+    $(id).disabled = !live;
+  $('btn-release').disabled = !connected || !!st.released;
+  $('btn-acquire').disabled = !st.released;
+  // 錄影中不讓人改設定：曝光在錄製途中變動會毀掉這一鏡
+  document.querySelectorAll('#settings [data-setting]').forEach(el => {
+    el.disabled = !live || !!st.recording;
+  });
+  $('cal-hint').textContent = st.calibration_points
+    ? st.calibration_points + ' 個校準點' : '尚未校準 — 依距離對焦需要至少 2 點';
+
+  renderNotices();
 }
 
-function updateState(msg) {
-  setReleased(!!msg.released);
-  document.getElementById('f-pos').textContent = msg.focus_position ?? '—';
-  document.getElementById('f-state').textContent =
-    msg.focus_state === 0 ? 'Idle' : msg.focus_state === 1 ? 'Moving' : '—';
-  document.getElementById('f-mode').textContent = msg.focus_mode ?? '—';
-  const stateEl = document.getElementById('f-state');
-  stateEl.className = msg.focus_state === 1 ? 'status moving' : 'status idle';
-  document.getElementById('f-len').textContent = msg.focal_length_mm ? msg.focal_length_mm + ' mm' : '—';
-  document.getElementById('f-lens').textContent = msg.active_lens_id ?? '—';
-  document.getElementById('f-cal').textContent = msg.calibration_points ?? '—';
-  document.getElementById('pos-current').textContent = msg.focus_position ?? '—';
-
-  if (msg.focus_range) {
-    applyFocusRange(msg.focus_range);
-  } else {
-    document.getElementById('f-range').textContent = '相機未回報';
+function renderNotices() {
+  const out = [];
+  if (st.released) {
+    out.push(notice('warn', '機身操作已交還給你',
+      'bridge 仍在執行但完全放開相機 —— 沒有預覽、沒有對焦控制。取回時相機會被重置，' +
+      '你先前的設定會自動還原，但<b>在機身上做的改動不會保留</b>。'));
   }
-
-  if (msg.focus_position != null) {
-    if (!msg.focus_range) maybeGrowSliderMax(msg.focus_position);
-    // 只有「使用者沒在拖 slider / 沒在打 input」時才同步
-    if (!userInteractingSlider && !userInteractingInput) {
-      slider().value = msg.focus_position;
-      input().value = msg.focus_position;
-      syncTarget();
-    }
+  if (st.recording) {
+    out.push(notice('info', '錄影中', '設定已鎖定 —— 錄製途中改曝光會毀掉這一鏡。'));
   }
-}
-
-function syncTarget() {
-  document.getElementById('pos-target').textContent = input().value;
-}
-
-function syncFromCamera() {
-  const cur = document.getElementById('pos-current').textContent;
-  if (cur && cur !== '—') {
-    input().value = cur;
-    slider().value = cur;
-    syncTarget();
+  const mode = values.exposure_mode;
+  if (mode && mode !== 'Manual' && st.connected && !st.released) {
+    const what = st.camera_mode === 'movie' ? '快門角度' : '快門';
+    out.push(notice('warn', '曝光模式是 ' + mode + '，手動設' + what + '不會生效',
+      '相機的自動曝光會在你設定後立刻改回去 —— 寫入看起來成功，值卻留不住。',
+      '<button class="sm primary" onclick="send({cmd:\'set_settings\',settings:{exposure_mode:\'Manual\'}})">切換成 Manual</button>'));
   }
+  if (values.iso_auto === 'Auto' && st.connected && !st.released) {
+    out.push(notice('info', 'ISO Auto 開啟中',
+      '設定 ISO 時會自動關掉它 —— 否則寫入不會生效。'));
+  }
+  if (st.connected && st.camera_mode === 'movie' && !st.released) {
+    out.push(notice('info', 'CINE 模式：快門由快門角度控制',
+      '這個模式下 <code>shutter_speed</code> 寫不進去（相機會收下然後丟棄），已從清單移除。'));
+  }
+  $('notices').innerHTML = out.join('');
 }
 
-// 使用者一旦碰 slider/input 就標記，5 秒後解除
-let inputIdleTimer = null;
-function markInputUsed() {
-  userInteractingInput = true;
-  clearTimeout(inputIdleTimer);
-  inputIdleTimer = setTimeout(() => { userInteractingInput = false; }, 5000);
-}
-let sliderIdleTimer = null;
-function markSliderUsed() {
-  userInteractingSlider = true;
-  clearTimeout(sliderIdleTimer);
-  sliderIdleTimer = setTimeout(() => { userInteractingSlider = false; }, 5000);
+function notice(kind, title, body, fix) {
+  const icon = kind === 'err' ? '⛔' : kind === 'warn' ? '⚠️' : 'ℹ️';
+  return '<div class="notice ' + kind + '"><span class="notice-icon">' + icon + '</span><div><b>' +
+    title + '</b><br>' + (body || '') + (fix ? '<div class="fix">' + fix + '</div>' : '') + '</div></div>';
 }
 
-// ── 相機設定面板 ──────────────────────────────────────────────────────
-let settingsSchema = null;
-let settingsValues = {};
-
-// 快門顯示成秒數還是角度。角度是電影圈的習慣：180° = 曝光佔一個影格的一半。
-let shutterUnit = 'time';
-
-function setShutterUnit(unit) {
-  shutterUnit = unit;
-  document.getElementById('btn-shutter-time').className = unit === 'time' ? 'primary' : '';
-  document.getElementById('btn-shutter-angle').className = unit === 'angle' ? 'primary' : '';
-  renderSettings(true);
+function flash(kind, text) {
+  $('notices').insertAdjacentHTML('afterbegin', notice(kind, text, ''));
+  setTimeout(renderNotices, 6000);
 }
 
-function fmtChoice(v, unit) {
-  if (unit === 's' && typeof v === 'number' && v > 0 && v < 1) return '1/' + Math.round(1 / v);
-  if (unit === 'f') return 'f/' + v;
-  if (unit === 'deg') return v + '°';
-  return String(v);
+// ── 對焦 ──────────────────────────────────────────────────────────
+function applyRange(r) {
+  if (focusRange && focusRange[0] === r[0] && focusRange[1] === r[1]) return;
+  focusRange = r;
+  const s = $('pos-slider');
+  s.min = r[0]; s.max = r[1];
+  s.step = Math.max(1, Math.round((r[1] - r[0]) / 1000));
+  $('pos-input').step = s.step; $('pos-input').min = r[0]; $('pos-input').max = r[1];
+  $('f-range-hint').textContent = '（' + r[0] + ' – ' + r[1] + '）';
+  log('焦點範圍 ' + r[0] + '–' + r[1], 'recv');
 }
 
-// 只有 schema / 顯示單位改變時才重建 DOM。以前每次 ack 都整片重畫，
-// 使用者剛操作完的下拉選單會被抽換掉，畫面跟著跳 —— 而且正在輸入的值會不見。
-let renderedKey = null;
+function onSliderInput() { markBusy(); $('pos-input').value = $('pos-slider').value; }
+function onSliderCommit() { markBusy(); commitPos(); }
+function commitPos() {
+  const v = parseInt($('pos-input').value);
+  if (isNaN(v)) return;
+  send({cmd: 'set_position', position: v});
+}
+function stepPos(d) {
+  markBusy();
+  let v = (parseInt($('pos-input').value) || 0) + d;
+  if (focusRange) v = Math.max(focusRange[0], Math.min(focusRange[1], v));
+  $('pos-input').value = v; $('pos-slider').value = v;
+  commitPos();
+}
 
-function settingsRows() {
-  return settingsSchema.filter(s => {
-    // 快門秒數與角度是同一件事的兩種表示，一次只顯示一個
+// ── 設定 ──────────────────────────────────────────────────────────
+const GROUPS = [
+  ['曝光', ['exposure_mode','aperture','shutter_speed','shutter_angle','iso','iso_auto','exposure_compensation','metering_mode']],
+  ['白平衡', ['white_balance','color_temp']],
+  ['錄影格式', ['record_format','movie_resolution','frame_rate','cinema_dng_quality','mov_image_quality']],
+  ['照片格式', ['image_quality','dng_quality','resolution','aspect_ratio']],
+  ['其他', ['color_mode','color_space','tone_effect','drive_mode']],
+];
+
+function visibleSettings() {
+  return (schema || []).filter(s => {
     if (s.name === 'shutter_speed' && shutterUnit === 'angle') return false;
     if (s.name === 'shutter_angle' && shutterUnit !== 'angle') return false;
     return true;
   });
 }
 
-function buildSettings() {
-  const grid = document.getElementById('settings-grid');
-  grid.innerHTML = '';
-  for (const s of settingsRows()) {
-    const row = document.createElement('div');
-    row.className = 'field';
-    const label = document.createElement('span');
-    label.textContent = s.name.replace(/_/g, ' ');
-    if (s.note) label.title = s.note;
-    row.appendChild(label);
+function fmt(v, unit, labels) {
+  if (labels && labels[v] !== undefined) return labels[v] + ' (' + v + ')';
+  if (unit === 's' && typeof v === 'number' && v > 0 && v < 1) return '1/' + Math.round(1 / v);
+  if (unit === 'f') return 'f/' + v;
+  if (unit === 'deg') return v + '°';
+  if (unit === 'ISO') return 'ISO ' + v;
+  if (unit === 'K') return v + 'K';
+  return String(v);
+}
 
-    let control;
-    if (s.choices && s.choices.length) {
-      control = document.createElement('select');
-      const blank = document.createElement('option');
-      blank.value = ''; blank.textContent = '—';
-      control.appendChild(blank);
-      for (const c of s.choices) {
-        const opt = document.createElement('option');
-        opt.value = String(c);
-        opt.textContent = fmtChoice(c, s.unit);
-        control.appendChild(opt);
-      }
-    } else {
-      control = document.createElement('input');
-      control.type = 'number';
-      control.style.width = '90px';
+function buildSettings() {
+  const byName = {};
+  visibleSettings().forEach(s => byName[s.name] = s);
+  const listed = new Set();
+  const html = [];
+  for (const [title, names] of GROUPS) {
+    const present = names.filter(n => byName[n]);
+    if (!present.length) continue;
+    html.push('<h3>' + title + '</h3>');
+    for (const n of present) {
+      listed.add(n);
+      const note = byName[n].note || '';
+      html.push('<div class="row"><span class="label">' + n.replace(/_/g, ' ') +
+        (note ? '<small>' + (note.length > 58 ? note.slice(0, 56) + '…' : note) + '</small>' : '') +
+        '</span><span id="ctl-' + n + '"></span></div>');
     }
-    control.dataset.setting = s.name;
-    control.dataset.numeric = (!s.choices || typeof s.choices[0] === 'number') ? '1' : '';
-    control.onchange = () => {
-      let v = control.value;
-      if (v === '') return;
-      if (control.dataset.numeric) v = parseFloat(v);
+  }
+  $('settings').innerHTML = html.join('');
+
+  for (const s of visibleSettings()) {
+    const holder = $('ctl-' + s.name);
+    if (!holder) continue;
+    let el;
+    if (s.choices && s.choices.length) {
+      el = document.createElement('select');
+      el.appendChild(new Option('—', ''));
+      for (const c of s.choices) el.appendChild(new Option(fmt(c, s.unit, s.labels), String(c)));
+    } else {
+      el = document.createElement('input');
+      el.type = 'number';
+    }
+    el.dataset.setting = s.name;
+    el.dataset.numeric = (!s.choices || typeof s.choices[0] === 'number') ? '1' : '';
+    if (s.note) el.title = s.note;
+    el.onchange = () => {
+      if (el.value === '') return;
+      markBusy();
+      const v = el.dataset.numeric ? parseFloat(el.value) : el.value;
       send({cmd: 'set_settings', settings: {[s.name]: v}});
     };
-    row.appendChild(control);
-    grid.appendChild(row);
+    holder.appendChild(el);
   }
 }
 
-function renderSettings(force) {
-  if (!settingsSchema) return;
-  const key = shutterUnit + '|' + settingsRows().map(s => s.name).join(',');
-  if (key !== renderedKey || force) {
-    buildSettings();
-    renderedKey = key;
-  }
-  // 只更新值，不重建元素 —— 使用者正在操作的控制項不會被抽掉
-  for (const el of document.querySelectorAll('[data-setting]')) {
-    if (el === document.activeElement) continue;
-    const v = settingsValues[el.dataset.setting];
+function renderSettings() {
+  if (!schema) return;
+  const key = shutterUnit + '|' + visibleSettings().map(s => s.name).join(',');
+  if (key !== renderedKey) { buildSettings(); renderedKey = key; }
+  document.querySelectorAll('#settings [data-setting]').forEach(el => {
+    if (el === document.activeElement) return;
+    const v = values[el.dataset.setting];
     el.value = (v === null || v === undefined) ? '' : String(v);
+  });
+  renderNotices();
+}
+
+function setShutterUnit(u) {
+  shutterUnit = u;
+  $('su-time').className = u === 'time' ? 'on' : '';
+  $('su-angle').className = u === 'angle' ? 'on' : '';
+  renderSettings();
+}
+
+// ── 錄影 ──────────────────────────────────────────────────────────
+function toggleRec() { send({cmd: st.recording ? 'record_stop' : 'record_start'}); }
+
+async function recordClip() {
+  const secs = parseFloat($('clip-secs').value);
+  if (!(secs > 0 && secs <= 30)) { flash('err', '秒數要在 0–30 之間'); return; }
+  if (!confirm('錄 ' + secs + ' 秒到記憶卡？')) return;
+  log('錄製 ' + secs + ' 秒…', 'send');
+  $('btn-clip').disabled = true;
+  try {
+    const r = await fetch('/api/record/clip?seconds=' + secs, {method: 'POST'});
+    const d = await r.json();
+    if (d.error) { log('錄影失敗：' + d.error, 'err'); flash('err', d.error); return; }
+    const sa = d.status_after || {}, sb = d.status_before || {};
+    log('結果 ' + sa.status + '，image DB tail ' + sb.db_tail + ' → ' + sa.db_tail, 'recv');
+    log(d.produced_something ? '✓ 有產生新檔案' : '✗ 沒有產生新檔案', d.produced_something ? 'recv' : 'err');
+    if (d.movie_info && d.movie_info.strings && d.movie_info.strings.length)
+      log('movie info（可能過期）：' + d.movie_info.strings.join(' / '), 'recv');
+    $('rec-status').textContent = sa.status || '—';
+  } catch (e) {
+    log('錄影請求失敗：' + e, 'err');
+  } finally {
+    $('btn-clip').disabled = false;
   }
 }
 
-function setReleased(released) {
-  const r = document.getElementById('btn-release');
-  const a = document.getElementById('btn-acquire');
-  if (!r || !a) return;
-  r.disabled = released;
-  a.disabled = !released;
-  a.style.display = released ? '' : 'none';
-}
-
-function renderCalibration(msg) {
-  document.getElementById('f-lens').textContent = msg.active_lens_id;
-  const tbody = document.querySelector('#cal-table tbody');
-  tbody.innerHTML = '';
-  for (const [d, p] of msg.table || []) {
+// ── 校準 ──────────────────────────────────────────────────────────
+function renderCal(m) {
+  const tb = document.querySelector('#cal-table tbody');
+  tb.innerHTML = '';
+  for (const [d, p] of m.table || []) {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td>${d}</td><td>${p}</td><td></td>`;
-    tbody.appendChild(tr);
+    tr.innerHTML = '<td>' + d + '</td><td>' + p + '</td>';
+    tb.appendChild(tr);
   }
+  if (m.active_lens_id) $('lens-id').placeholder = m.active_lens_id;
 }
-
-function setPos() {
-  const pos = parseInt(document.getElementById('pos-input').value);
-  send({cmd: 'set_position', position: pos});
+function useCurrentPos() { if (st.focus_position != null) $('cal-pos').value = st.focus_position; }
+function addCal() {
+  const d = parseFloat($('cal-dist').value), p = parseInt($('cal-pos').value);
+  if (isNaN(d) || isNaN(p)) { flash('err', '距離與 position 都要填'); return; }
+  if (focusRange && (p < focusRange[0] || p > focusRange[1])) {
+    flash('err', 'position ' + p + ' 超出鏡頭範圍 ' + focusRange[0] + '–' + focusRange[1]); return;
+  }
+  send({cmd: 'calibration_add', distance: d, position: p});
+  $('cal-dist').value = ''; $('cal-pos').value = '';
+  setTimeout(() => send({cmd: 'calibration_get'}), 250);
 }
-
-function step(delta) {
-  const cur = parseInt(document.getElementById('pos-input').value) || 0;
-  let next = cur + delta;
-  // 先在前端夾住，這樣顯示的數字就是真正會送出去的數字
-  if (focusRange) next = Math.max(focusRange[0], Math.min(focusRange[1], next));
-  document.getElementById('pos-input').value = next;
-  document.getElementById('pos-slider').value = next;
-  syncTarget();
-  setPos();
+function clearCal() {
+  if (!confirm('清空目前鏡頭的校準表？這個動作無法復原。')) return;
+  send({cmd: 'calibration_clear'});
+  setTimeout(() => send({cmd: 'calibration_get'}), 250);
 }
-
+function setLens() {
+  const id = $('lens-id').value.trim();
+  if (!id) return;
+  send({cmd: 'set_active_lens', lens_id: id});
+  setTimeout(() => send({cmd: 'calibration_get'}), 250);
+}
 function setDistance() {
-  const d = parseFloat(document.getElementById('dist-input').value);
+  const d = parseFloat($('dist-input').value);
+  if (isNaN(d)) return;
+  if (!st.calibration_points) { flash('err', '尚未校準 — 先新增至少 2 個校準點'); return; }
   send({cmd: 'set_distance', distance: d});
 }
 
-function useCurrentPos() {
-  const cur = document.getElementById('f-pos').textContent;
-  if (cur !== '—') document.getElementById('cal-pos').value = cur;
-}
-
-function addCal() {
-  const d = parseFloat(document.getElementById('cal-dist').value);
-  const p = parseInt(document.getElementById('cal-pos').value);
-  if (isNaN(d) || isNaN(p)) { alert('需要填距離跟 position'); return; }
-  send({cmd: 'calibration_add', distance: d, position: p});
-  document.getElementById('cal-dist').value = '';
-  document.getElementById('cal-pos').value = '';
-  setTimeout(() => send({cmd: 'calibration_get'}), 200);
-}
-
-function clearCal() {
-  if (!confirm('確定清空目前鏡頭的校準表？')) return;
-  send({cmd: 'calibration_clear'});
-  setTimeout(() => send({cmd: 'calibration_get'}), 200);
-}
-
-function setLens() {
-  const id = document.getElementById('lens-id').value.trim();
-  if (!id) return;
-  send({cmd: 'set_active_lens', lens_id: id});
-  setTimeout(() => send({cmd: 'calibration_get'}), 200);
+function doRelease() {
+  if (st.recording && !confirm('正在錄影中，交還前會先停止錄影。繼續？')) return;
+  send({cmd: 'release'});
 }
 
 setShutterUnit('time');
-connectWS();
+render();
+connect();
+setInterval(() => { if (st.connected && !st.released && !st.recording) send({cmd: 'capture_status'}); }, 5000);
 </script>
 </body>
 </html>

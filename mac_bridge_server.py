@@ -158,6 +158,9 @@ class BridgeState:
     settings_snapshot: dict | None = None
     #: "stills" | "movie" | None —— 機身撥桿位置（推測而來，見 refresh_capabilities）
     camera_mode: str | None = None
+    #: 錄影中與否。bridge 自己記，因為相機沒有可直接查詢的「正在錄影」旗標
+    recording: bool = False
+    recording_started_at: float | None = None
     # 快門角度換算用的幀率。機身實際幀率在 DataGroupMovie 裡，但那個
     # DataGroup 的 tag 編號還沒解出來，所以先由使用者指定。
     frame_rate: float = 24.0
@@ -706,6 +709,15 @@ async def release_camera() -> None:
     """
     state.released_by_user = True
 
+    # 錄影中就放手會留下一段沒收尾的檔案，先停下來
+    if state.recording:
+        log.warning("release 前先停止錄影")
+        with suppress(Exception):
+            await worker.call(lambda: recording.stop(state.camera),
+                              priority=Priority.CONTROL)
+        state.recording = False
+        state.recording_started_at = None
+
     # 先存檔再放手。重新取得相機時 config_api() 會把設定重置成預設值
     # （SDK 原文："API resets the camera setting to the default"），
     # 不存的話使用者只是暫時拿回機身，回來就發現設定全沒了。
@@ -832,6 +844,11 @@ async def broadcast_state(extra: dict | None = None) -> None:
         "connected": state.camera_connected,
         "released": state.released_by_user,
         "camera_mode": state.camera_mode,
+        "recording": state.recording,
+        "recording_seconds": (
+            round(time.monotonic() - state.recording_started_at, 1)
+            if state.recording_started_at else None
+        ),
         "focus_position": state.last_focus_position,
         "focus_state": state.last_focus_state,
         "focus_mode": state.last_focus_mode,
@@ -949,6 +966,25 @@ async def handle_ws_command(req: dict) -> dict | None:
     if cmd == "acquire":
         ok = await acquire_camera(restore=req.get("restore", True))
         return {"type": "ack", "id": request_id, "released": not ok, "connected": ok}
+
+    if cmd in ("record_start", "record_stop"):
+        if cmd == "record_start" and state.recording:
+            return {"type": "error", "id": request_id, "error": "已經在錄影中"}
+        fn = recording.start if cmd == "record_start" else recording.stop
+        await worker.call(lambda: fn(state.camera), priority=Priority.CONTROL)
+        state.recording = cmd == "record_start"
+        state.recording_started_at = time.monotonic() if state.recording else None
+        await broadcast_state()
+        return {"type": "ack", "id": request_id, "recording": state.recording}
+
+    if cmd == "capture_status":
+        return {
+            "type": "capture_status",
+            "id": request_id,
+            "status": await worker.call(
+                lambda: recording.capture_status(state.camera),
+                priority=Priority.STATUS),
+        }
 
     if cmd == "describe_settings":
         return {
@@ -1082,6 +1118,7 @@ async def handle_status(request: web.Request) -> web.Response:
         "connected": state.camera_connected,
         "released": state.released_by_user,
         "camera_mode": state.camera_mode,
+        "recording": state.recording,
         "focus_position": state.last_focus_position,
         "focus_state": state.last_focus_state,
         "focal_length_mm": state.last_lens_focal_mm,
@@ -1189,19 +1226,45 @@ async def handle_record(request: web.Request) -> web.Response:
 async def _do_record(action: str, request: web.Request) -> web.Response:
 
     if action == "start":
+        if state.recording:
+            return web.json_response(
+                {"error": "已經在錄影中", "recording": True}, status=409)
         await worker.call(lambda: recording.start(state.camera), priority=Priority.CONTROL)
+        state.recording = True
+        state.recording_started_at = time.monotonic()
+        await broadcast_state({"event": "recording_started"})
         return web.json_response({"ok": True, "recording": True})
 
     if action == "stop":
         await worker.call(lambda: recording.stop(state.camera), priority=Priority.CONTROL)
+        state.recording = False
+        state.recording_started_at = None
+        await broadcast_state({"event": "recording_stopped"})
         return web.json_response({"ok": True, "recording": False})
 
     if action == "clip":
+        if state.recording:
+            return web.json_response(
+                {"error": "已經在錄影中，先停止再錄", "recording": True}, status=409)
         seconds = float(request.query.get("seconds", 1.5))
-        result = await worker.call(
-            lambda: recording.record_clip(state.camera, seconds),
-            priority=Priority.CONTROL,
-        )
+        # 上限存在的理由：這會寫到使用者的記憶卡上。要長時間錄製請用
+        # start/stop，那樣使用者看得到自己在錄。
+        if not 0 < seconds <= 30:
+            return web.json_response(
+                {"error": "seconds 要在 0–30 之間；長時間錄製請用 start/stop"},
+                status=400)
+        state.recording = True
+        state.recording_started_at = time.monotonic()
+        await broadcast_state({"event": "recording_started"})
+        try:
+            result = await worker.call(
+                lambda: recording.record_clip(state.camera, seconds),
+                priority=Priority.CONTROL,
+            )
+        finally:
+            state.recording = False
+            state.recording_started_at = None
+            await broadcast_state({"event": "recording_stopped"})
         return web.json_response({
             "ok": True,
             "seconds": result["seconds"],
