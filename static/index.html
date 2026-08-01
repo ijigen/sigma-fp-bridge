@@ -108,6 +108,7 @@
   .o.locked:hover { background: #2a2a2a; border-color: #383838; }
   .o.locked.on { background: #334155; border-color: #475569; }
   .lockicon { font-size: 10px; opacity: .8; }
+  .opts select { min-width: 120px; max-width: 160px; }
 </style>
 </head>
 <body>
@@ -448,8 +449,7 @@ const ORDER = [
   ['cinema_dng_quality',    '色彩位元'],
   ['dng_quality',           '色彩位元'],
   ['mov_image_quality',     '影片畫質'],
-  ['iso_auto',              'ISO 模式'],
-  ['iso',                   'ISO'],
+  ['__iso',                 'ISO'],
   ['aperture',              '光圈'],
   ['shutter_speed',         '快門'],
   ['shutter_angle',         '快門角度'],
@@ -529,6 +529,40 @@ function optRow(name, title, opts) {
     '</div><div class="opts' + (many ? ' scroll' : '') + '">' + btns + '</div></div>';
 }
 
+// ISO 的模式與數值合併成一列：按鈕切自動/手動，數值用下拉選單。
+// 選項太多（實測 25 個）不適合橫排按鈕，而且它跟其他設定不同 ——
+// 使用者通常心裡已經有目標值，用選的比用捲的快。
+function isoRow(byName) {
+  const auto = byName.iso_auto, iso = byName.iso;
+  if (!auto && !iso) return '';
+  const isAuto = values.iso_auto === 'Auto';
+  const cur = values.iso;
+  const head = '<div class="opt-head"><span class="opt-name">ISO</span>' +
+    '<span class="opt-cur">' + (isAuto ? '自動' : '手動') +
+    (cur === null || cur === undefined ? '' : ' · ' + cur) + '</span>' +
+    (isAuto ? '<span class="opt-note">手動模式才能指定數值</span>' : '') +
+    '</div>';
+
+  let btns = '';
+  if (auto) {
+    btns = (auto.choices || ['Auto', 'Manual']).map(v => {
+      const on = String(v) === String(values.iso_auto) ? ' on' : '';
+      return '<button class="o' + on + '" data-set="iso_auto" data-val="' + v + '">' +
+        (v === 'Auto' ? '自動' : '手動') + '</button>';
+    }).join('');
+  }
+
+  let sel = '';
+  if (iso && iso.choices && iso.choices.length) {
+    const opts = iso.choices.map(v =>
+      '<option value="' + v + '"' + (String(v) === String(cur) ? ' selected' : '') + '>ISO ' + v + '</option>'
+    ).join('');
+    sel = '<select data-set="iso"' + (isAuto ? ' disabled' : '') + '>' +
+      '<option value="">—</option>' + opts + '</select>';
+  }
+  return '<div class="opt">' + head + '<div class="opts">' + btns + sel + '</div></div>';
+}
+
 function settingsHTML() {
   if (!schema) return '<div class="hint">載入中…</div>';
   const byName = {};
@@ -550,6 +584,7 @@ function settingsHTML() {
   }));
 
   for (const [name, title] of ORDER) {
+    if (name === '__iso') { const r = isoRow(byName); if (r) rows.push(r); continue; }
     const s = byName[name];
     if (!s) continue;
     const cur = values[name];
@@ -597,6 +632,13 @@ function renderSettings() {
         const numeric = s && (!s.choices || typeof s.choices[0] === 'number');
         send({cmd: 'set_settings',
               settings: {[b.dataset.set]: numeric ? parseFloat(b.dataset.val) : b.dataset.val}});
+      };
+    });
+    box.querySelectorAll('select[data-set]').forEach(el => {
+      el.onchange = () => {
+        if (el.value === '') return;
+        markBusy();
+        send({cmd: 'set_settings', settings: {[el.dataset.set]: parseFloat(el.value)}});
       };
     });
     box.querySelectorAll('input[data-set]').forEach(el => {

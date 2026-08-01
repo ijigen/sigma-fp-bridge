@@ -77,6 +77,23 @@ def test_inferred_labels_are_marked_uncertain():
     print("✓ 推測的標籤會標記為未確認")
 
 
+def test_iso_row_is_merged_and_uses_a_dropdown():
+    """ISO 的模式與數值在同一列，數值用下拉選單。
+
+    ISO 有 25 個合法值，橫排按鈕會佔掉整列；而且使用者多半心裡已經有目標值，
+    用選的比用捲的快。自動模式下數值不可調 —— 選了也會被相機覆蓋。
+    """
+    js = _script(HTML.read_text())
+    assert "function isoRow" in js, "沒有合併的 ISO 列"
+    assert "'__iso'" in js, "ORDER 沒有指向合併列"
+    assert "iso_auto" not in js[js.index("const ORDER"):js.index("const SCROLL_IF_OVER")], \
+        "iso_auto 不該還在一般的 ORDER 迴圈裡"
+    assert "<select data-set=\"iso\"" in js, "ISO 數值不是下拉選單"
+    assert "isAuto ? ' disabled' : ''" in js, "自動模式下沒有停用數值選單"
+    assert "select[data-set]" in js, "select 沒有綁事件"
+    print("✓ ISO 合併成一列，數值用下拉選單，自動模式下停用")
+
+
 def test_state_updates_do_not_rebuild_dom():
     """狀態廣播是 10Hz。無條件寫 innerHTML 會讓節點每 100ms 被銷毀重建 ——
     版面抖動、捲軸亂飄，按鈕在按下的瞬間被換掉所以按不到。實測踩過。
