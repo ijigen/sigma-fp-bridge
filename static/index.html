@@ -101,15 +101,21 @@
     padding: 5px 11px; border-radius: 6px; font-size: 12.5px; cursor: pointer;
     font-family: ui-monospace, SFMono-Regular, monospace; white-space: nowrap;
   }
-  .o:hover:not(:disabled) { background: #353535; border-color: #4a4a4a; }
+  /* 未選：滑入變亮灰。已選：滑入變淺藍，不能被灰色蓋掉 ——
+     .o:hover:not(:disabled) 的特異性 (0,3,0) 高於 .o.on 的 (0,2,0)，
+     所以已選狀態的 hover 要另外寫，不能只靠宣告順序。 */
+  .o:hover:not(:disabled):not(.on) { background: #353535; border-color: #4a4a4a; }
   .o.on { background: #2563eb; border-color: #3b82f6; color: #fff; font-weight: 600; }
+  .o.on:hover:not(:disabled) { background: #3b82f6; border-color: #60a5fa; }
   .o:disabled { opacity: .3; cursor: not-allowed; }
   .o.locked { cursor: default; }
-  .o.locked:hover { background: #2a2a2a; border-color: #383838; }
+  .o.locked:hover, .o.locked.on:hover { background: #2a2a2a; border-color: #383838; }
+  .o.locked.on, .o.locked.on:hover { background: #334155; border-color: #475569; }
   .o.locked.on { background: #334155; border-color: #475569; }
   /* 相機實際值跟這個選項接近但不相等 —— 例如選 29.97 相機存 30。
      還是要亮起來（不然整列看起來沒選中），但要看得出不是精確命中。 */
   .o.on.approx { background: #1e3a5f; border-color: #2563eb; font-weight: 500; }
+  .o.on.approx:hover:not(:disabled) { background: #2c5388; border-color: #3b82f6; }
   .o.on.approx::after { content: '≈'; margin-left: 4px; opacity: .75; }
   .lockicon { font-size: 10px; opacity: .8; }
   .opts select { min-width: 120px; max-width: 160px; }

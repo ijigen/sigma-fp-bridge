@@ -311,6 +311,20 @@ def test_every_dropdown_uses_the_shared_option_builder():
     print("✓ 所有下拉共用選中判定")
 
 
+def test_selected_buttons_keep_their_colour_on_hover():
+    """已選的按鈕滑入要變淺藍，不能被未選狀態的灰色蓋掉。
+
+    .o:hover:not(:disabled) 的特異性 (0,3,0) 高於 .o.on 的 (0,2,0)，
+    所以光靠宣告順序不夠 —— 已選狀態需要自己的 hover 規則。
+    """
+    css = HTML.read_text()
+    assert ".o:hover:not(:disabled):not(.on)" in css, "未選的 hover 沒有排除已選狀態"
+    assert ".o.on:hover:not(:disabled)" in css, "已選狀態沒有自己的 hover 樣式"
+    assert ".o.on.approx:hover:not(:disabled)" in css, "接近命中沒有 hover 樣式"
+    assert ".o.locked.on:hover" in css, "鎖定的按鈕滑入不該變色"
+    print("✓ 已選按鈕滑入變淺藍而非灰")
+
+
 def test_state_updates_do_not_rebuild_dom():
     """狀態廣播是 10Hz。無條件寫 innerHTML 會讓節點每 100ms 被銷毀重建 ——
     版面抖動、捲軸亂飄，按鈕在按下的瞬間被換掉所以按不到。實測踩過。
