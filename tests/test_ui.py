@@ -283,6 +283,34 @@ def test_all_controls_coerce_values_the_same_way():
     print("✓ 按鈕 / 下拉 / 輸入框共用型別轉換")
 
 
+def test_display_matching_is_separate_from_correctness():
+    """相機回報的值不一定精確等於選項（實測選 29.97 相機存 30）。
+
+    完全不亮會讓整列看起來沒選中，所以顯示用的比對放寬 —— 但只用於顯示，
+    而且要看得出不是精確命中。伺服器端的回讀驗證仍是嚴格比對，
+    值沒寫進去照樣要報，不能因為畫面好看就假裝成功。
+    """
+    js = _script(HTML.read_text())
+    assert "DISPLAY_EPSILON" in js and "function matchState" in js
+    assert "'on approx'" in js, "接近命中沒有獨立的樣式"
+    assert ".o.on.approx" in HTML.read_text(), "缺少接近命中的樣式定義"
+    assert "相機實際值" in js, "接近命中沒有標出實際值"
+
+    # 伺服器端的容差不得被一起放寬
+    src = (Path(__file__).resolve().parent.parent / "camera_settings.py").read_text()
+    assert "VALUE_EPSILON = 1e-6" in src, "伺服器端的回讀容差被放寬了"
+    print("✓ 顯示比對放寬、正確性檢查維持嚴格")
+
+
+def test_every_dropdown_uses_the_shared_option_builder():
+    """五個下拉共用同一套選中判定，避免只有一部分吃到放寬的比對。"""
+    js = _script(HTML.read_text())
+    assert "function optionsFor" in js
+    assert "String(c) === String(v) ? ' selected'" not in js, "還有下拉自己判斷選中"
+    assert js.count("optionsFor(") >= 5, "不是所有下拉都走共用產生器"
+    print("✓ 所有下拉共用選中判定")
+
+
 def test_state_updates_do_not_rebuild_dom():
     """狀態廣播是 10Hz。無條件寫 innerHTML 會讓節點每 100ms 被銷毀重建 ——
     版面抖動、捲軸亂飄，按鈕在按下的瞬間被換掉所以按不到。實測踩過。
