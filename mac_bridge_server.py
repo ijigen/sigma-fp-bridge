@@ -49,6 +49,7 @@ from zeroconf.asyncio import AsyncZeroconf
 sys.path.insert(0, str(Path(__file__).parent))
 import capture
 import movie_settings
+import ptp_probe
 import recording
 from ifd import parse_ifd, to_json
 from camera_settings import (
@@ -1568,6 +1569,51 @@ async def handle_probe_movie(request: web.Request) -> web.Response:
     })
 
 
+async def handle_ptp_probe(request: web.Request) -> web.Response:
+    """研究用：指定 opcode 和參數，把相機回的原始位元組拿回來。
+
+    為了省掉「改程式 → 重啟 bridge → 看結果」這個循環。那個循環貴到會讓人
+    先寫好假設再驗證，而這個專案幾乎每個錯誤結論都是這樣來的。
+
+    GET  /api/probe/ptp                     列出認得的 opcode
+    POST /api/probe/ptp {"opcode":..., "params":[...]}
+    """
+    if request.method == "GET":
+        return web.json_response(
+            {"opcodes": {k: f"0x{v:04x}" for k, v in
+                         sorted(ptp_probe.known_opcodes().items(), key=lambda kv: kv[1])}})
+
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "需要 JSON body"}, status=400)
+
+    opcode = body.get("opcode")
+    if not isinstance(opcode, str):
+        return web.json_response({"error": "opcode 必須是字串"}, status=400)
+    params = body.get("params") or []
+    if not isinstance(params, list) or not all(isinstance(x, int) for x in params):
+        return web.json_response({"error": "params 必須是整數陣列"}, status=400)
+
+    cam = state.camera or state.released_camera
+    if cam is None:
+        return web.json_response({"error": "not connected"}, status=503)
+
+    try:
+        raw = await worker.call(
+            lambda: ptp_probe.recv_raw(cam, opcode, params),
+            priority=Priority.STATUS, needs_camera=False)
+    except ptp_probe.ProbeError as e:
+        return web.json_response({"error": str(e)}, status=502)
+    except Exception as e:
+        return web.json_response({"error": f"{type(e).__name__}: {e}"}, status=502)
+
+    out = ptp_probe.describe(raw)
+    out["opcode"] = opcode
+    out["params"] = params
+    return web.json_response(out)
+
+
 async def handle_dump(request: web.Request) -> web.Response:
     """把 CanSetInfo5 / DataGroupMovie 的原始 IFD 以 JSON 吐出來。
 
@@ -1796,6 +1842,8 @@ def make_app() -> web.Application:
     app.router.add_get("/", handle_index)
     app.router.add_get("/ws", handle_ws)
     app.router.add_get("/api/status", handle_status)
+    app.router.add_get("/api/probe/ptp", handle_ptp_probe)
+    app.router.add_post("/api/probe/ptp", handle_ptp_probe)
     app.router.add_get("/api/focus", handle_focus_get)
     app.router.add_post("/api/focus", handle_focus_post)
     app.router.add_post("/api/distance", handle_distance_post)

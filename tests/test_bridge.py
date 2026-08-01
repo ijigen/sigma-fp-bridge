@@ -167,6 +167,44 @@ async def test_status_still_answers_and_names_the_stuck_step():
     print("✓ 卡住時 /api/status 仍答得出來，並指出卡在哪一步")
 
 
+async def test_ptp_probe_returns_raw_bytes_and_rejects_nonsense():
+    """研究用端點：省掉「改程式 → 重啟 bridge → 看結果」那個循環。
+
+    那個循環貴到會讓人先寫好假設再驗證，而這個專案幾乎每個錯誤結論都是
+    這樣來的 —— 拍攝那條線就連續錯了三次歸因。
+    """
+    reset()
+    B.state.camera = fake_camera.FakeCamera()
+    async with running_worker():
+        listing = json.loads((await B.handle_ptp_probe(
+            types.SimpleNamespace(method="GET"))).body.decode())
+        assert "SigmaGetMovieFileInfo" in listing["opcodes"], listing
+        assert listing["opcodes"]["SigmaGetMovieFileInfo"] == "0x9036"
+
+        class Req:
+            method = "POST"
+
+            def __init__(self, body):
+                self._body = body
+
+            async def json(self):
+                return self._body
+
+        ok = json.loads((await B.handle_ptp_probe(
+            Req({"opcode": "SigmaGetPictFileInfo2"}))).body.decode())
+        assert ok["bytes"] > 0 and ok["raw_hex"], ok
+        assert ok["uint32_le"], "沒有提供 uint32 視角"
+
+        bad = await B.handle_ptp_probe(Req({"opcode": "NotARealOpcode"}))
+        assert bad.status == 502, bad.status
+        assert "不認得" in json.loads(bad.body.decode())["error"]
+
+        bad = await B.handle_ptp_probe(Req({"opcode": "SigmaGetPictFileInfo2",
+                                            "params": ["九"]}))
+        assert bad.status == 400, bad.status
+    print("✓ 原始 PTP 探測端點可用，並擋掉不合法的輸入")
+
+
 async def test_set_position_coalesces():
     reset()
     async with running_worker():
