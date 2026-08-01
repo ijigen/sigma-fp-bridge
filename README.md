@@ -983,46 +983,53 @@ mdat  offset      131,056    29,114,808 bytes
 `mvhd` reports timescale 24000 and duration 72072 — exactly 3.00 s at 23.98 fps —
 with a 1920×1080 `avc1` video track, `sowt` audio and a `tmcd` timecode track.
 
-#### The camera can stop serving transfers
+#### One movie per API session, and never ask when there is none
 
-There is a state the camera enters where 0x9037 stops returning movie data and
-returns a fixed 122,868 bytes instead, regardless of offset or length, while
-`SigmaGetMovieFileInfo` keeps answering correctly the whole time.
+Two rules govern the transfer, and both were expensive to find.
 
-That reply is not malformed, and calling it garbage discourages looking at it.
-122,868 + 12 = 122,880, exactly 120 KB, and 12 bytes is precisely the PTP-over-USB
-data-phase container header (length 4, type 2, code 2, transaction 4) — so the
-camera sends a complete 120 KB container. ptpy's `recv` cross-checks the session,
-transaction and operation codes across request, data phase and response, resetting
-the device and raising if any disagree; no error is raised here. The camera is
-answering this request, properly. And the contents track whatever was asked
-immediately before — query `GetMovieFileInfo` first and the buffer starts with its
-85-byte payload.
+**`GetMovieFileInfo` takes the database entry index.** Each take occupies one
+entry, numbered like `GetCamCaptStatus`. Recording three takes without clearing
+gives entries 0, 1, 2, and querying those indices returns three different
+filenames. This code sent no parameter at all — equivalent to asking for entry 0 —
+so once `head` advanced past 0, every later take looked like it had produced
+nothing. That symptom was misread for a long time as "the reply latches to the
+first clip of the session and never updates".
 
-Read together: there is a shared 120 KB transfer buffer, and when the camera
-cannot serve a movie read it hands that buffer back without filling it.
+**`GetPartialMovieFile` only ever serves entry 0.** Proven by the end boundary
+rather than by trusting the reply: with three entries sized 29,352,984 /
+29,251,032 / 26,482,656, reads were refused at exactly 29,352,984 — entry 0's
+length. The first parameter is not an index (1 or 2 just return the 120 KB
+rejection buffer), and querying `GetMovieFileInfo` for another index does not
+select it either.
 
-**Restarting the bridge does not clear it** — that is already a fresh PTP session
-and the state survives. Only power-cycling the camera does.
+So the working sequence is one clip at a time:
 
-One trigger is now reproduced: asking for a transfer when the camera has no
-movie to serve. It happened during a `dest_to_save=InComputer` recording, which
-leaves no file at all, so "while recording" and "no file exists" were both true
-and have not been separated. The bridge refuses a download in either case, since
-the cost of finding out is a power cycle.
+```
+POST /api/release  →  POST /api/acquire     # database resets to 0/0
+record one take                             # it lands on entry 0
+GET  /api/record/download                   # only entry 0 is servable
+```
 
-This cost a lot of time, and why is worth recording. Every failure was diagnosed
-by restarting the bridge and retrying with a smaller chunk, so every retry
-happened inside the same bad camera state, and request size took the blame three
-times over: 4 MB is too big, then 64 KB is too big, then only 4 KB and under are
-safe. On a healthy camera every size from 256 bytes to 4 MB passes content
-verification. Size never mattered.
+⚠️ **Asking for a transfer when the camera has no movie entry hangs the camera.**
+It stops answering, `USBTimeoutError`, and drops off USB; only power restores it.
+Reproduced twice — once by reading during a `dest_to_save=InComputer` take, which
+leaves no file, and once by reading after clearing every entry. `download_movie()`
+therefore checks that a movie exists at entry 0 before issuing anything, and the
+endpoint refuses when the entry is not 0. Those checks are there to protect the
+hardware, not to produce a tidy error message.
 
-The download stops at the first reply longer than requested and says to
-power-cycle. That check exists because the original loop did `out += got[:want]`:
-asking for 1 KB and receiving 122,868 bytes is unambiguous evidence of reading
-someone else's buffer, and truncating turned it into a correctly-sized corrupt
-file that only failed at QuickTime parsing.
+Separately, a request whose first or third parameter is non-zero comes back as a
+fixed 122,868 bytes. That reply is harmless — the session keeps working — and it
+is not malformed either: 122,868 + 12 = 122,880, exactly 120 KB, and 12 bytes is
+the PTP-over-USB data-phase container header. ptpy cross-checks session,
+transaction and operation codes and raises nothing, so the camera really is
+answering. Its contents follow whatever was asked immediately before, which reads
+like a shared 120 KB transfer buffer handed back unfilled.
+
+That distinction took a while: the harmless rejection and the fatal hang were
+treated as the same failure, and chunk size was blamed three times over — 4 MB is
+too big, then 64 KB, then anything above 4 KB. On a healthy camera every size from
+256 bytes to 4 MB verifies clean. Size never mattered.
 
 ### Live view
 

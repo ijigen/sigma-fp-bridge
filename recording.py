@@ -102,8 +102,16 @@ _FAILED_STATUS = {
 }
 
 
-def movie_file_info_raw(cam) -> bytes:
-    """發 SigmaGetMovieFileInfo (0x9036)，取回最近一段影片的資訊。
+def movie_file_info_raw(cam, image_id: int = 0) -> bytes:
+    """發 SigmaGetMovieFileInfo (0x9036)，取回某一筆影片項目的資訊。
+
+    參數是影像資料庫的項目編號，跟 get_cam_capt_status(image_id) 同一套 ——
+    每段錄影佔一個項目，編號從拍攝前的 tail 開始遞增。實測連錄三段（head/tail
+    0/3）時，[0][1][2] 分別回報三個不同的檔名，[3] 回空殼。
+
+    先前這裡寫死不帶參數（等同查 0），所以只有「進入 API 模式後的第一段」
+    讀得到 —— 因為每次錄影前的 clear 會讓 head 前進，新項目落在 head 而不是
+    0。那個症狀被誤判成「影片資訊會鎖住不更新」很久。
 
     sigma-ptpy 定義了這個 opcode 但沒有包成方法（同 PictFileInfo2 的處境，
     那個有包）。結構未文件化，但檔名是 ASCII，肉眼就看得出來 —— 對「這段
@@ -115,7 +123,7 @@ def movie_file_info_raw(cam) -> bytes:
         OperationCode="SigmaGetMovieFileInfo",
         SessionID=cam._session,
         TransactionID=cam._transaction,
-        Parameter=[],
+        Parameter=[int(image_id)],
     )
     return bytes(cam.recv(ptp).Data)
 
@@ -294,11 +302,14 @@ class MovieFile:
     path_name: str
     format: str
     size: int
+    #: 影像資料庫的項目編號。只有 0 能下載，見 download_movie()。
+    index: int = 0
     data: bytes | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {"filename": self.filename, "path": self.path_name,
-                "format": self.format, "size": self.size,
+                "format": self.format, "size": self.size, "index": self.index,
+                "downloadable": self.index == 0,
                 "downloaded": self.data is not None}
 
 
@@ -345,9 +356,25 @@ def _cstring(raw: bytes, off: int) -> str:
     return raw[off:end if end >= 0 else len(raw)].decode("ascii", "replace")
 
 
+def movie_entry_range(cam) -> tuple[int, int]:
+    """影像資料庫裡待釋放項目的 [head, tail)。"""
+    st = cam.get_cam_capt_status(0)
+    return (int(getattr(st, "ImageDBHead", 0) or 0),
+            int(getattr(st, "ImageDBTail", 0) or 0))
+
+
 def movie_files(cam) -> list[MovieFile]:
-    """相機目前能提供的影片檔案。"""
-    return parse_movie_file_info(movie_file_info_raw(cam))
+    """列出資料庫裡每一筆影片項目，依項目編號。
+
+    要逐筆問 —— 0x9036 一次只描述一個項目。
+    """
+    head, tail = movie_entry_range(cam)
+    out: list[MovieFile] = []
+    for index in range(head, tail):
+        for one in parse_movie_file_info(movie_file_info_raw(cam, index)):
+            one.index = index
+            out.append(one)
+    return out
 
 
 def partial_movie(cam, offset: int, length: int) -> bytes:
@@ -373,15 +400,19 @@ def partial_movie(cam, offset: int, length: int) -> bytes:
     相機斷電重開才會恢復。這件事花了很久才看出來，因為每次失敗我都只重啟
     bridge，於是一直在同一個壞狀態裡測，還連續三次把原因誤判成請求尺寸。
 
-    已知會觸發的情況：**在沒有可用影片時呼叫這個指令**。實測是在一段
-    dest_to_save=InComputer 的錄影進行中呼叫 —— 那種錄影不會留下任何檔案，
-    相機回了 122,868 bytes 之後就再也不服務影片傳輸了。還沒分辨清楚真正的
-    條件是「錄影中」還是「沒有檔案」，兩者當時同時成立。
+    ⚠️⚠️ **相機沒有影片項目可服務時呼叫這個指令，相機會 USB 逾時並掉線。**
+    只能斷電重開。已經隔離出來、重現兩次：
+      - 在 dest_to_save=InComputer 的錄影中呼叫（那種錄影不留下檔案）
+      - 把資料庫項目全部清掉之後呼叫
+    所以呼叫前一定要先確認索引 0 有影片，download_movie() 就是這樣做的。
 
-    bridge 因此在錄影中、以及相機沒有回報任何影片時，都直接拒絕下載。
+    另外，**只有資料庫索引 0 的影片讀得到**。用檔尾邊界驗證過：連錄三段
+    （項目 0/1/2，大小 29,352,984 / 29,251,032 / 26,482,656）時，讀到
+    offset 29,352,984 才被拒 —— 正好是項目 0 那個檔案的長度。第一個參數不是
+    索引（設 1、2 只會拿到 120 KB 的拒絕回應），MovieFileInfo(idx) 也不會
+    「選定」要讀哪個。
 
-    download_movie() 會在收到過長的回應時立刻停下並指出要重開相機，這是
-    進入那個狀態之後唯一可靠的辨識方式。
+    所以要下載第二段影片，得先 release + acquire 讓資料庫歸零，再錄。
     """
     from construct import Container
 
@@ -403,8 +434,21 @@ def download_movie(cam, movie: MovieFile, save_dir=None,
             影片檔案很大，沒有進度回報的話看起來就像當掉了。
 
     Raises:
-        RecordingError: 大小不合理，或相機提前停止回傳。
+        RecordingError: 影片不在索引 0、大小不合理，或相機提前停止回傳。
     """
+    if movie.index != 0:
+        # 0x9037 只服務索引 0 那一筆。硬讀別筆不會拿到它，只會拿到索引 0 的
+        # 資料，靜靜地存成錯的檔案。
+        raise RecordingError(
+            f"只有資料庫索引 0 的影片能下載，這一筆在索引 {movie.index}。"
+            "先 release + acquire 讓資料庫歸零，再錄一段就會落在索引 0。")
+
+    # 沒有影片可服務時呼叫 0x9037 會讓相機 USB 逾時掉線，只能斷電。
+    # 這道檢查不是禮貌，是避免弄壞硬體狀態。
+    if not movie_files(cam):
+        raise RecordingError(
+            "相機沒有任何影片項目 —— 這時發下載指令會讓相機掉線，已中止。")
+
     if not 0 < movie.size <= MAX_MOVIE_BYTES:
         raise RecordingError(
             f"影片大小看起來沒解對：{movie.size:,} bytes")

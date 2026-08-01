@@ -4,6 +4,7 @@
 執行：python3 tests/test_movie.py
 """
 import sys
+import types
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -332,6 +333,93 @@ def test_an_empty_movie_info_parses_to_nothing():
     print("✓ 空殼影片資訊解成空清單")
 
 
+class _MovieCam:
+    """最小的假相機：一筆索引 0 的影片，資料按偏移供應。"""
+
+    _session = 1
+    _transaction = 1
+
+    def __init__(self, payload, head=0, tail=1):
+        self.payload = payload
+        self.head, self.tail = head, tail
+        self.calls = []
+
+    def get_cam_capt_status(self, image_id=0):
+        return types.SimpleNamespace(
+            ImageId=image_id, ImageDBHead=self.head, ImageDBTail=self.tail)
+
+    def recv(self, ptp):
+        if ptp.OperationCode == "SigmaGetMovieFileInfo":
+            index = ptp.Parameter[0]
+            if not self.head <= index < self.tail:
+                return types.SimpleNamespace(Data=bytes(16))
+            return types.SimpleNamespace(Data=REAL_MOVIE_INFO)
+        assert ptp.OperationCode == "SigmaGetPartialMovieFile"
+        a, offset, c, length = ptp.Parameter
+        assert a == 0 and c == 0, f"第 1、3 個參數必須是 0，收到 {ptp.Parameter}"
+        self.calls.append((offset, length))
+        return types.SimpleNamespace(Data=self.payload[offset:offset + length])
+
+
+def test_movie_file_info_is_queried_by_entry_index():
+    """0x9036 一次描述一個資料庫項目，參數就是項目編號。
+
+    先前寫死不帶參數（等同查 0），所以 head 前進之後就永遠查不到新錄的那段，
+    症狀被誤判成「影片資訊會鎖住不更新」。
+    """
+    import recording
+    cam = _MovieCam(b"x" * 100, head=2, tail=4)
+    seen = []
+    original = cam.recv
+
+    def spy(ptp):
+        if ptp.OperationCode == "SigmaGetMovieFileInfo":
+            seen.append(ptp.Parameter[0])
+        return original(ptp)
+
+    cam.recv = spy
+    files = recording.movie_files(cam)
+    assert seen == [2, 3], f"應該逐筆查 head..tail，實際查了 {seen}"
+    assert [f.index for f in files] == [2, 3], [f.index for f in files]
+    print(f"✓ 影片資訊依項目編號查詢（查了 {seen}）")
+
+
+def test_only_entry_zero_can_be_downloaded():
+    """0x9037 只服務索引 0。硬讀別筆會拿到索引 0 的資料，靜靜存成錯的檔案。"""
+    import recording
+    cam = _MovieCam(b"y" * 100, head=1, tail=2)
+    movie = recording.MovieFile(filename="A.MOV", path_name="C", format="MOV",
+                                size=100, index=1)
+    try:
+        recording.download_movie(cam, movie)
+    except recording.RecordingError as e:
+        assert "索引 0" in str(e) and "acquire" in str(e), e
+        assert not cam.calls, "已經發出讀取了"
+        print("✓ 不在索引 0 的影片被擋下，並說明怎麼讓它變成索引 0")
+    else:
+        raise AssertionError("應該要拒絕")
+
+
+def test_downloading_with_no_movie_is_refused_before_touching_the_camera():
+    """迴歸：沒有影片項目時發 0x9037 會讓相機 USB 逾時掉線，只能斷電重開。
+
+    實測重現兩次 —— 一次在 InComputer 錄影中（那種錄影不留檔案），一次在把
+    資料庫全部清掉之後。這道檢查是為了不弄壞硬體狀態，不是為了訊息好看。
+    """
+    import recording
+    cam = _MovieCam(b"z" * 100, head=0, tail=0)      # 資料庫全空
+    movie = recording.MovieFile(filename="A.MOV", path_name="C", format="MOV",
+                                size=100, index=0)
+    try:
+        recording.download_movie(cam, movie)
+    except recording.RecordingError as e:
+        assert "掉線" in str(e), e
+        assert not cam.calls, "在沒有影片時仍然發了讀取指令"
+        print("✓ 沒有影片時不發讀取指令")
+    else:
+        raise AssertionError("應該要拒絕")
+
+
 def test_movie_download_uses_the_verified_parameter_shape():
     """SigmaGetPartialMovieFile(0, offset, 0, length)。
 
@@ -342,29 +430,19 @@ def test_movie_download_uses_the_verified_parameter_shape():
     import types as _t
 
     payload = bytes(range(256)) * 40      # 10,240 bytes
-    calls = []
     # 縮小分塊，讓下載跨好幾次請求 —— 只有一塊的話 offset 永遠是 0，
     # 參數順序寫錯也測不出來（第一版就是這樣漏掉的）
     original_chunk = recording.MOVIE_CHUNK_BYTES
     recording.MOVIE_CHUNK_BYTES = 1024
 
-    class Cam:
-        _session = 1
-        _transaction = 1
-
-        def recv(self, ptp):
-            assert ptp.OperationCode == "SigmaGetPartialMovieFile"
-            a, offset, c, length = ptp.Parameter
-            assert a == 0 and c == 0, f"第 1、3 個參數必須是 0，收到 {ptp.Parameter}"
-            calls.append((offset, length))
-            return _t.SimpleNamespace(Data=payload[offset:offset + length])
-
+    cam = _MovieCam(payload)
+    calls = cam.calls
     movie = recording.MovieFile(filename="A001.MOV", path_name="CINEMA",
                                 format="MOV", size=len(payload))
     seen = []
     try:
         got = recording.download_movie(
-            Cam(), movie, progress=lambda d, t: seen.append(d))
+            cam, movie, progress=lambda d, t: seen.append(d))
     finally:
         recording.MOVIE_CHUNK_BYTES = original_chunk
     assert got.data == payload, "抓回來的資料跟相機的不一致"
@@ -383,19 +461,14 @@ def test_an_overlong_chunk_is_rejected_instead_of_truncated():
     內容全錯的 27 MB 檔案 —— 一直到解析 QuickTime 結構才發現。
     """
     import recording
-    import types as _t
-
-    class Cam:
-        _session = 1
-        _transaction = 1
-
-        def recv(self, ptp):
-            return _t.SimpleNamespace(Data=b"\x00" * 122868)
-
+    cam = _MovieCam(b"")
+    cam.recv = lambda ptp: types.SimpleNamespace(
+        Data=b"\x00" * 122868) if ptp.OperationCode == "SigmaGetPartialMovieFile" \
+        else types.SimpleNamespace(Data=REAL_MOVIE_INFO)
     movie = recording.MovieFile(filename="A.MOV", path_name="C",
                                 format="MOV", size=4096)
     try:
-        recording.download_movie(Cam(), movie)
+        recording.download_movie(cam, movie)
     except recording.RecordingError as e:
         assert "斷電重開" in str(e) and "122,868" in str(e), e
         print("✓ 過長的回應被當成錯誤，不會截斷後繼續")
@@ -406,19 +479,11 @@ def test_an_overlong_chunk_is_rejected_instead_of_truncated():
 def test_a_truncated_movie_download_is_an_error():
     """相機提前停止回傳時要報錯，不能默默交出半個檔案。"""
     import recording
-    import types as _t
-
-    class Cam:
-        _session = 1
-        _transaction = 1
-
-        def recv(self, ptp):
-            return _t.SimpleNamespace(Data=b"")
-
+    cam = _MovieCam(b"")
     movie = recording.MovieFile(filename="A.MOV", path_name="C",
                                 format="MOV", size=1024)
     try:
-        recording.download_movie(Cam(), movie)
+        recording.download_movie(cam, movie)
     except recording.RecordingError as e:
         assert "下載中斷" in str(e), e
         print("✓ 影片下載中斷時報錯")
@@ -434,22 +499,14 @@ def test_a_movie_filename_cannot_escape_the_save_directory():
     from pathlib import Path
 
     payload = b"MOVIEDATA" * 100
-
-    class Cam:
-        _session = 1
-        _transaction = 1
-
-        def recv(self, ptp):
-            _, offset, _, length = ptp.Parameter
-            return _t.SimpleNamespace(Data=payload[offset:offset + length])
-
+    cam = _MovieCam(payload)
     movie = recording.MovieFile(filename="../../escaped.MOV", path_name="C",
                                 format="MOV", size=len(payload))
     with tempfile.TemporaryDirectory() as d:
         # 目錄刻意放深一層：就算淨化失效，".." 也只跑得到暫存區裡面，
         # 不會污染系統。上一版沒這樣做，變異測試真的在 /var/folders 留下檔案。
         root = Path(d) / "a" / "b" / "movies"
-        got = recording.download_movie(Cam(), movie, root)
+        got = recording.download_movie(cam, movie, root)
         written = root / got.filename
         assert written.exists() and written.resolve().parent == root.resolve()
         assert not (Path(d) / "a" / "escaped.MOV").exists(), "檔名逃出了目錄"

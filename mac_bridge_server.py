@@ -1486,12 +1486,21 @@ async def _do_record(action: str, request: web.Request) -> web.Response:
         movies = await worker.call(
             lambda: recording.movie_files(state.camera), priority=Priority.STATUS)
         if not movies:
-            # 沒有影片還硬讀 0x9037 也會把相機弄壞，所以這裡也是防線不是提示。
+            # 沒有影片還發 0x9037，相機會 USB 逾時掉線，只能斷電。防線不是提示。
             return web.json_response(
                 {"error": "相機沒有可下載的影片。dest_to_save 設成 InComputer "
                           "或 Null 錄的影片不會留下檔案 —— 要下載請用 InCamera "
                           "或 Both。"},
                 status=404)
+
+        if not any(m.index == 0 for m in movies):
+            # 0x9037 只服務索引 0。資料庫 head 前進之後，新錄的那段就下載不了。
+            return web.json_response(
+                {"error": "影片不在資料庫索引 0，下載不了（索引 "
+                          + ", ".join(str(m.index) for m in movies) + "）。"
+                          "先 POST /api/release 再 POST /api/acquire 讓資料庫歸零，"
+                          "然後錄一段就會落在索引 0。"},
+                status=409)
         try:
             index = int(request.query.get("index", 0))
         except ValueError:
@@ -1499,6 +1508,10 @@ async def _do_record(action: str, request: web.Request) -> web.Response:
         if not 0 <= index < len(movies):
             return web.json_response(
                 {"error": f"index 超出範圍（有 {len(movies)} 個檔案）"}, status=400)
+        if movies[index].index != 0:
+            return web.json_response(
+                {"error": f"這一筆在資料庫索引 {movies[index].index}，"
+                          "只有索引 0 能下載。"}, status=409)
 
         save = request.query.get("save", "1") not in ("0", "false", "no")
         movies_dir = STATE_DIR / "movies"
@@ -1670,6 +1683,14 @@ async def handle_ptp_probe(request: web.Request) -> web.Response:
     cam = state.camera or state.released_camera
     if cam is None:
         return web.json_response({"error": "not connected"}, status=503)
+
+    if state.recording and opcode == "SigmaGetPartialMovieFile":
+        # 實測兩次都出事：一次讓相機不再服務影片傳輸，一次直接 USBTimeoutError
+        # 之後從 USB 上掉線。這是研究端點，但這個組合會弄壞硬體狀態，擋掉。
+        return web.json_response(
+            {"error": "錄影中不能發 SigmaGetPartialMovieFile —— 實測會讓相機"
+                      "不再服務傳輸，甚至直接掉線。"},
+            status=409)
 
     try:
         raw = await worker.call(
