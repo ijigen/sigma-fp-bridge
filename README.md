@@ -589,7 +589,43 @@ in the same request is rejected.
   movie/still setting "is synchronized with the switch status", and while
   `CanSetInfo5` reports a `StillMovieSwitch` capability, no `DataGroup` exposes a
   writable field for it.
-- **Movie record format (CinemaDNG, movie resolution) — not yet, but reachable.**
+#### Movie mode (CINE)
+
+With the body switch on CINE, **exposure is governed by `DataGroupMovie`, not
+`DataGroup1`.** Writing `shutter_speed` there is accepted and discarded — the
+value simply never changes. Use `shutter_angle`, which writes to the movie group.
+
+| Setting | |
+|---|---|
+| `shutter_angle` | 11.2 – 360°, from the camera's own list |
+| `frame_rate` | 23.98 / 25 / 29.97 |
+| `cinema_dng_quality` | 12 / 10 / 8-bit |
+| `record_format`, `mov_image_quality`, `movie_resolution` | camera-reported values |
+
+sigma-ptpy defines `SigmaGetCamDataGroupMovie` (0x9033) and
+`SigmaSetCamDataGroupMovie` (0x9034) but ships no schema class or method for
+either — the same gap that hid `FocusPosition`. `movie_settings.py` builds the
+IFD directly.
+
+**How the tag numbers were established**, since guessing them would be
+irresponsible: `DataGroupMovie` tags are `CanSetInfo5` tags minus 100, confirmed
+across the whole audio and format block — `FrameRate` at movie tag 61 reads
+23.98 against `CanSetInfo5` 161, `CinemaDNGImageQuality` at 51 reads 12-bit
+against 151, and so on. Shutter angle does not follow that offset, but the proof
+is more direct: `CanSetInfo5` tag 214 lists the legal angles, its first entry is
+`(112, 3600)`, and movie tag 7 read back exactly `(112, 3600)`. Converted, the
+list is the standard cine sequence — 11.2, 22.5, 45, 60, 72, 75, 86.4, 90, 108,
+120, 144, 150, 172.8, 180, 216, 270, 300, 360 — which nothing else would be.
+
+Writes are restricted to values the camera itself declared legal. That is the
+only defensible safety net when writing to an undocumented data group.
+
+Movie mode also changes the limits on ordinary settings — exposure compensation
+narrows from ±5 EV to ±3, and shutter is capped at 1/25 by the frame rate. This
+is why ranges are read from the camera rather than tabulated.
+
+- **Movie record format (CinemaDNG, movie resolution) — now supported, see above.**
+  Previously unreachable:
   sigma-ptpy defines the opcodes `SigmaGetCamDataGroupMovie` (0x9033) and
   `SigmaSetCamDataGroupMovie` (0x9034) but ships no schema class or method for
   them — the same gap that hid `FocusPosition`. `--dump-movie` issues the read

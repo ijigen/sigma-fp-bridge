@@ -47,6 +47,7 @@ from zeroconf.asyncio import AsyncZeroconf
 
 # 引入 PoC 裡的 patch 跟基礎 helpers
 sys.path.insert(0, str(Path(__file__).parent))
+import movie_settings
 from ifd import parse_ifd, to_json
 from camera_settings import (
     SettingError,
@@ -149,6 +150,8 @@ class BridgeState:
     # 相機實際接受的數值範圍（ISO、曝光補償…）。APEX 換算表涵蓋的範圍遠大於
     # 任何一台實機，不靠這個過濾的話 UI 會列出一堆設了會失敗的值。
     capabilities: dict = field(default_factory=dict)
+    #: 錄影設定的合法值清單（來自 CanSetInfo5 的 150/151/160/161/214 等）
+    movie_capabilities: dict = field(default_factory=dict)
     # 快門角度換算用的幀率。機身實際幀率在 DataGroupMovie 裡，但那個
     # DataGroup 的 tag 編號還沒解出來，所以先由使用者指定。
     frame_rate: float = 24.0
@@ -461,6 +464,14 @@ async def refresh_capabilities() -> None:
     except Exception as e:
         log.warning(f"讀取相機能力失敗：{e}")
         return
+    try:
+        info5 = await worker.call(
+            lambda: read_info5_raw(state.camera), priority=Priority.STATUS
+        )
+        state.movie_capabilities = movie_settings.read_capabilities(state.camera, info5)
+    except Exception as e:
+        log.debug(f"讀取錄影能力失敗：{e}")
+
     if caps != state.capabilities:
         summary = ", ".join(
             f"{k} {v.get('min')}–{v.get('max')}" for k, v in sorted(caps.items())
@@ -547,11 +558,31 @@ async def cam_wait_idle(timeout_s: float = 2.0, poll_interval_s: float = 0.05) -
     return False
 
 
+def _read_all_settings() -> dict:
+    """在 executor 裡跑：靜態設定 + 錄影設定一起讀。
+
+    CINE 模式下曝光由 DataGroupMovie 管，光看 DataGroup1 會誤導 ——
+    它照樣回報一個快門值，但那個值寫不進去也不是實際生效的。
+    """
+    out = read_settings(state.camera, state.frame_rate)
+    try:
+        out.update(movie_settings.read_settings(state.camera))
+    except Exception as e:
+        log.debug(f"錄影設定讀取失敗（可能不在 CINE 模式）：{e}")
+    return out
+
+
 async def cam_read_settings() -> dict:
     return await worker.call(
-        lambda: read_settings(state.camera, state.frame_rate),
-        priority=Priority.STATUS,
+        _read_all_settings, priority=Priority.STATUS,
     )
+
+
+def _split_movie_changes(changes: dict) -> tuple[dict, dict]:
+    """把變更拆成「錄影設定」與「靜態設定」兩堆。"""
+    movie = {k: v for k, v in changes.items() if k in movie_settings.MOVIE_BY_NAME}
+    still = {k: v for k, v in changes.items() if k not in movie_settings.MOVIE_BY_NAME}
+    return movie, still
 
 
 def _apply_and_verify(changes: dict) -> dict:
@@ -559,10 +590,33 @@ def _apply_and_verify(changes: dict) -> dict:
 
     寫入與驗證放同一個 job，中間不會被別的 transaction 插進來。
     """
-    applied = apply_settings(state.camera, changes, state.capabilities,
-                             state.frame_rate)
-    rejected = verify_applied(state.camera, applied, state.frame_rate)
+    movie_changes, still_changes = _split_movie_changes(changes)
+
+    applied: dict = {}
+    if movie_changes:
+        applied.update(movie_settings.apply_settings(
+            state.camera, movie_changes, state.movie_capabilities))
+    if still_changes:
+        applied.update(apply_settings(state.camera, still_changes,
+                                      state.capabilities, state.frame_rate))
+
+    actual = _read_all_settings()
+    rejected = {}
+    for name, wanted in applied.items():
+        got = actual.get(name)
+        if got is None or _roughly_equal_setting(got, wanted):
+            continue
+        rejected[name] = {"requested": wanted, "actual": got, "hint": None}
+    # 靜態設定的「被自動曝光蓋掉」提示比較講究，沿用原本那套
+    for name, detail in verify_applied(state.camera, still_changes,
+                                       state.frame_rate).items():
+        rejected[name] = detail
     return {"applied": applied, "rejected": rejected}
+
+
+def _roughly_equal_setting(a, b) -> bool:
+    from camera_settings import _roughly_equal
+    return _roughly_equal(a, b)
 
 
 async def cam_apply_settings(changes: dict) -> dict:
@@ -832,8 +886,10 @@ async def handle_ws_command(req: dict) -> dict | None:
         return {
             "type": "settings_schema",
             "id": request_id,
-            "settings": describe(state.capabilities),
+            "settings": describe(state.capabilities)
+                        + movie_settings.describe(state.movie_capabilities),
             "capabilities": state.capabilities,
+            "movie_capabilities": state.movie_capabilities,
             "frame_rate": state.frame_rate,
         }
 
@@ -859,7 +915,7 @@ async def handle_ws_command(req: dict) -> dict | None:
         changes = req.get("settings") or {}
         try:
             result = await cam_apply_settings(changes)
-        except SettingError as e:
+        except (SettingError, movie_settings.MovieSettingError) as e:
             return {"type": "error", "id": request_id, "error": str(e)}
         return {
             "type": "ack",
@@ -1011,8 +1067,10 @@ async def handle_distance_post(request: web.Request) -> web.Response:
 async def handle_settings_schema(request: web.Request) -> web.Response:
     """所有可設定項目的中繼資料。不需要相機。"""
     return web.json_response({
-        "settings": describe(state.capabilities),
+        "settings": describe(state.capabilities)
+                    + movie_settings.describe(state.movie_capabilities),
         "capabilities": state.capabilities,
+        "movie_capabilities": state.movie_capabilities,
     })
 
 
@@ -1200,7 +1258,7 @@ async def camera_unavailable_middleware(request: web.Request, handler):
         return await handler(request)
     except CameraUnavailable as e:
         return web.json_response({"error": str(e)}, status=503)
-    except SettingError as e:
+    except (SettingError, movie_settings.MovieSettingError) as e:
         # 設定名稱或值不合法是呼叫端的錯，不是伺服器壞掉
         return web.json_response({"error": str(e)}, status=400)
 

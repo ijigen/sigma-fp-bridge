@@ -50,6 +50,12 @@ class FakeCamera:
         self.usb_claimed = True
         # 這些欄位寫進去會被相機默默忽略（模擬自動曝光覆蓋手動值）
         self.ignored_fields: set = set()
+        # DataGroupMovie 的內容（tag -> 值）。照實機讀到的樣子。
+        self.movie = {7: (1728, 3600), 50: 2, 51: 12, 52: 2, 60: 2, 61: (2398, 100)}
+        self.movie_write_log: list = []
+        # ptpy 的 Container 需要這兩個欄位
+        self._session = 1
+        self._transaction = 1
         # /api/dump/* 用的原始 IFD payload
         self.info5_raw = _sample_ifd([(658, 3, [5974, 11116])])
         self.movie_raw = _sample_ifd([(1, 1, [2]), (10, 3, [25])])
@@ -99,6 +105,8 @@ class FakeCamera:
         self.api_mode = True
         self.usb_claimed = True
         self.ignored_fields = set()
+        self.movie = {7: (1728, 3600), 50: 2, 51: 12, 52: 2, 60: 2, 61: (2398, 100)}
+        self.movie_write_log.clear()
         self.capabilities = {
             "iso": {"min": 100, "max": 25600, "step_ev": 0.333},
             "iso_auto": {"min": 100, "max": 6400, "step_ev": 0.333},
@@ -162,6 +170,37 @@ class FakeCamera:
 
     def set_cam_data_group5(self, p):
         self._set_group(5, p)
+
+    # -- DataGroupMovie：走 recv/send 的原始 opcode 路徑 ------------------
+
+    def recv(self, ptp):
+        self._tick("recv:" + ptp.OperationCode)
+        if ptp.OperationCode == "SigmaGetCamDataGroupMovie":
+            return types.SimpleNamespace(Data=self._encode_movie())
+        raise RuntimeError(f"假相機不支援 {ptp.OperationCode}")
+
+    def send(self, ptp, payload):
+        self._tick("send:" + ptp.OperationCode)
+        if ptp.OperationCode != "SigmaSetCamDataGroupMovie":
+            raise RuntimeError(f"假相機不支援 {ptp.OperationCode}")
+        import sys as _sys
+        from pathlib import Path as _Path
+        _sys.path.insert(0, str(REPO_ROOT))
+        from ifd import parse_ifd
+        for e in parse_ifd(bytes(payload)).entries:
+            if e.values:
+                self.movie[e.tag] = e.values[0]
+        self.movie_write_log.append(dict(self.movie))
+        return None
+
+    def _encode_movie(self) -> bytes:
+        from sigma_ptpy.schema import DirectoryType as DT
+        from sigma_ptpy.schema import _DirectoryEntrySchema
+        enc = type("E", (_DirectoryEntrySchema,), {})()
+        rows = []
+        for tag, v in sorted(self.movie.items()):
+            rows.append((tag, DT.URational if isinstance(v, tuple) else DT.UInt8, v))
+        return enc._encode(rows)
 
     def close_application(self):
         self._tick("close_application")
