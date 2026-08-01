@@ -1447,12 +1447,16 @@ async def handle_capture(request: web.Request) -> web.Response:
     save = request.query.get("save", "1") not in ("0", "false", "no")
     autofocus = request.query.get("af", "0") in ("1", "true", "yes")
     fetch = request.query.get("fetch", "1") not in ("0", "false", "no")
+    # 這兩個是為了排查「拍不成」而留的開關，預設值取自唯一成功過的那次流程
+    preclear = request.query.get("preclear", "0") in ("1", "true", "yes")
+    release = request.query.get("release", "1") not in ("0", "false", "no")
 
     photos = STATE_DIR / "photos"
     try:
         image = await worker.call(
             lambda: capture.capture(state.camera, photos if save else None,
-                                    autofocus=autofocus, fetch=fetch),
+                                    autofocus=autofocus, fetch=fetch,
+                                    preclear=preclear, release=release),
             priority=Priority.CONTROL,
         )
     except capture.CaptureError as e:

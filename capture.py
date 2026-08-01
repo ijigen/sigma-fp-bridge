@@ -177,7 +177,8 @@ def download(cam, info) -> bytes:
 
 
 def capture(cam, save_dir: Path | None = None,
-            autofocus: bool = False, fetch: bool = True) -> CapturedImage:
+            autofocus: bool = False, fetch: bool = True,
+            preclear: bool = False, release: bool = True) -> CapturedImage:
     """拍一張，並（預設）把影像抓回電腦。
 
     Args:
@@ -185,14 +186,19 @@ def capture(cam, save_dir: Path | None = None,
         autofocus: 預設關閉 —— 這個專案是用 PTP 手動控焦的，讓相機在拍攝前
             跑一次 AF 會把設好的焦點位置搶走。
         fetch: False 只拍不抓，用於「存在記憶卡就好」的情況。
+        preclear: 拍攝前先清 slot 0。預設關閉 —— 唯一成功過的那一次用的
+            版本沒有這個動作，而加上它之後連第一張都變成 ImageGenFailed。
+            clear_image_db_single 的 payload 在 sigma-ptpy 裡註明未文件化，
+            對相機的實際影響不明。留著開關是為了能 A/B 比對。
+        release: 取走後釋放資料庫位置。
 
     Raises:
         CaptureError: 拍攝失敗、逾時、或下載中斷。
     """
-    # 先清掉 slot 0 的殘留結果，這次讀到的才是自己的
     before = _status(cam)
     tail_before = getattr(before, "ImageDBTail", None)
-    clear_slot(cam, 0)
+    if preclear:
+        clear_slot(cam, 0)
 
     mode = CaptureMode.GeneralCapt if autofocus else CaptureMode.NonAFCapt
     cam.snap_command(SnapCommand(CaptureMode=mode, CaptureAmount=1))
@@ -221,7 +227,7 @@ def capture(cam, save_dir: Path | None = None,
                 save_dir.mkdir(parents=True, exist_ok=True)
                 (save_dir / image.filename).write_bytes(image.data)
     finally:
-        # 一定要釋放資料庫位置，不下載也一樣 —— 不釋放的話下一次拍攝
-        # 會變成 ImageGenFailed。實測踩過：項目累積到 6 之後完全拍不成。
-        clear_slot(cam, image_id)
+        # 釋放資料庫位置。是否必要仍未證實 —— 相機重開後資料庫本來就是空的。
+        if release:
+            clear_slot(cam, image_id)
     return image
