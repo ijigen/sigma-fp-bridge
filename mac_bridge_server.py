@@ -241,6 +241,21 @@ class Priority(IntEnum):
     LIVEVIEW = 2   # 影格抓取 —— 掉了就掉了，不值得卡住別人
 
 
+#: 單一相機操作的上限。超過就認定 PTP 呼叫回不來了。
+#: 抓得比最慢的合法操作寬鬆 —— 拍攝本身最多等 30 秒產生影像，再加上
+#: 27 MB DNG 的下載（實測 2.5 秒），120 秒有很大餘裕。
+DEFAULT_JOB_TIMEOUT_S = 120.0
+
+
+class CameraStuck(RuntimeError):
+    """相機操作超過上限沒回來。
+
+    Python 沒辦法中止卡在 USB 呼叫裡的執行緒，所以這個狀態是不可逆的：
+    那條執行緒會一直佔著相機。唯一的復原方式是重啟 bridge。這個例外的意義
+    是「立刻講出來」而不是讓每個請求無聲地排隊等一個永遠不會結束的工作。
+    """
+
+
 class CameraUnavailable(RuntimeError):
     """相機沒連上時，需要相機的 job 會拿到這個。"""
 
@@ -264,6 +279,7 @@ class CameraJob:
     needs_camera: bool = True
     coalesce_key: str | None = None
     expires_at: float | None = None
+    timeout: float = DEFAULT_JOB_TIMEOUT_S
 
 
 class CameraWorker:
@@ -283,6 +299,8 @@ class CameraWorker:
         self._seq = 0
         self._newest: dict[str, int] = {}  # coalesce_key -> 目前最新的 seq
         self._task: asyncio.Task | None = None
+        #: 有工作逾時沒回來就記在這裡。設了之後所有工作立刻失敗，不再排隊。
+        self.stuck: str | None = None
 
     # -- 生命週期 ---------------------------------------------------------
 
@@ -308,6 +326,7 @@ class CameraWorker:
         needs_camera: bool = True,
         coalesce_key: str | None = None,
         ttl: float | None = None,
+        timeout: float = DEFAULT_JOB_TIMEOUT_S,
     ) -> asyncio.Future:
         """把一個同步的相機操作排進佇列，回傳等結果用的 future。
 
@@ -319,6 +338,7 @@ class CameraWorker:
                 直接以 JobSkipped("superseded") 收場。適用於「絕對值設定」
                 這種語意 —— 例如焦點位置，只有最後一個目標值有意義。
             ttl: 秒。超過就不執行，回 JobSkipped("expired")。
+            timeout: 秒。開始執行之後超過這麼久還沒回來就判定相機卡住。
         """
         if self._queue is None:
             raise RuntimeError("CameraWorker 還沒 start()")
@@ -332,6 +352,7 @@ class CameraWorker:
             needs_camera=needs_camera,
             coalesce_key=coalesce_key,
             expires_at=(time.monotonic() + ttl) if ttl is not None else None,
+            timeout=timeout,
         )
         if coalesce_key is not None:
             self._newest[coalesce_key] = job.seq
@@ -370,7 +391,24 @@ class CameraWorker:
                     job.future.set_exception(CameraUnavailable("camera not connected"))
                     continue
 
-                result = await loop.run_in_executor(None, job.fn)
+                if self.stuck is not None:
+                    # 前一個工作還卡在 USB 上，那條執行緒仍握著相機。
+                    # 再送只會多卡一條執行緒，而且一樣不會回來。
+                    job.future.set_exception(CameraStuck(self.stuck))
+                    continue
+
+                try:
+                    result = await asyncio.wait_for(
+                        loop.run_in_executor(None, job.fn), timeout=job.timeout)
+                except asyncio.TimeoutError:
+                    # wait_for 只放棄等待 —— executor 那條執行緒還卡在 USB 呼叫裡，
+                    # 沒有辦法叫醒它。所以這裡不重試，直接標記成不可用。
+                    self.stuck = (
+                        f"相機操作超過 {job.timeout:.0f} 秒沒有回應，PTP 呼叫回不來了。"
+                        "執行緒無法中止，請重啟 bridge。")
+                    print(f"錯誤：{self.stuck}", file=sys.stderr)
+                    job.future.set_exception(CameraStuck(self.stuck))
+                    continue
             except asyncio.CancelledError:
                 if not job.future.done():
                     job.future.cancel()
@@ -1219,6 +1257,9 @@ async def handle_index(request: web.Request) -> web.Response:
 async def handle_status(request: web.Request) -> web.Response:
     return web.json_response({
         "connected": state.camera_connected,
+        # 卡住的話這裡會有訊息。/api/status 不碰相機，所以就算 worker 死了
+        # 這個端點仍答得出來 —— 卡住時它是唯一還能講話的地方。
+        "stuck": worker.stuck,
         "released": state.released_by_user,
         "camera_mode": state.camera_mode,
         "recording": state.recording,
@@ -1699,6 +1740,11 @@ async def camera_unavailable_middleware(request: web.Request, handler):
         return await handler(request)
     except CameraUnavailable as e:
         return web.json_response({"error": str(e)}, status=503)
+    except CameraStuck as e:
+        # 不可復原，所以回覆裡直接講出唯一的解法，別讓人以為重試會有用
+        return web.json_response(
+            {"error": str(e), "stuck": True, "recovery": "restart the bridge"},
+            status=503)
     except (SettingError, movie_settings.MovieSettingError) as e:
         # 設定名稱或值不合法是呼叫端的錯，不是伺服器壞掉
         return web.json_response({"error": str(e)}, status=400)

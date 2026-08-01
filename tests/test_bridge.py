@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import json
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -88,6 +89,46 @@ async def test_control_preempts_liveview():
 
     assert order[0] == "control", order
     print("✓ 控焦指令插到 5 個排隊影格前面")
+
+
+async def test_a_hung_camera_call_fails_fast_instead_of_queueing_forever():
+    """實測踩過：一個 PTP 呼叫回不來，整座橋就無聲停擺。
+
+    當時 /api/settings 完全沒有回應、live view 開得了連線卻送不出任何影格，
+    而 /api/status（不碰相機）還是正常的 —— 從外面看不出哪裡壞了。原因是
+    worker 那行 run_in_executor 沒有上限，卡住的工作永遠佔著佇列。
+
+    停不掉那條執行緒是 Python 的限制，改不了；能改的是不要再假裝還會好。
+    """
+    reset()
+    async with running_worker() as w:
+        never_returns = threading.Event()
+        try:
+            hung = w.submit(lambda: never_returns.wait(), needs_camera=False,
+                            timeout=0.3)
+            try:
+                await hung
+            except B.CameraStuck as e:
+                assert "重啟" in str(e), e
+            else:
+                raise AssertionError("卡住的工作應該要丟 CameraStuck")
+
+            assert w.stuck, "卡住之後要留下記錄"
+
+            # 後續工作必須立刻失敗，而不是排在死掉的工作後面
+            ran = []
+            started = time.monotonic()
+            try:
+                await w.submit(lambda: ran.append(1), needs_camera=False)
+            except B.CameraStuck:
+                pass
+            else:
+                raise AssertionError("卡住之後的工作不該被執行")
+            assert not ran, "卡住之後仍然把工作送上 USB"
+            assert time.monotonic() - started < 0.3, "卡住之後還在等"
+        finally:
+            never_returns.set()   # 放掉那條 executor 執行緒
+    print("✓ 相機呼叫卡住時立刻回報，不讓後續請求無聲排隊")
 
 
 async def test_set_position_coalesces():

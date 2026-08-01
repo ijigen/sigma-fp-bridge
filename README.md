@@ -853,6 +853,17 @@ curl -X POST 'http://localhost:8765/api/capture?af=1'       # autofocus first
 Autofocus is off by default: this project drives focus over PTP, and letting the
 camera focus before the frame would discard the position you set.
 
+**RAW comes back too.** Setting `image_quality` to `DNG` and shooting returns a
+27 MB file in about 2.5 s, and it is a real DNG, not a JPEG with the wrong name:
+TIFF magic 42, `DNGVersion` (tag 50706) present, `Make=SIGMA`,
+`UniqueCameraModel=SIGMA fp`. The frame is 6064×4042 against the JPEG's
+6000×4000 — the raw keeps the sensor's border pixels. IFD0 holds the 160×120
+thumbnail with the full-size image in a SubIFD, which is ordinary DNG layout.
+
+`ImageQuality` is another bitmask: `JPEGFine` 2, `JPEGNormal` 4, `JPEGBasic` 8,
+`DNG` 16, `DNGAndJPEG` 18 (16 | 2). What a `DNGAndJPEG` shot hands back — one
+file or two database entries — has not been established yet.
+
 **Movies have not been pulled back yet** — which is not the same as knowing they
 can't be. The SDK gives them their own pair of opcodes, `SigmaGetMovieFileInfo`
 (0x9036) and `SigmaGetPartialMovieFile` (0x9037); sigma-ptpy wraps neither, and
