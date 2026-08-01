@@ -187,6 +187,21 @@ def test_format_size_and_depth_share_a_row():
     print("✓ 規格 / 大小 / 位元合併成一列，分群標示")
 
 
+def test_locked_option_groups_do_not_vanish():
+    """相機在某些組合下會鎖死某個項目 —— 實測 UHD 下不開放調整色彩位元，
+    合法值清單是空的。
+
+    整組消失會讓人以為功能壞掉（實際被回報過）。要改成顯示目前值並標明鎖定。
+    """
+    js = _script(HTML.read_text())
+    block = js[js.index("function formatRow"):js.index("function settingsHTML")]
+    assert ".filter(g => g[1]);" in block, "沒有可選值的群組仍被濾掉"
+    assert "locked = true" in block, "空清單沒有標成鎖定"
+    assert "相機不開放調整這一項" in block
+    assert "灰色項目在此組合下鎖定" in js
+    print("✓ 無可選值的群組改為鎖定顯示，不會消失")
+
+
 def test_state_updates_do_not_rebuild_dom():
     """狀態廣播是 10Hz。無條件寫 innerHTML 會讓節點每 100ms 被銷毀重建 ——
     版面抖動、捲軸亂飄，按鈕在按下的瞬間被換掉所以按不到。實測踩過。

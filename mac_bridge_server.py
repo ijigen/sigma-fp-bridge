@@ -1181,7 +1181,15 @@ async def handle_distance_post(request: web.Request) -> web.Response:
 
 
 async def handle_settings_schema(request: web.Request) -> web.Response:
-    """所有可設定項目的中繼資料。不需要相機。"""
+    """所有可設定項目的中繼資料。
+
+    會先重讀能力 —— 合法值隨其他設定變動（實測：UHD 下相機不開放調整
+    色彩位元、幀率也只剩兩個）。用快取回答會讓這個端點跟 WebSocket 的
+    ack 給出不同答案，除錯時非常容易誤判。
+    """
+    if state.camera_connected:
+        with suppress(Exception):
+            await refresh_capabilities()
     return web.json_response({
         "settings": describe(state.capabilities, state.camera_mode)
                     + (movie_settings.describe(state.movie_capabilities)
@@ -1204,6 +1212,9 @@ async def handle_settings_post(request: web.Request) -> web.Response:
     data = await request.json()
     changes = data.get("settings", data)
     result = await cam_apply_settings(changes)
+    # 跟 WebSocket 那條路徑保持一致：套用後重讀能力
+    with suppress(Exception):
+        await refresh_capabilities()
     return web.json_response({
         "ok": not result["rejected"],
         "applied": result["applied"],

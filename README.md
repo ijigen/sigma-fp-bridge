@@ -694,6 +694,13 @@ ProgramAuto succeeded immediately in Manual. Rejections say so.
 Changing `frame_rate` resets the shutter angle, since the angle is defined
 relative to the frame.
 
+Movie settings constrain each other, and the camera reports it. At UHD it
+offers **no** settable CinemaDNG bit depth — the value is locked at 8-bit — and
+only 23.98 and 25 fps; at FHD the depth opens up to 12/10/8 and the frame rates
+extend to 29.97, 50 and 59.94. An empty capability list means "not changeable in
+this combination", so the UI shows the locked value rather than hiding the
+control.
+
 Movie mode also changes the limits on ordinary settings — exposure compensation
 narrows from ±5 EV to ±3, and shutter is capped at 1/25 by the frame rate. This
 is why ranges are read from the camera rather than tabulated.

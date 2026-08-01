@@ -331,6 +331,30 @@ async def test_recording_guards():
     print("✓ 錄影防呆：重複開始 409、clip 上限、release 先停止")
 
 
+async def test_schema_endpoint_refreshes_capabilities():
+    """schema 端點不能用快取回答。
+
+    合法值隨其他設定變動（實測：UHD 下相機不開放調整色彩位元）。若這裡
+    回快取、而 WebSocket 的 ack 回重讀後的值，兩邊就會不一致 —— 我因此
+    誤判過一次，以為某個行為是暫態。
+    """
+    reset()
+    async with running_worker():
+        runner = web.AppRunner(B.make_app())
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        base = f"http://127.0.0.1:{runner.addresses[0][1]}"
+        try:
+            async with aiohttp.ClientSession() as s:
+                before = CAM.count("info5_raw")
+                await (await s.get(f"{base}/api/settings/schema")).json()
+                assert CAM.count("info5_raw") > before, "schema 端點沒有重讀能力"
+        finally:
+            await runner.cleanup()
+    print("✓ schema 端點會重讀相機能力，不用快取")
+
+
 async def test_settings_roundtrip_through_bridge():
     reset()
     async with running_worker():
