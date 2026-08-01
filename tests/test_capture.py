@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """連機拍攝：拍一張並把影像抓回電腦。不需要相機。
 
+假相機模擬的是實機驗證過的影像資料庫模型：待取項目佔 [head, tail)，
+新的一筆落在拍攝前的 tail，沒釋放就會讓下一次拍攝的快門不動作。
+
 執行：python3 tests/test_capture.py
 """
 import sys
@@ -73,16 +76,16 @@ def test_truncated_download_is_an_error():
 
 
 def test_failed_capture_status_is_an_error():
-    """影像產生了但相機回報失敗，要中止而不是繼續下載。"""
+    """相機回報失敗就要中止，不能繼續下載。"""
     from sigma_ptpy.enum import CaptStatus
-    import types as _t
     cam = fake_camera.FakeCamera()
-    # 結果出現在 slot 0（實機就是這樣），所以失敗狀態要放在那裡
-    def failing(image_id=0):
-        return _t.SimpleNamespace(
-            CaptStatus=CaptStatus.ImageGenFailed if image_id == 0 else CaptStatus.Cleared,
-            ImageId=image_id, ImageDBHead=0, ImageDBTail=1, DestToSave=None)
-    cam.get_cam_capt_status = failing
+    original = cam.snap_command
+
+    def failing(data):
+        original(data)
+        cam.entries[cam.db_tail - 1] = CaptStatus.ImageGenFailed
+
+    cam.snap_command = failing
     try:
         capture.capture(cam)
     except capture.CaptureError as e:
@@ -92,75 +95,79 @@ def test_failed_capture_status_is_an_error():
         raise AssertionError("應該要丟 CaptureError")
 
 
-def test_consecutive_captures_each_take_a_new_photo():
-    """實測踩過：連拍三次只有第一次真的按了快門，三次卻都「下載成功」——
-    因為讀到的是同一張的殘留 buffer。
+def test_the_first_capture_releases_entry_zero():
+    """迴歸：開機後第一張的項目編號就是 0，而 0 是 falsy。
 
-    正確做法有兩個要件：以 ImageDBTail 前進判斷真的有新影像，
-    以及下載後清除資料庫項目讓相機願意再拍。
+    先前寫成 `if not image_id: image_id = <拍攝後的 tail>`，於是第一張去清了
+    不存在的 1，項目 0 永遠洩漏 —— 之後每次拍攝快門都不會動作。實測就是
+    「重開機能拍一張、之後全滅」。第二張起 tail_before >= 1 反而會誤打誤撞
+    清對，所以只有第一張會踩到，這個測試必須從全新的相機開始。
     """
     cam = fake_camera.FakeCamera()
+    assert (cam.db_head, cam.db_tail) == (0, 0), "這個測試要從空的資料庫開始"
+    capture.capture(cam)
+    assert 0 not in cam.entries, "項目 0 沒有被釋放"
+    assert cam.db_head == cam.db_tail, f"head 沒跟上：{cam.db_head}/{cam.db_tail}"
+    print("✓ 開機後第一張正確釋放項目 0")
+
+
+def test_consecutive_captures_each_fire_the_shutter():
+    """迴歸：連拍三次曾經只有第一次真的按了快門，三次卻都「下載成功」。
+
+    只數 snap_command 是抓不到的 —— 指令有送出、tail 也有前進，只是快門
+    沒動作。要看實際曝光次數，以及每次拿到的是不是不同的影像。
+    """
+    cam = fake_camera.FakeCamera()
+    names = []
     for i in range(3):
         img = capture.capture(cam)
         assert img.data, f"第 {i+1} 次沒有拿到資料"
-    assert cam.count("snap:NonAFCapt") == 3, "不是每次都真的拍了"
-    assert cam.count("snap_rejected") == 0, "有拍攝被相機拒絕"
-    assert cam.count("clear_db") == 3, "下載後沒有清除資料庫項目"
-    print("✓ 連續拍攝每次都是新照片，且下載後釋放資料庫")
+        names.append(img.filename)
+    assert cam.shutter_fires == 3, f"只真的拍了 {cam.shutter_fires} 次"
+    assert len(set(names)) == 3, f"三次拿到同一張：{names}"
+    assert cam.db_head == cam.db_tail, "資料庫項目累積了"
+    print(f"✓ 連續拍攝每次都真的曝光：{names}")
 
 
-def test_an_unfetched_capture_does_not_block_the_next_one():
-    """前一張沒有取走，也不該讓下一次拍不了。
+def test_success_is_not_judged_from_slot_zero():
+    """迴歸：判斷完成不能看 slot 0，否則失敗會被報成成功。
 
-    拍攝前的清除就是為了這個 —— 相機的影像資料庫只有一個位置在用時，
-    沒清就會拒絕下一次拍攝（實測：連拍三次只有第一次按了快門）。
+    slot 0 停在上一張的完成狀態時，輪詢一進迴圈就「完成」，接著讀到的是
+    上一張的 PictFileInfo2 —— 回報的檔名與大小與前一張完全相同。
     """
     cam = fake_camera.FakeCamera()
-    capture.capture(cam, fetch=False)      # 拍了但沒下載、沒釋放
-    img = capture.capture(cam)             # 這次必須還能拍
-    assert img.data, "前一張沒取走就拍不了下一張"
-    assert cam.count("snap_rejected") == 0
-    print("✓ 前一張未取走不會擋住下一次拍攝")
+    first = capture.capture(cam, release=False)      # 故意讓項目 0 留著
+    assert 0 in cam.entries, "這個測試要留下未釋放的項目 0"
+    before = cam.shutter_fires
+    try:
+        capture.capture(cam, release_stale=False)
+    except capture.CaptureError:
+        assert cam.shutter_fires == before, "快門不該動作"
+        print(f"✓ 快門沒動作時如實報錯，不會回傳上一張（{first.filename}）")
+    else:
+        raise AssertionError("快門沒動作卻回報成功")
 
 
-def test_consecutive_captures_each_take_a_new_photo():
-    """實測踩過：連拍三次只有第一次真的按了快門，三次卻都「下載成功」——
-    讀到的是同一張的殘留 buffer。
-
-    拍攝前先清資料庫，看到的完成狀態才確定是自己的；取走後再清一次。
-    """
+def test_stale_entries_are_released_before_shooting():
+    """上一輪中途死掉留下的項目會擋住快門，開拍前要先清掉。"""
     cam = fake_camera.FakeCamera()
-    for i in range(3):
-        img = capture.capture(cam)
-        assert img.data, f"第 {i+1} 次沒有拿到資料"
-    assert cam.count("snap:NonAFCapt") == 3, "不是每次都真的拍了"
-    assert cam.count("snap_rejected") == 0, "有拍攝被相機拒絕"
-    assert cam.count("clear_db") >= 3, "沒有清除資料庫項目"
-    print("✓ 連續拍攝每次都是新照片")
+    capture.capture(cam, release=False)              # 模擬殘留
+    assert cam.db_head < cam.db_tail
+    before = cam.shutter_fires
+    img = capture.capture(cam)                       # release_stale 預設開啟
+    assert img.data and cam.shutter_fires == before + 1, "殘留沒被清掉"
+    assert cam.db_head == cam.db_tail
+    print("✓ 開拍前會釋放前一輪的殘留項目")
 
 
-def test_result_comes_from_slot_zero_but_release_targets_the_new_entry():
-    """兩件事用的是不同的 id，混用就會壞：
-
-      - 拍攝結果出現在 slot 0（拿 ImageDBTail 當 id 去查一律是 Cleared）
-      - 要釋放的是 ImageDBTail 新增的那一筆（釋放 slot 0 不會放掉它）
-
-    實測踩過兩次：先前查 tail 導致永遠讀到 Cleared 而逾時；更早之前
-    釋放時傳 0，真正的項目從沒被放掉，資料庫累積到 6 之後完全拍不成。
-    """
-    cam = fake_camera.FakeCamera()
-    img = capture.capture(cam)
-    assert img.data
-    assert not cam.pending, f"資料庫項目沒被釋放：{cam.pending}"
-    print("✓ 結果查 slot 0、釋放針對新增的那一筆")
-
-
-def test_capture_releases_the_slot_even_without_downloading():
-    """不下載也要釋放位置 —— 佔著就會擋住下一次拍攝。"""
+def test_capture_releases_the_entry_even_without_downloading():
+    """不下載也要釋放 —— 佔著就會讓下一次拍攝的快門不動作。"""
     cam = fake_camera.FakeCamera()
     capture.capture(cam, fetch=False)
-    assert not cam.pending, "fetch=False 沒有釋放資料庫項目"
+    assert cam.db_head == cam.db_tail, "fetch=False 沒有釋放資料庫項目"
+    before = cam.shutter_fires
     assert capture.capture(cam).data, "前一張沒下載就擋住了下一張"
+    assert cam.shutter_fires == before + 1
     print("✓ 不下載也會釋放資料庫位置")
 
 

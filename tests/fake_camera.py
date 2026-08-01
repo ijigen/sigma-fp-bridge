@@ -59,11 +59,14 @@ class FakeCamera:
         self.recording = False
         self.pict_data = b"\xff\xd8" + b"IMAGE" * 3000 + b"\xff\xd9"
         self.last_capture = "movie"
-        self.pending = set()
         from sigma_ptpy.enum import CaptStatus
         self.status0 = CaptStatus.Cleared
-        self.pending_image = None
+        # 影像資料庫：待取項目佔 [db_head, db_tail)，entries 存各筆的狀態
+        self.entries: dict = {}
+        self.db_head = 0
         self.db_tail = 0
+        #: 真的曝光了幾次。測試用來分辨「拍成了」與「讀到上一張的殘留」
+        self.shutter_fires = 0
         self.files: list = []
         # /api/dump/* 用的原始 IFD payload
         self.info5_raw = _sample_ifd([(658, 3, [5974, 11116])])
@@ -218,16 +221,17 @@ class FakeCamera:
         from sigma_ptpy.enum import CaptStatus, CaptureMode
         if data.CaptureMode in (CaptureMode.GeneralCapt, CaptureMode.NonAFCapt,
                                 CaptureMode.StartCap):
-            # 上一張還沒被 clear_image_db_single 取走就拒絕拍攝 ——
-            # 實機就是這樣：連續三次只有第一次按了快門。
-            from sigma_ptpy.enum import CaptStatus
+            # 實測：前一筆沒被 ClearImageDBSingle 釋放的話，快門根本不動作，
+            # 但 tail 照樣 +1 —— 所以「tail 前進」不代表拍成了。
             self.last_capture = "still"
+            image_id = self.db_tail
+            blocked = self.db_head < self.db_tail
             self.db_tail += 1
-            if self.pending:          # 上一筆沒釋放 —— 資料庫塞住
-                self.status0 = CaptStatus.ImageGenFailed
+            if blocked:
+                self.entries[image_id] = CaptStatus.ImageGenFailed
             else:
-                self.pending.add(self.db_tail)
-                self.status0 = CaptStatus.ImageGenCompleted
+                self.shutter_fires += 1
+                self.entries[image_id] = CaptStatus.ImageGenCompleted
         elif data.CaptureMode in (CaptureMode.StartRecMovie,
                                   CaptureMode.StartRecMovieAF,
                                   CaptureMode.StopRecMovie):
@@ -245,30 +249,30 @@ class FakeCamera:
             self.recording = False
 
     def get_cam_capt_status(self, image_id=0):
-        # 照實機的行為：
-        #   - 拍攝結果出現在 slot 0；用 ImageDBTail 當 id 去查一律是 Cleared
-        #   - ImageDBTail 每拍一張就 +1，那是資料庫新增的位置
-        #   - 位置沒被釋放就會累積，塞滿之後拍攝變成 ImageGenFailed
+        """狀態是分項目的：查哪一筆就回哪一筆。
+
+        slot 0 沒有魔法 —— 它只是編號 0 的那一筆。錄影的完成狀態沒有對應的
+        項目，仍沿用 status0 從 slot 0 回報。
+        """
         from sigma_ptpy.enum import CaptStatus
-        status = self.status0 if image_id == 0 else CaptStatus.Cleared
+        status = self.entries.get(image_id)
+        if status is None:
+            status = self.status0 if image_id == 0 else CaptStatus.Cleared
         return types.SimpleNamespace(
-            ImageId=image_id, ImageDBHead=0, ImageDBTail=self.db_tail,
+            ImageId=image_id, ImageDBHead=self.db_head, ImageDBTail=self.db_tail,
             CaptStatus=status, DestToSave=None)
 
     # -- 連機拍攝 -------------------------------------------------------
 
     def clear_image_db_single(self, image_id):
-        self._tick("clear_db")
-        if self.pending_image == image_id:
-            self.pending_image = None
-
-    def clear_image_db_single(self, image_id):
+        """釋放一筆，head 隨之前進到下一個還沒被取走的位置。"""
         from sigma_ptpy.enum import CaptStatus
         self._tick("clear_db")
+        self.entries.pop(image_id, None)
         if image_id == 0:
-            self.status0 = CaptStatus.Cleared   # 清掉結果，不釋放項目
-        else:
-            self.pending.discard(image_id)      # 釋放資料庫位置
+            self.status0 = CaptStatus.Cleared
+        while self.db_head < self.db_tail and self.db_head not in self.entries:
+            self.db_head += 1
 
     def get_pict_file_info2(self):
         self._tick("pict_info")
@@ -276,7 +280,9 @@ class FakeCamera:
             FileAddress=0x1000, FileSize=len(self.pict_data),
             # 實機回的是 CString → bytes，假相機也要照做，
             # 不然「檔名被寫成 b'...'」這個 bug 測不出來
-            PathName=b"/DCIM/100SIGMA\x00", FileName=b"SDIM0001.JPG\x00",
+            # 檔名跟著實際曝光次數走 —— 讀到上一張的殘留就會露餡
+            PathName=b"/DCIM/100SIGMA\x00",
+            FileName=b"SDIM%04d.JPG\x00" % max(1, self.shutter_fires),
             PictureFormat=b"JPG\x00", SizeX=6000, SizeY=4000)
 
     def get_big_partial_pict_file(self, store_address, start_address, max_length):

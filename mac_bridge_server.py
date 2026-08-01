@@ -1447,8 +1447,8 @@ async def handle_capture(request: web.Request) -> web.Response:
     save = request.query.get("save", "1") not in ("0", "false", "no")
     autofocus = request.query.get("af", "0") in ("1", "true", "yes")
     fetch = request.query.get("fetch", "1") not in ("0", "false", "no")
-    # 這兩個是為了排查「拍不成」而留的開關，預設值取自唯一成功過的那次流程
-    preclear = request.query.get("preclear", "0") in ("1", "true", "yes")
+    # 這兩個開關只在要觀察相機對「項目沒釋放」的原始反應時才關掉
+    release_stale = request.query.get("release_stale", "1") not in ("0", "false", "no")
     release = request.query.get("release", "1") not in ("0", "false", "no")
 
     photos = STATE_DIR / "photos"
@@ -1456,7 +1456,7 @@ async def handle_capture(request: web.Request) -> web.Response:
         image = await worker.call(
             lambda: capture.capture(state.camera, photos if save else None,
                                     autofocus=autofocus, fetch=fetch,
-                                    preclear=preclear, release=release),
+                                    release_stale=release_stale, release=release),
             priority=Priority.CONTROL,
         )
     except capture.CaptureError as e:

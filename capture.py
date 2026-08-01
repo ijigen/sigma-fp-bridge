@@ -10,19 +10,26 @@
 
 注意這裡沒有動到 DestToSave。那是獨立的設定（DataGroup3），決定影像要不要
 「順便」寫進記憶卡 —— 下載一律是「跟相機要它 buffer 裡的資料」。
-把兩者說成有因果關係是錯的。
+把兩者說成有因果關係是錯的。實測 DestToSave 為 Null 時照樣下載得到。
 
-尚未驗證：DestToSave 設成 InCamera 時，buffer 還讀不讀得到。可能一直都能讀
-（Camera Control 模式本來就會 buffer），也可能要把 PC 列為目的地才有。
+影像資料庫的模型（2026-08 於 fp 韌體 5.02 實測確認）：
 
-實測到但還沒解釋的狀況（2026-08 於 fp 韌體 5.02）：
+    - 待取的項目佔用 [ImageDBHead, ImageDBTail) 這個半開區間。
+    - 一次拍攝新增的項目，編號就是**拍攝前**的 ImageDBTail，之後 tail +1。
+    - CamCaptStatus 是分項目的：查某個編號就得到那一筆的狀態。
+    - ClearImageDBSingle 釋放一筆，head 隨之前進。
+    - 項目沒釋放，下一次拍攝就不會觸發快門 —— 相機不出聲、不曝光，但
+      tail 仍會 +1，所以「tail 前進」不代表拍成了。
 
-    - 第一次拍攝成功並下載了 8.7 MB 的 JPEG，之後同一台相機再也拍不成。
-    - NonAFCapt 會得到 ImageGenFailed；GeneralCapt 會卡在 ShootInProgress
-      不再前進。兩者都會讓 ImageDBTail +1，代表相機確實接受了指令。
-    - DestToSave 設 InCamera / InComputer / Both 三種都一樣失敗，而
-      CamCaptStatus 的 dest 欄位確實反映了設定值 —— 所以目的地不是原因。
-    - 尚未排除：記憶卡剩餘空間。失敗開始之前錄了數段 MOV 與 UHD CinemaDNG。
+先前「拍第一張成功、之後全部失敗」是這裡的 falsy-zero 造成的：第一張的
+項目編號是 0，而 `if not image_id` 把合法的 0 當成沒取到，改去清拍攝後的
+tail（1，不存在），於是項目 0 永遠洩漏、擋死後續所有拍攝。第二張起
+tail_before >= 1 反而會誤打誤撞清對，所以只有開機後第一張會踩到。
+
+同一個錯誤也讓失敗被誤報成成功：輪詢時會先看 slot 0，而 slot 0 停在上一
+張的完成狀態，於是迴圈第一次檢查就「完成」，接著讀到上一張的
+PictFileInfo2 —— 回報的檔名與大小與前一張完全相同。判斷成功不能看 slot 0，
+要看這次拍攝自己那一筆。
 
 錄影沒有對應的實作。opcode 存在（SigmaGetPartialMovieFile = 0x9037），
 但 sigma-ptpy 沒有包，參數格式也沒有文件 —— 要做得先像挖 DataGroupMovie
@@ -94,23 +101,24 @@ def _status_name(st) -> str:
     return getattr(status, "name", str(status))
 
 
-def wait_for_new_id(cam, tail_before: int | None,
-                    timeout_s: float = 10.0) -> int:
-    """回傳資料庫新增那一筆的位置（ImageDBTail），用來釋放它。
+def pending_range(cam) -> tuple[int, int]:
+    """回傳 (head, tail)。兩者相等代表沒有待釋放的項目。"""
+    st = _status(cam, 0)
+    return (int(getattr(st, "ImageDBHead", 0) or 0),
+            int(getattr(st, "ImageDBTail", 0) or 0))
 
-    ImageDBTail 是資料庫尾端，拍成一張就會 +1。實測拍三張是 0→1→2→3。
-    （先前以為靜態拍攝不會動它 —— 那次讀到 0 是因為相機在錄影模式。）
 
-    取不到就回 0（呼叫端會拿它去清除，清錯 slot 0 無害）—— 這個值只用來
-    釋放資料庫位置，不是判斷拍攝成功與否的依據。
+def release_pending(cam) -> int:
+    """釋放 [head, tail) 裡所有還沒被取走的項目，回傳釋放了幾筆。
+
+    正常流程不會留下殘留 —— 每次拍攝都會在 finally 釋放自己那一筆。會用到
+    這裡通常是上一輪中途死掉。留著項目的話下一次拍攝不會觸發快門，所以
+    開拍前先清乾淨。
     """
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        tail = getattr(_status(cam), "ImageDBTail", None)
-        if tail is not None and tail != tail_before:
-            return int(tail)
-        time.sleep(0.2)
-    return 0
+    head, tail = pending_range(cam)
+    for image_id in range(head, tail):
+        clear_slot(cam, image_id)
+    return max(0, tail - head)
 
 
 def clear_slot(cam, image_id: int = 0) -> None:
@@ -125,14 +133,12 @@ def clear_slot(cam, image_id: int = 0) -> None:
         print(f"警告：清除影像資料庫項目 {image_id} 失敗：{e}", file=sys.stderr)
 
 
-def wait_until_done(cam, timeout_s: float = CAPTURE_TIMEOUT_S) -> tuple[int, str]:
-    """等這次拍攝的結果出現，回傳 (image_id, 狀態名稱)。
+def wait_until_done(cam, image_id: int,
+                    timeout_s: float = CAPTURE_TIMEOUT_S) -> str:
+    """等指定的那一筆拍攝結果完成，回傳狀態名稱。
 
-    狀態是分項目的，而待取的項目落在 [ImageDBHead, ImageDBTail) 這個區間 ——
-    head 是下一筆還沒被取走的，tail 是尾端。實測 head=4 / tail=6 時，
-    查 slot 0 一律是 Cleared，因為那個位置早就被取走了。
-
-    所以每輪把 0 和待取區間裡的每個 id 都問一次，哪個回報完成就用哪個。
+    只看 image_id 這一筆。**不要**順便看 slot 0 —— slot 0 會停在上一張的
+    完成狀態，看它會讓迴圈第一次檢查就誤判完成，把失敗報成成功。
 
     Raises:
         CaptureError: 相機回報失敗狀態，或等到逾時。
@@ -140,20 +146,15 @@ def wait_until_done(cam, timeout_s: float = CAPTURE_TIMEOUT_S) -> tuple[int, str
     deadline = time.monotonic() + timeout_s
     last = "?"
     while time.monotonic() < deadline:
-        base = _status(cam)
-        head = int(getattr(base, "ImageDBHead", 0) or 0)
-        tail = int(getattr(base, "ImageDBTail", 0) or 0)
-        for image_id in [0] + list(range(head, tail + 1)):
-            st = base if image_id == 0 else _status(cam, image_id)
-            name = _status_name(st)
-            if name in _DONE:
-                return image_id, name
-            if name in _FAILED:
-                raise CaptureError(f"相機回報拍攝失敗：{name}（影像 {image_id}）")
-            if name != "Cleared":
-                last = name
+        name = _status_name(_status(cam, image_id))
+        if name in _DONE:
+            return name
+        if name in _FAILED:
+            raise CaptureError(f"相機回報拍攝失敗：{name}（影像 {image_id}）")
+        if name != "Cleared":
+            last = name
         time.sleep(0.2)
-    raise CaptureError(f"等待影像產生逾時（最後狀態 {last}）")
+    raise CaptureError(f"等待影像產生逾時（影像 {image_id}，最後狀態 {last}）")
 
 
 def download(cam, info) -> bytes:
@@ -178,7 +179,7 @@ def download(cam, info) -> bytes:
 
 def capture(cam, save_dir: Path | None = None,
             autofocus: bool = False, fetch: bool = True,
-            preclear: bool = False, release: bool = True) -> CapturedImage:
+            release_stale: bool = True, release: bool = True) -> CapturedImage:
     """拍一張，並（預設）把影像抓回電腦。
 
     Args:
@@ -186,26 +187,23 @@ def capture(cam, save_dir: Path | None = None,
         autofocus: 預設關閉 —— 這個專案是用 PTP 手動控焦的，讓相機在拍攝前
             跑一次 AF 會把設好的焦點位置搶走。
         fetch: False 只拍不抓，用於「存在記憶卡就好」的情況。
-        preclear: 拍攝前先清 slot 0。預設關閉 —— 唯一成功過的那一次用的
-            版本沒有這個動作，而加上它之後連第一張都變成 ImageGenFailed。
-            clear_image_db_single 的 payload 在 sigma-ptpy 裡註明未文件化，
-            對相機的實際影響不明。留著開關是為了能 A/B 比對。
-        release: 取走後釋放資料庫位置。
+        release_stale: 開拍前先釋放前一輪殘留的項目。殘留會讓快門不動作，
+            所以預設開啟。關掉只在要觀察相機對殘留的原始反應時有用。
+        release: 取走後釋放自己這一筆。關掉會擋死下一次拍攝，只供實驗用。
 
     Raises:
         CaptureError: 拍攝失敗、逾時、或下載中斷。
     """
-    before = _status(cam)
-    tail_before = getattr(before, "ImageDBTail", None)
-    if preclear:
-        clear_slot(cam, 0)
+    if release_stale:
+        release_pending(cam)
+
+    # 新的項目就落在拍攝前的 tail。這裡不能用「拍完再讀 tail」——那是 +1
+    # 之後的值，指向還不存在的下一格。
+    _, image_id = pending_range(cam)
 
     mode = CaptureMode.GeneralCapt if autofocus else CaptureMode.NonAFCapt
     cam.snap_command(SnapCommand(CaptureMode=mode, CaptureAmount=1))
-    image_id, _ = wait_until_done(cam)
-    if not image_id:
-        # 完成狀態出現在 slot 0 時，要釋放的仍是資料庫新增的那一筆
-        image_id = wait_for_new_id(cam, tail_before, timeout_s=2.0)
+    wait_until_done(cam, image_id)
 
     try:
         info = cam.get_pict_file_info2()
@@ -227,7 +225,7 @@ def capture(cam, save_dir: Path | None = None,
                 save_dir.mkdir(parents=True, exist_ok=True)
                 (save_dir / image.filename).write_bytes(image.data)
     finally:
-        # 釋放資料庫位置。是否必要仍未證實 —— 相機重開後資料庫本來就是空的。
+        # 一定要釋放，即使下載失敗 —— 沒釋放的話下一次拍攝快門不會動作。
         if release:
             clear_slot(cam, image_id)
     return image
