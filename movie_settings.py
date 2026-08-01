@@ -55,7 +55,9 @@ MOVIE_SETTINGS: tuple[MovieSetting, ...] = (
     MovieSetting("shutter_angle", 7, DT.URational, "angle", "deg",
                  "電影快門角度。CINE 模式下快門只能從這裡設，"
                  "寫 DataGroup1 的 shutter_speed 沒有作用。"),
-    MovieSetting("record_format", 50, DT.UInt8, "int"),
+    MovieSetting("record_format", 50, DT.UInt8, "int",
+                 note="2 = MOV（實測：在空卡上以 2 錄製，產出 CINEMA/*.MOV）。"
+                      "1 的產物尚未確認。"),
     MovieSetting("cinema_dng_quality", 51, DT.UInt8, "int", "bit",
                  "CinemaDNG 位元深度（12 / 10 / 8）。"),
     MovieSetting("mov_image_quality", 52, DT.UInt8, "int"),
@@ -64,6 +66,14 @@ MOVIE_SETTINGS: tuple[MovieSetting, ...] = (
 )
 
 MOVIE_BY_NAME = {s.name: s for s in MOVIE_SETTINGS}
+
+#: 已經用實機確認過的數值標籤。沒確認的一律不列 —— 猜錯的標籤比沒有標籤更糟，
+#: 因為後面的人會相信它。
+VALUE_LABELS: dict[str, dict[int, str]] = {
+    # 空卡 + record_format=2 錄製 → SigmaGetMovieFileInfo 回報
+    # CINEMA / A001_001_20260801.MOV
+    "record_format": {2: "MOV"},
+}
 
 #: CanSetInfo5 裡對應的「合法值清單」tag，用來限制可設的範圍。
 CAPABILITY_TAGS = {
@@ -253,6 +263,7 @@ def describe(capabilities: dict[str, list] | None = None) -> list[dict[str, Any]
             "tag": s.tag,
             "note": s.note,
             "choices": caps.get(s.name),
+            "labels": VALUE_LABELS.get(s.name),
         }
         for s in MOVIE_SETTINGS
     ]

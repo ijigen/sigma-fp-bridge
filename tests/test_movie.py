@@ -160,6 +160,19 @@ def test_listing_accepts_plain_arrays():
     print("✓ 檔案列舉同時接受裸陣列與包一層的回傳")
 
 
+def test_only_confirmed_labels_are_published():
+    """只公布實機確認過的標籤。
+
+    先前我推測 record_format=2 是 CinemaDNG（因為只有它的畫質可設），
+    實際錄一段才發現是 MOV。猜錯的標籤會被後面的人當事實。
+    """
+    assert M.VALUE_LABELS["record_format"] == {2: "MOV"}
+    schema = {d["name"]: d for d in M.describe()}
+    assert schema["record_format"]["labels"] == {2: "MOV"}
+    assert schema["movie_resolution"]["labels"] is None, "沒確認的不該有標籤"
+    print("✓ 只發布實機確認過的數值標籤")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):
