@@ -74,18 +74,15 @@ VALUE_LABELS: dict[str, dict[int, str]] = {
     #   record_format=2 -> CINEMA/A001_001_20260801.MOV
     #   record_format=1 -> CinemaDNG 序列（8-bit UHD 23.98fps）
     "record_format": {1: "CinemaDNG", 2: "MOV"},
-    # 上面那段 CinemaDNG 錄出來是 UHD，當時 movie_resolution = 2。
-    # 合法值是 [2, 1]，所以 1 很可能是 FHD —— 但沒實測過，不列。
-    "movie_resolution": {2: "UHD"},
+    # 2 = UHD 來自那段 CinemaDNG 的產物；1 = FHD 由使用者檢視錄出來的檔案確認。
+    "movie_resolution": {1: "FHD", 2: "UHD"},
 }
 
 #: 推測但沒有實測確認的標籤。跟 VALUE_LABELS 分開放，這樣「哪些是證據、
 #: 哪些是推論」在程式裡就分得清楚。UI 顯示時會標註未確認。
-INFERRED_LABELS: dict[str, dict[int, str]] = {
-    # 合法值只有 [2, 1]，2 已確認是 UHD，fp 的錄影解析度也只有這兩種，
-    # 所以 1 幾乎確定是 FHD —— 但沒有實際錄一段量過尺寸。
-    "movie_resolution": {1: "FHD"},
-}
+# 目前沒有待確認的項目。機制保留著 —— record_format 的 mov_image_quality
+# 與 movie_resolution 以外的數值仍然沒有名字，將來補上時會先經過這裡。
+INFERRED_LABELS: dict[str, dict[int, str]] = {}
 
 #: CanSetInfo5 裡對應的「合法值清單」tag，用來限制可設的範圍。
 CAPABILITY_TAGS = {

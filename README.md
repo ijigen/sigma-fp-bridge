@@ -643,9 +643,9 @@ value simply never changes. Use `shutter_angle`, which writes to the movie group
 **`record_format`: 1 = CinemaDNG, 2 = MOV.** Established by recording a clip at
 each setting on a freshly cleared card and looking at what came out — the fp does
 not show the format on its main display, and the protocol reports a bare number.
-`movie_resolution` 2 = UHD, from the same clip. Values that have not been
-confirmed this way are left unlabelled — `movie_resolution` 1 records
-successfully but its dimensions could not be measured from the host.
+`movie_resolution` 1 = FHD, 2 = UHD — 2 from that clip, 1 confirmed by
+inspecting the recorded file. Values that have not been confirmed this way are
+left unlabelled rather than guessed at.
 
 **Judge a recording by `CaptStatus` and `ImageDBTail`, never by the movie file
 info.** `SigmaGetMovieFileInfo` describes MOV only, so it is blind to CinemaDNG,

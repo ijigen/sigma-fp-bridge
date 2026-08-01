@@ -169,10 +169,10 @@ def test_only_confirmed_labels_are_published():
     assert M.VALUE_LABELS["record_format"] == {1: "CinemaDNG", 2: "MOV"}
     schema = {d["name"]: d for d in M.describe()}
     assert schema["record_format"]["labels"] == {1: "CinemaDNG", 2: "MOV"}
-    # movie_resolution 只確認過 2 = UHD；1 沒實測過就不列
-    assert schema["movie_resolution"]["labels"] == {2: "UHD"}
-    assert 1 not in schema["movie_resolution"]["labels"]
+    assert schema["movie_resolution"]["labels"] == {1: "FHD", 2: "UHD"}
     assert schema["mov_image_quality"]["labels"] is None, "沒確認的不該有標籤"
+    # 推測標籤的機制要留著，將來還有未命名的數值要走這條路
+    assert isinstance(M.INFERRED_LABELS, dict)
     print("✓ 只發布實機確認過的數值標籤")
 
 
