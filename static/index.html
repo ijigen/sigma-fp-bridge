@@ -364,7 +364,9 @@ function render() {
   const lockSettings = !live || !!st.recording;
   document.querySelectorAll('#settings [data-set]').forEach(el => {
     if (el.classList && el.classList.contains('locked')) return;   // 機身模式一直是鎖的
-    setDisabled(el, lockSettings || el.dataset.lockedByMode === '1');
+    // data-locked 是 renderSettings 依當下狀態標的（A 模式下的快門、
+    // 自動 ISO 下的數值…）。這裡只能再加上停用，不能把它打開。
+    setDisabled(el, lockSettings || el.dataset.locked === '1');
   });
   setText($('cal-hint'), st.calibration_points
     ? st.calibration_points + ' 個校準點' : '尚未校準 — 依距離對焦需要至少 2 點');
@@ -532,6 +534,13 @@ function labelFor(s, v) {
   return String(v);
 }
 
+// 因為當下狀態而停用的控制項，要同時標上 data-locked ——
+// render() 每 100ms 會重設所有控制項的 disabled，沒有這個標記就會把
+// 「A 模式下快門不可設」之類的停用狀態清掉（實際發生過）。
+function lockedAttr(isLocked) {
+  return isLocked ? ' disabled data-locked="1"' : '';
+}
+
 function escapeHTML(t) {
   return String(t).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 }
@@ -543,7 +552,7 @@ function optRow(name, title, opts) {
     const state = matchState(c.value, opts.current);
     const on = state ? ' ' + state : '';
     const lock = opts.locked ? ' locked' : '';
-    const dis = (opts.disabled || opts.locked) ? ' disabled' : '';
+    const dis = lockedAttr(opts.disabled || opts.locked);
     const t = c.title ? ' title="' + escapeHTML(c.title) + '"'
                       : approxTitle(state, opts.current);
     return '<button class="o' + on + lock + '"' + dis + t +
@@ -657,7 +666,7 @@ function exposureRow(byName) {
     if (iso && iso.choices && iso.choices.length) {
       const v = values.iso;
       if (v !== null && v !== undefined) parts.push('ISO ' + v);
-      g += '<select data-set="iso"' + (autoIso ? ' disabled' : '') +
+      g += '<select data-set="iso"' + lockedAttr(autoIso) +
         ' title="' + escapeHTML(autoIso ? 'ISO 自動時由相機決定' : 'ISO') + '">' +
         optionsFor(iso.choices, v, c => 'ISO ' + c) + '</select>';
     }
@@ -673,7 +682,7 @@ function exposureRow(byName) {
   // 光圈
   if (ap && ap.choices && ap.choices.length) {
     const v = values.aperture;
-    body += '<span class="grp"><select data-set="aperture"' + (apOK ? '' : ' disabled') +
+    body += '<span class="grp"><select data-set="aperture"' + lockedAttr(!apOK) +
       ' title="' + escapeHTML(apOK ? '光圈' : 'P / S 模式下由相機決定光圈') + '">' +
       optionsFor(ap.choices, v, c => labelFor(ap, c)) + '</select></span>';
   }
@@ -698,7 +707,7 @@ function exposureRow(byName) {
         ? ' data-set="shutter_unit" data-val="' + (u === 'angle' ? 2 : 1) + '"'
         : ' data-unit="' + u + '"';
       return '<button class="o' + (useAngle === (u === 'angle') ? ' on' : '') + '"' +
-        (on ? '' : ' disabled') + (tip ? ' title="' + escapeHTML(tip) + '"' : '') +
+        lockedAttr(!on) + (tip ? ' title="' + escapeHTML(tip) + '"' : '') +
         attr + '>' + label + '</button>';
     };
     const v = values[active.name];
@@ -708,7 +717,7 @@ function exposureRow(byName) {
               (secondsAvailable ? '' : 'CINE 模式的快門只能用角度設定')) +
       unitBtn('angle', '角度', unitSetting ? true : !!angle,
               unitSetting ? '切換相機的快門表示法為角度' : '') +
-      '<select data-set="' + active.name + '"' + (shOK ? '' : ' disabled') +
+      '<select data-set="' + active.name + '"' + lockedAttr(!shOK) +
       ' title="' + escapeHTML(shOK ? '快門' : 'P / A 模式下由相機決定快門') + '">' +
       optionsFor(active.choices, v, c => labelFor(active, c)) + '</select></span>';
   }
@@ -745,7 +754,7 @@ function wbRow(byName) {
   }
   if (ct) {
     body += '<span class="grp"><input type="number" data-set="color_temp" step="100"' +
-      (byTemp ? '' : ' disabled') +
+      lockedAttr(!byTemp) +
       ' title="' + escapeHTML(byTemp ? '色溫（K）' : '白平衡設成「色溫」時才能指定') + '"' +
       ' value="' + (curCt === null || curCt === undefined ? '' : curCt) + '"' +
       ' style="min-width:96px"></span>';

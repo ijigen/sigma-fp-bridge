@@ -87,7 +87,7 @@ def test_iso_sits_inside_the_exposure_row_after_the_mode():
     block = js[js.index("function exposureRow"):js.index("function wbRow")]
     assert "iso_auto" in block and "data-set=\"iso\"" in block, "ISO 沒併進曝光列"
     assert 'data-set="exposure_compensation"' in block, "EV 沒併進曝光列"
-    assert "autoIso ? ' disabled' : ''" in block, "自動時沒有停用 ISO 數值"
+    assert "lockedAttr(autoIso)" in block, "自動時沒有停用 ISO 數值"
     # ISO 群組要排在模式群組後面、光圈之前
     assert block.index('data-set="exposure_mode"') < block.index('data-set="iso_auto"')
     assert block.index('data-set="iso_auto"') < block.index('data-set="aperture"')
@@ -244,7 +244,7 @@ def test_white_balance_and_colour_temp_share_a_row():
     assert "function wbRow" in js and "'__wb'" in js
     block = js[js.index("function wbRow"):js.index("function settingsHTML")]
     assert "byTemp" in block, "沒有判斷白平衡是否為色溫模式"
-    assert "byTemp ? '' : ' disabled'" in block, "非色溫模式下沒有停用 K 值"
+    assert "lockedAttr(!byTemp)" in block, "非色溫模式下沒有停用 K 值"
     assert "選「色溫」才能指定 K 值" in block
     assert '<select data-set="white_balance">' in block, "白平衡不是下拉選單"
     body = js[js.index("const ORDER"):js.index("const SCROLL_IF_OVER")]
@@ -323,6 +323,26 @@ def test_selected_buttons_keep_their_colour_on_hover():
     assert ".o.on.approx:hover:not(:disabled)" in css, "接近命中沒有 hover 樣式"
     assert ".o.locked.on:hover" in css, "鎖定的按鈕滑入不該變色"
     print("✓ 已選按鈕滑入變淺藍而非灰")
+
+
+def test_mode_based_disabling_survives_the_10hz_redraw():
+    """A 模式下快門要反灰、S 模式下光圈要反灰，而且不能被重繪打開。
+
+    render() 每 100ms 會重設所有控制項的 disabled。先前它讀的是一個從未
+    被設定過的屬性（lockedByMode），所以每次重繪都把依模式停用的狀態清掉 ——
+    邏輯是對的，畫面上卻永遠是可按的。
+    """
+    js = _script(HTML.read_text())
+    assert "function lockedAttr" in js, "沒有統一的停用標記"
+    assert "' disabled'" not in js, "還有地方直接寫 disabled 而不標記原因"
+    assert "el.dataset.locked === '1'" in js, "render() 沒有尊重停用標記"
+    assert "lockedByMode" not in js, "還在讀那個從未設定過的屬性"
+
+    # A 模式放光圈擋快門、S 模式反之
+    block = js[js.index("function exposureRow"):js.index("function wbRow")]
+    assert "cur === 'AperturePriority'" in block and "cur === 'ShutterPriority'" in block
+    assert "lockedAttr(!apOK)" in block and "lockedAttr(!shOK)" in block
+    print("✓ 依模式的反灰狀態不會被 10Hz 重繪清掉")
 
 
 def test_state_updates_do_not_rebuild_dom():
