@@ -17,6 +17,18 @@ tag 編號怎麼來的
     CanSetInfo5 160 MovieResolution        -> movie 60
     CanSetInfo5 110..113 音訊那組          -> movie 10..13
 
+已用對照法解出的低位 tag（改一項設定、dump、看哪個值跟著動）：
+
+    tag 3 = 光圈自動旗標   Manual 0 / A 0 / S 1 / P 1
+    tag 4 = 快門自動旗標   Manual 0 / A 1 / S 0 / P 1
+
+    也就是說錄影模式把曝光模式拆成兩個獨立的自動旗標，而不是一個 enum。
+    （不需要靠它們設定曝光模式 —— DataGroup2 的 ExposureMode 在 CINE 下
+    照樣有效，實測過。）
+
+    tag 1 = 2、tag 5 = 0、tag 6 = 2 對曝光模式 / 補償 / 測光 / ISO 自動 /
+    光圈的變更都不動，意義未知。
+
 快門角度不遵循這個位移（CanSetInfo5 是 214），但確認方式更直接：
 CanSetInfo5 tag 214 回報的合法值清單第一個就是 (112, 3600)，而 movie tag 7
 當下讀到的正是 (112, 3600)。整份清單換算後是標準的電影快門角度序列
