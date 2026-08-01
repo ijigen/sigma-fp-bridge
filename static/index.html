@@ -257,6 +257,12 @@ function connectWS() {
       renderSettings();
     } else if (msg.type === 'ack') {
       if (msg.settings) { settingsValues = msg.settings; renderSettings(); }
+      if (msg.rejected && Object.keys(msg.rejected).length) {
+        for (const [k, d] of Object.entries(msg.rejected)) {
+          logRow(`⚠ 相機沒有接受 ${k}=${d.requested}（實際 ${d.actual}）`, 'err');
+          if (d.hint) logRow('   ' + d.hint, 'err');
+        }
+      }
       if (msg.released !== undefined) setTimeout(() => send({cmd: 'get_settings'}), 300);
       if (msg.frame_rate !== undefined) setTimeout(() => send({cmd: 'get_settings'}), 100);
       if (msg.shutter_angle !== undefined && msg.requested === undefined) {
@@ -422,19 +428,23 @@ function fmtChoice(v, unit) {
   return String(v);
 }
 
-function renderSettings(force) {
-  if (!settingsSchema) return;
-  const grid = document.getElementById('settings-grid');
-  // 記住焦點，免得 10Hz 狀態更新把使用者正在操作的控制項重繪掉
-  const active = document.activeElement && document.activeElement.dataset
-    ? document.activeElement.dataset.setting : null;
-  if (active && !force) return;
+// 只有 schema / 顯示單位改變時才重建 DOM。以前每次 ack 都整片重畫，
+// 使用者剛操作完的下拉選單會被抽換掉，畫面跟著跳 —— 而且正在輸入的值會不見。
+let renderedKey = null;
 
-  grid.innerHTML = '';
-  for (const s of settingsSchema) {
+function settingsRows() {
+  return settingsSchema.filter(s => {
     // 快門秒數與角度是同一件事的兩種表示，一次只顯示一個
-    if (s.name === 'shutter_speed' && shutterUnit === 'angle') continue;
-    if (s.name === 'shutter_angle' && shutterUnit !== 'angle') continue;
+    if (s.name === 'shutter_speed' && shutterUnit === 'angle') return false;
+    if (s.name === 'shutter_angle' && shutterUnit !== 'angle') return false;
+    return true;
+  });
+}
+
+function buildSettings() {
+  const grid = document.getElementById('settings-grid');
+  grid.innerHTML = '';
+  for (const s of settingsRows()) {
     const row = document.createElement('div');
     row.className = 'field';
     const label = document.createElement('span');
@@ -442,39 +452,48 @@ function renderSettings(force) {
     if (s.note) label.title = s.note;
     row.appendChild(label);
 
-    const value = settingsValues[s.name];
     let control;
-    if (s.choices) {
+    if (s.choices && s.choices.length) {
       control = document.createElement('select');
+      const blank = document.createElement('option');
+      blank.value = ''; blank.textContent = '—';
+      control.appendChild(blank);
       for (const c of s.choices) {
         const opt = document.createElement('option');
-        opt.value = c;
+        opt.value = String(c);
         opt.textContent = fmtChoice(c, s.unit);
         control.appendChild(opt);
-      }
-      // 相機回報的值不在選項裡時（例如 None），加一個暫時的項目撐住顯示
-      if (value === null || value === undefined) {
-        const opt = document.createElement('option');
-        opt.value = ''; opt.textContent = '—'; opt.selected = true;
-        control.insertBefore(opt, control.firstChild);
-      } else {
-        control.value = String(value);
       }
     } else {
       control = document.createElement('input');
       control.type = 'number';
-      control.value = value ?? '';
       control.style.width = '90px';
     }
     control.dataset.setting = s.name;
+    control.dataset.numeric = (!s.choices || typeof s.choices[0] === 'number') ? '1' : '';
     control.onchange = () => {
       let v = control.value;
       if (v === '') return;
-      if (!s.choices || typeof s.choices[0] === 'number') v = parseFloat(v);
+      if (control.dataset.numeric) v = parseFloat(v);
       send({cmd: 'set_settings', settings: {[s.name]: v}});
     };
     row.appendChild(control);
     grid.appendChild(row);
+  }
+}
+
+function renderSettings(force) {
+  if (!settingsSchema) return;
+  const key = shutterUnit + '|' + settingsRows().map(s => s.name).join(',');
+  if (key !== renderedKey || force) {
+    buildSettings();
+    renderedKey = key;
+  }
+  // 只更新值，不重建元素 —— 使用者正在操作的控制項不會被抽掉
+  for (const el of document.querySelectorAll('[data-setting]')) {
+    if (el === document.activeElement) continue;
+    const v = settingsValues[el.dataset.setting];
+    el.value = (v === null || v === undefined) ? '' : String(v);
   }
 }
 

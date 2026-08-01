@@ -37,6 +37,9 @@ class FakeCamera:
         self.focus_range: tuple[int, int] | None = (5974, 11116)
         self.focal_length = 28
         self.api_mode = True
+        self.usb_claimed = True
+        # 這些欄位寫進去會被相機默默忽略（模擬自動曝光覆蓋手動值）
+        self.ignored_fields: set = set()
         # 照實機回報：ISO 100–25600、曝光補償 ±5EV
         self.capabilities = {
             "iso": {"min": 100, "max": 25600, "step_ev": 0.333},
@@ -81,6 +84,8 @@ class FakeCamera:
         self.focus_range = (5974, 11116)
         self.focal_length = 28
         self.api_mode = True
+        self.usb_claimed = True
+        self.ignored_fields = set()
         self.capabilities = {
             "iso": {"min": 100, "max": 25600, "step_ev": 0.333},
             "iso_auto": {"min": 100, "max": 6400, "step_ev": 0.333},
@@ -126,7 +131,7 @@ class FakeCamera:
     def _set_group(self, n, payload):
         self._tick(f"setgroup{n}")
         for k, v in vars(payload).items():
-            if v is not None:
+            if v is not None and k not in self.ignored_fields:
                 self.groups[n][k] = v
         self.set_group_log.append((n, {k: v for k, v in vars(payload).items() if v is not None}))
 
@@ -148,6 +153,11 @@ class FakeCamera:
     def close_application(self):
         self._tick("close_application")
         self.api_mode = False
+
+    def _shutdown(self):
+        """對應 ptpy USBTransport._shutdown()：釋放 USB interface。"""
+        self._tick("shutdown")
+        self.usb_claimed = False
 
 
 def install(camera: FakeCamera | None = None) -> FakeCamera:
@@ -178,12 +188,20 @@ def install(camera: FakeCamera | None = None) -> FakeCamera:
         return c.focus_range
 
     mod = types.ModuleType("sigma_fp_focus")
-    mod.open_camera = lambda: cam
+    def open_camera():
+        if cam.usb_claimed:
+            raise RuntimeError("No USB PTP device found.（上一個連線還佔著 interface）")
+        cam.usb_claimed = True
+        return cam
+
+    mod.open_camera = open_camera
 
     def close_camera(c):
-        # 忠實反映真實的 close_camera()：一定會先送 CloseApplication 讓相機
-        # 退出 API 模式。stub 成空的話，test_release 就測不到真正在乎的事。
+        # 忠實反映真實的 close_camera()：先送 CloseApplication 讓相機退出
+        # API 模式，再釋放 USB interface。少了後者，release 之後的 acquire
+        # 會搶不到自己還沒放開的裝置。
         c.close_application()
+        c._shutdown()
 
     mod.close_camera = close_camera
     mod.get_focus_state = get_focus_state

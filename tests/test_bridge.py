@@ -44,6 +44,8 @@ def reset():
     B.state.focus_range = None
     B.state.last_lens_focal_mm = None
     B.state.released_by_user = False
+    B.state.frame_rate = 24.0
+    CAM.usb_claimed = True
 
 
 @contextlib.asynccontextmanager
@@ -143,6 +145,47 @@ async def test_release_returns_body_control_and_blocks_reconnect():
             with contextlib.suppress(asyncio.CancelledError):
                 await reconnect
     print("✓ release 交還機身控制且擋住自動重連，acquire 收回")
+
+
+async def test_acquire_after_release_reconnects():
+    """release 之後 acquire 必須連得回來。
+
+    實測失敗過：close_camera() 只關 PTP session，USB interface 還被舊物件
+    佔著（ptpy 的 _shutdown() 只註冊在 atexit），所以 acquire 是在跟自己
+    上一個連線搶裝置。
+    """
+    reset()
+    async with running_worker():
+        await B.release_camera()
+        assert CAM.count("shutdown") == 1, "沒釋放 USB interface"
+        assert not CAM.usb_claimed
+        ok = await B.acquire_camera()
+        assert ok, "acquire 應該要成功"
+        assert B.state.camera_connected
+
+        # 連續來回幾次也不能漏
+        for _ in range(3):
+            await B.release_camera()
+            assert await B.acquire_camera()
+    print("✓ release → acquire 可反覆連回（USB interface 有真的釋放）")
+
+
+async def test_rejected_settings_are_reported():
+    """相機默默忽略寫入時，要明確講出來而不是假裝成功。"""
+    reset()
+    CAM.ignored_fields = {"ShutterSpeed"}
+    CAM.groups[2]["ExposureMode"] = __import__(
+        "sigma_ptpy.enum", fromlist=["x"]).ExposureMode.AperturePriority
+    try:
+        async with running_worker():
+            result = await B.cam_apply_settings({"shutter_speed": 1 / 500})
+    finally:
+        CAM.ignored_fields = set()
+    assert "shutter_speed" in result["rejected"], result
+    detail = result["rejected"]["shutter_speed"]
+    assert detail["requested"] == 1 / 500
+    assert "AperturePriority" in (detail["hint"] or ""), detail
+    print("✓ 被相機忽略的設定會被抓出來並提示原因")
 
 
 async def test_settings_roundtrip_through_bridge():

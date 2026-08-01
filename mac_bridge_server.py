@@ -47,7 +47,13 @@ from zeroconf.asyncio import AsyncZeroconf
 
 # 引入 PoC 裡的 patch 跟基礎 helpers
 sys.path.insert(0, str(Path(__file__).parent))
-from camera_settings import SettingError, apply_settings, describe, read_settings
+from camera_settings import (
+    SettingError,
+    apply_settings,
+    describe,
+    read_settings,
+    verify_applied,
+)
 from sigma_fp_focus import (
     open_camera,
     read_capabilities,
@@ -545,13 +551,28 @@ async def cam_read_settings() -> dict:
     )
 
 
+def _apply_and_verify(changes: dict) -> dict:
+    """在 executor 裡跑：套用設定，然後立刻回讀確認相機真的吃了。
+
+    寫入與驗證放同一個 job，中間不會被別的 transaction 插進來。
+    """
+    applied = apply_settings(state.camera, changes, state.capabilities,
+                             state.frame_rate)
+    rejected = verify_applied(state.camera, applied, state.frame_rate)
+    return {"applied": applied, "rejected": rejected}
+
+
 async def cam_apply_settings(changes: dict) -> dict:
-    """套用設定變更。整批一起驗證，不會出現一半成功的狀態。"""
-    return await worker.call(
-        lambda: apply_settings(state.camera, changes, state.capabilities,
-                               state.frame_rate),
-        priority=Priority.CONTROL,
+    """套用設定變更並回報哪些相機沒吃。整批一起驗證，不會出現一半成功的狀態。"""
+    result = await worker.call(
+        lambda: _apply_and_verify(changes), priority=Priority.CONTROL
     )
+    for name, detail in result.get("rejected", {}).items():
+        log.warning(
+            f"相機沒有接受 {name}={detail['requested']}（實際 {detail['actual']}）"
+            + (f" — {detail['hint']}" if detail.get("hint") else "")
+        )
+    return result
 
 
 def _grab_view_frame() -> bytes | None:
@@ -834,14 +855,14 @@ async def handle_ws_command(req: dict) -> dict | None:
     if cmd == "set_settings":
         changes = req.get("settings") or {}
         try:
-            applied = await cam_apply_settings(changes)
+            result = await cam_apply_settings(changes)
         except SettingError as e:
             return {"type": "error", "id": request_id, "error": str(e)}
         return {
             "type": "ack",
             "id": request_id,
-            "applied": applied,
-            # 回讀一次：相機可能拒絕或調整某些值（例如 A 模式下設快門）
+            "applied": result["applied"],
+            "rejected": result["rejected"],
             "settings": await cam_read_settings(),
         }
 
@@ -1003,10 +1024,11 @@ async def handle_settings_post(request: web.Request) -> web.Response:
         return web.json_response({"error": "not connected"}, status=503)
     data = await request.json()
     changes = data.get("settings", data)
-    applied = await cam_apply_settings(changes)
+    result = await cam_apply_settings(changes)
     return web.json_response({
-        "ok": True,
-        "applied": applied,
+        "ok": not result["rejected"],
+        "applied": result["applied"],
+        "rejected": result["rejected"],
         "settings": await cam_read_settings(),
     })
 

@@ -530,6 +530,22 @@ Changes are validated as a batch before anything is sent: one bad value rejects
 the whole request rather than leaving the camera half-configured. Settings that
 share a `DataGroup` are written in a single transaction.
 
+**Every write is read back and verified.** A PTP write returns OK even when the
+camera then ignores the value, which is the worst kind of failure to debug — the
+UI shows what you asked for and the camera does something else. Responses carry a
+`rejected` map naming anything that did not stick:
+
+```json
+{"rejected": {"shutter_speed": {"requested": 0.002, "actual": 0.04,
+  "hint": "exposure mode is AperturePriority; auto exposure overrides a manual shutter"}}}
+```
+
+That hint matters. Manual exposure values behave exactly like focus position: in
+P or A mode the camera's auto-exposure overwrites your shutter the instant after
+you set it, the same way auto-focus reclaims a focus position unless `AFLock` and
+`PreConstAF` are switched off in the same write. Set `exposure_mode` to `Manual`
+first.
+
 | Settable | |
 |---|---|
 | Exposure | `exposure_mode` (P/A/S/M), `aperture`, `shutter_speed`, `iso`, `iso_auto`, `exposure_compensation`, `metering_mode` |

@@ -329,6 +329,17 @@ def close_camera(cam: SigmaPTPy) -> None:
         except Exception:
             pass
 
+    # 關 session 還不夠：USB interface 是被 ptpy 的 USBTransport 佔著的，
+    # 而釋放它的 _shutdown() 只註冊在 atexit —— 也就是只有行程結束才跑。
+    # 不主動呼叫的話，release 之後再 acquire 會搶不到「自己上一個物件還
+    # 沒放開」的裝置，而且每次都漏一個 EvtPolling 執行緒。
+    shutdown = getattr(cam, "_shutdown", None)
+    if callable(shutdown):
+        try:
+            shutdown()
+        except Exception as e:
+            print(f"警告：釋放 USB interface 失敗：{e}", file=sys.stderr)
+
 
 def read_info5_raw(cam: SigmaPTPy) -> bytes:
     """跟相機要 CanSetInfo5，回傳它的原始 payload bytes。

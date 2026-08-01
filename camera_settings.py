@@ -330,6 +330,61 @@ def apply_settings(cam, changes: dict[str, Any],
     return result
 
 
+#: 會被相機的自動曝光子系統蓋掉的設定，以及要手動控制它所需要的模式。
+#
+# 這跟對焦是同一個模式：set_focus_position() 必須同時關掉 AFLock 與
+# PreConstAF，否則相機的自動對焦會立刻把你設的位置搶回去。曝光也一樣 ——
+# 在 P / A 模式下寫快門，相機的自動曝光下一瞬間就覆蓋掉了，寫入本身
+# 「成功」但值不會留下。
+AUTO_OVERRIDE_HINTS = {
+    "shutter_speed": ("Manual", "ShutterPriority"),
+    "shutter_angle": ("Manual", "ShutterPriority"),
+    "aperture": ("Manual", "AperturePriority"),
+}
+
+
+def _roughly_equal(a, b) -> bool:
+    if a is None or b is None:
+        return a is b
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)):
+        if a == 0 or b == 0:
+            return a == b
+        return abs(a - b) / max(abs(a), abs(b)) < 0.02
+    return str(a) == str(b)
+
+
+def verify_applied(cam, requested: dict[str, Any],
+                   frame_rate: float | None = None) -> dict[str, Any]:
+    """寫入後回讀，找出相機實際上沒有接受的設定。
+
+    「寫了沒反應」是最難查的一種問題 —— PTP 寫入會回 OK，但相機可能
+    默默忽略。與其讓使用者盯著沒變的畫面猜，不如直接比對並講清楚。
+
+    Returns:
+        {name: {"requested": x, "actual": y, "hint": str | None}}，只含不符的項目。
+    """
+    actual = read_settings(cam, frame_rate)
+    mode = actual.get("exposure_mode")
+    rejected: dict[str, Any] = {}
+
+    for name, wanted in requested.items():
+        if name not in actual:
+            continue
+        got = actual[name]
+        if _roughly_equal(got, wanted):
+            continue
+        hint = None
+        modes = AUTO_OVERRIDE_HINTS.get(name)
+        if modes and mode not in modes:
+            hint = (
+                f"曝光模式目前是 {mode}，相機的自動曝光會覆蓋手動設的{name}。"
+                f"先把 exposure_mode 設成 {' 或 '.join(modes)} 再試。"
+            )
+        rejected[name] = {"requested": wanted, "actual": got, "hint": hint}
+
+    return rejected
+
+
 def check_within_capabilities(name: str, value, capabilities: dict | None) -> None:
     """拿相機回報的實際範圍驗證數值。
 
