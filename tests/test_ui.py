@@ -99,28 +99,32 @@ def test_iso_row_is_merged_and_uses_a_dropdown():
     print("✓ ISO 與 EV 合併成一列，數值皆用下拉選單")
 
 
-def test_shutter_row_merges_speed_and_angle():
-    """秒數與角度是同一件事的兩種表示，合併成一列以免使用者以為是兩個設定。
+def test_exposure_row_merges_mode_aperture_and_shutter():
+    """曝光模式決定光圈與快門能不能手動設，三者放同一列才看得出關係。
 
-    CINE 模式下沒有 shutter_speed（相機會收下寫入然後丟棄），所以「秒」
-    要停用並說明，而不是留一個按了沒用的選項。
+    P 下兩個都由相機接管、A 只放光圈、S 只放快門、M 才全放。
+    CINE 模式沒有 shutter_speed，所以「秒」要停用並說明。
     """
     js = _script(HTML.read_text())
-    assert "function shutterRow" in js
-    assert "'__shutter'" in js
-    assert "secondsAvailable" in js, "沒有處理 CINE 下秒數不可用"
-    assert "CINE 模式的快門只能用角度設定" in js
+    assert "function exposureRow" in js and "'__exposure'" in js
+    block = js[js.index("function exposureRow"):js.index("function settingsHTML")]
+    for token in ("exposure_mode", "aperture", "shutter_speed", "shutter_angle"):
+        assert token in block, token
+    assert "apOK" in block and "shOK" in block, "沒有依模式決定可不可設"
+    assert "CINE 模式的快門只能用角度設定" in block
+    assert "由相機決定" in block, "被相機接管的項目沒有說明"
     body = js[js.index("const ORDER"):js.index("const SCROLL_IF_OVER")]
-    assert "shutter_speed" not in body and "shutter_angle" not in body, \
-        "快門不該還在一般的 ORDER 迴圈裡"
-    print("✓ 快門合併成一列，CINE 下停用秒數並說明")
+    for token in ("'exposure_mode'", "'aperture'", "'shutter_speed'", "'shutter_angle'"):
+        assert token not in body, f"{token} 不該還在一般的 ORDER 迴圈裡"
+    print("✓ 曝光模式 / 光圈 / 快門合併成一列，依模式決定可設性")
 
 
-def test_aperture_uses_a_dropdown():
+def test_exposure_row_comes_after_format():
+    """先決定要拍什麼規格，再決定怎麼曝光。"""
     js = _script(HTML.read_text())
-    assert "'__aperture'" in js and "function selectRow" in js
-    assert "需切換成 M 或 A 模式" in js, "光圈沒有標示可設的模式"
-    print("✓ 光圈用下拉選單，並標示需要的曝光模式")
+    body = js[js.index("const ORDER"):js.index("const SCROLL_IF_OVER")]
+    assert body.index("'__format'") < body.index("'__exposure'")
+    print("✓ 曝光列排在影像規格之後")
 
 
 def test_derived_shutter_angle_not_offered_in_movie_mode():
@@ -229,6 +233,25 @@ def test_unsettable_unidentified_setting_is_hidden():
     src = (Path(__file__).resolve().parent.parent / "movie_settings.py").read_text()
     assert '"mov_image_quality"' in src, "協定層的對應不該一起拿掉"
     print("✓ 不可調且未識別的設定不列在 UI，但協定對應保留")
+
+
+def test_white_balance_and_colour_temp_share_a_row():
+    """色溫只有在白平衡設成 ColorTemp 時才生效。
+
+    分成兩列的話，使用者會在色溫那格輸入數字然後發現沒反應 —— 相機在
+    其他白平衡預設下自己決定色溫。合併並在不適用時停用。
+    """
+    js = _script(HTML.read_text())
+    assert "function wbRow" in js and "'__wb'" in js
+    block = js[js.index("function wbRow"):js.index("function settingsHTML")]
+    assert "byTemp" in block, "沒有判斷白平衡是否為色溫模式"
+    assert "byTemp ? '' : ' disabled'" in block, "非色溫模式下沒有停用 K 值"
+    assert "選「色溫」才能指定 K 值" in block
+    assert '<select data-set="white_balance">' in block, "白平衡不是下拉選單"
+    body = js[js.index("const ORDER"):js.index("const SCROLL_IF_OVER")]
+    for token in ("'white_balance'", "'color_temp'"):
+        assert token not in body, f"{token} 不該還在一般的 ORDER 迴圈裡"
+    print("✓ 白平衡改下拉並與色溫合併，非色溫模式下 K 值停用")
 
 
 def test_state_updates_do_not_rebuild_dom():

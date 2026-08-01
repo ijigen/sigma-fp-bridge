@@ -438,17 +438,14 @@ function stepPos(d) {
 // 由上而下：機身模式 → 曝光模式 → 影像規格 → 大小 → 幀率 → 位元深度 → 曝光數值。
 // 每一列的選項都來自相機當下回報的合法值，所以上層一改，下層自動跟著變。
 const ORDER = [
-  ['exposure_mode',         '曝光模式'],
   ['__format',              '影像規格'],
+  ['__exposure',            '曝光'],
   // mov_image_quality 不列在 UI：實測相機在所有格式 / 大小 / 幀率組合下
   // 都不開放調整它，值 1 / 2 的意義也沒有證據。顯示一個按不動又看不懂的
   // 控制項只會造成困惑。它仍可透過 API 讀寫，協定層的對應也留著。
   ['__iso',                 'ISO'],
-  ['__aperture',            '光圈'],
-  ['__shutter',             '快門'],
   ['metering_mode',         '測光'],
-  ['white_balance',         '白平衡'],
-  ['color_temp',            '色溫'],
+  ['__wb',                  '白平衡'],
   ['color_mode',            '色彩模式'],
   ['aspect_ratio',          '長寬比'],
   ['color_space',           '色彩空間'],
@@ -466,7 +463,8 @@ const FRIENDLY = {
                   JPEGBasic:'JPEG 低', DNGAndJPEG:'RAW+JPEG'},
   resolution: {High:'大', Medium:'中', Low:'小'},
   white_balance: {Auto:'自動', Sunlight:'日光', Shade:'陰影', Overcast:'陰天',
-                  Incandescent:'白熾', Fluorescent:'螢光', Flash:'閃燈', ColorTemp:'色溫'},
+                  Incandescent:'白熾', Fluorescent:'螢光', Flash:'閃燈', ColorTemp:'色溫', LightSource:'光源',
+                  Custom1:'自訂1', Custom2:'自訂2', Custom3:'自訂3'},
   metering_mode: {Evaluative:'權衡', CenterWeightedAverage:'中央重點',
                   CenterArea:'中央', Spot:'點測'},
 };
@@ -480,8 +478,8 @@ const CHOICE_WHITELIST = {
 // 只有 M 模式能手動設的項目（實測：其他模式下寫入會被自動曝光覆蓋）
 const NEEDS_MANUAL = {shutter_speed: 1, shutter_angle: 1, aperture: 1};
 
-// 不在這裡過濾快門 —— 秒數與角度合併成一列之後，該顯示哪一個由
-// shutterRow() 決定。先前留著舊過濾的後果是：CINE 模式沒有 shutter_speed，
+// 不在這裡過濾快門 —— 秒數與角度合併進曝光那一列之後，該顯示哪一個由
+// exposureRow() 決定。先前留著舊過濾的後果是：CINE 模式沒有 shutter_speed，
 // 而預設單位是「秒」，於是 shutter_angle 被濾掉，整列憑空消失。
 function visibleSettings() {
   return schema || [];
@@ -576,52 +574,6 @@ function isoRow(byName) {
   return '<div class="opt">' + head + '<div class="opts">' + btns + sel + evSel + '</div></div>';
 }
 
-// 值很多、而且使用者心裡通常已有目標的設定，用下拉比橫排按鈕好用。
-function selectRow(s, title, opts) {
-  opts = opts || {};
-  const cur = values[s.name];
-  const disabled = opts.disabled;
-  const sel = '<select data-set="' + s.name + '"' + (disabled ? ' disabled' : '') + '>' +
-    '<option value="">—</option>' +
-    (s.choices || []).map(v =>
-      '<option value="' + v + '"' + (String(v) === String(cur) ? ' selected' : '') + '>' +
-      escapeHTML(labelFor(s, v)) + '</option>').join('') + '</select>';
-  return '<div class="opt"><div class="opt-head">' +
-    '<span class="opt-name">' + title + '</span>' +
-    '<span class="opt-cur">' + (cur === null || cur === undefined ? '—' : escapeHTML(labelFor(s, cur))) + '</span>' +
-    (opts.note ? '<span class="opt-note">' + escapeHTML(opts.note) + '</span>' : '') +
-    '</div><div class="opts">' + (opts.prefix || '') + sel + '</div></div>';
-}
-
-// 快門：秒數與角度是同一件事的兩種表示，合併成一列。
-// 按鈕切換單位，數值用下拉。CINE 模式下秒數不可用 —— 那裡的快門只能靠
-// DataGroupMovie 的角度設定，寫 shutter_speed 相機會收下然後丟棄。
-function shutterRow(byName) {
-  const speed = byName.shutter_speed, angle = byName.shutter_angle;
-  if (!speed && !angle) return '';
-  const secondsAvailable = !!speed;
-  const useAngle = shutterUnit === 'angle' || !secondsAvailable;
-  const active = useAngle ? angle : speed;
-  const manual = values.exposure_mode === 'Manual';
-
-  const btn = (unit, label, enabled, tip) =>
-    '<button class="o' + (useAngle === (unit === 'angle') ? ' on' : '') + '"' +
-    (enabled ? '' : ' disabled') + (tip ? ' title="' + escapeHTML(tip) + '"' : '') +
-    ' data-unit="' + unit + '">' + label + '</button>';
-
-  const prefix =
-    btn('time', '秒', secondsAvailable, secondsAvailable ? '' : 'CINE 模式的快門只能用角度設定') +
-    btn('angle', '角度', !!angle, '');
-
-  if (!active) {
-    return '<div class="opt"><div class="opt-head"><span class="opt-name">快門</span>' +
-      '<span class="opt-cur">—</span></div><div class="opts">' + prefix + '</div></div>';
-  }
-  const note = !manual ? '需切換成 M 模式'
-    : (!secondsAvailable ? 'CINE：由角度控制' : '');
-  return selectRow(active, '快門', {prefix: prefix, disabled: !manual, note: note});
-}
-
 // 影像規格 / 大小 / 色彩位元合併成一列。它們是同一個決策的三個面向，
 // 而且相機讓它們互相牽動 —— 改規格會改變可選的大小與位元深度，
 // 分成三列反而看不出這層關係。
@@ -672,6 +624,119 @@ function formatRow(byName) {
     '</div><div class="opts">' + body + '</div></div>';
 }
 
+// 曝光模式、光圈、快門合併成一列。模式決定另外兩個能不能手動設 ——
+// P 下兩個都被自動曝光接管、A 只放光圈、S 只放快門、M 才全放。
+// 放在一起，按下模式就看得到旁邊哪些變成可用。
+function exposureRow(byName) {
+  const mode = byName.exposure_mode;
+  const ap = byName.aperture;
+  const speed = byName.shutter_speed, angle = byName.shutter_angle;
+  if (!mode && !ap && !speed && !angle) return '';
+
+  const cur = values.exposure_mode;
+  const manual = cur === 'Manual';
+  const apOK = manual || cur === 'AperturePriority';
+  const shOK = manual || cur === 'ShutterPriority';
+
+  const parts = [];
+  if (cur) parts.push(labelFor(mode || {name:'exposure_mode'}, cur));
+  if (ap && values.aperture !== null && values.aperture !== undefined)
+    parts.push(labelFor(ap, values.aperture));
+
+  // 模式
+  let body = '';
+  if (mode && mode.choices) {
+    const white = CHOICE_WHITELIST.exposure_mode;
+    let choices = mode.choices.filter(v => white.indexOf(String(v)) >= 0 || String(v) === String(cur));
+    if (!choices.length) choices = mode.choices;
+    body += '<span class="grp">' + choices.map(v =>
+      '<button class="o' + (String(v) === String(cur) ? ' on' : '') + '"' +
+      ' data-set="exposure_mode" data-val="' + escapeHTML(v) + '">' +
+      escapeHTML(labelFor(mode, v)) + '</button>').join('') + '</span>';
+  }
+
+  // 光圈
+  if (ap && ap.choices && ap.choices.length) {
+    const v = values.aperture;
+    body += '<span class="grp"><select data-set="aperture"' + (apOK ? '' : ' disabled') +
+      ' title="' + escapeHTML(apOK ? '光圈' : 'P / S 模式下由相機決定光圈') + '">' +
+      '<option value="">—</option>' +
+      ap.choices.map(c => '<option value="' + c + '"' +
+        (String(c) === String(v) ? ' selected' : '') + '>' +
+        escapeHTML(labelFor(ap, c)) + '</option>').join('') + '</select></span>';
+  }
+
+  // 快門：秒 / 角度切換 + 數值
+  const secondsAvailable = !!speed;
+  const useAngle = shutterUnit === 'angle' || !secondsAvailable;
+  const active = useAngle ? angle : speed;
+  if (active) {
+    if (values[active.name] !== null && values[active.name] !== undefined)
+      parts.push(labelFor(active, values[active.name]));
+    const unitBtn = (u, label, on, tip) =>
+      '<button class="o' + (useAngle === (u === 'angle') ? ' on' : '') + '"' +
+      (on ? '' : ' disabled') + (tip ? ' title="' + escapeHTML(tip) + '"' : '') +
+      ' data-unit="' + u + '">' + label + '</button>';
+    const v = values[active.name];
+    body += '<span class="grp">' +
+      unitBtn('time', '秒', secondsAvailable, secondsAvailable ? '' : 'CINE 模式的快門只能用角度設定') +
+      unitBtn('angle', '角度', !!angle, '') +
+      '<select data-set="' + active.name + '"' + (shOK ? '' : ' disabled') +
+      ' title="' + escapeHTML(shOK ? '快門' : 'P / A 模式下由相機決定快門') + '">' +
+      '<option value="">—</option>' +
+      active.choices.map(c => '<option value="' + c + '"' +
+        (String(c) === String(v) ? ' selected' : '') + '>' +
+        escapeHTML(labelFor(active, c)) + '</option>').join('') + '</select></span>';
+  }
+
+  const note = manual ? '' : (cur ? cur.replace('ProgramAuto','P 模式')
+        .replace('AperturePriority','A 模式').replace('ShutterPriority','S 模式') +
+        '：灰色項目由相機決定' : '');
+  return '<div class="opt"><div class="opt-head">' +
+    '<span class="opt-name">曝光</span>' +
+    '<span class="opt-cur">' + escapeHTML(parts.join(' · ') || '—') + '</span>' +
+    (note ? '<span class="opt-note">' + escapeHTML(note) + '</span>' : '') +
+    '</div><div class="opts">' + body + '</div></div>';
+}
+
+// 白平衡與色溫合併：色溫只有在白平衡設成 ColorTemp 時才會生效，
+// 其他預設（自動 / 日光 / 陰影…）下相機自己決定色溫。分成兩列的話，
+// 使用者會在色溫那格輸入數字然後發現沒反應。
+function wbRow(byName) {
+  const wb = byName.white_balance, ct = byName.color_temp;
+  if (!wb && !ct) return '';
+  const curWb = values.white_balance;
+  const curCt = values.color_temp;
+  const byTemp = curWb === 'ColorTemp';
+
+  const parts = [];
+  if (curWb) parts.push(labelFor(wb || {name:'white_balance'}, curWb));
+  if (byTemp && curCt !== null && curCt !== undefined) parts.push(curCt + 'K');
+
+  let body = '';
+  if (wb && wb.choices && wb.choices.length) {
+    const v = curWb;
+    body += '<span class="grp"><select data-set="white_balance">' +
+      '<option value="">—</option>' +
+      wb.choices.map(c => '<option value="' + c + '"' +
+        (String(c) === String(v) ? ' selected' : '') + '>' +
+        escapeHTML(labelFor(wb, c)) + '</option>').join('') + '</select></span>';
+  }
+  if (ct) {
+    body += '<span class="grp"><input type="number" data-set="color_temp" step="100"' +
+      (byTemp ? '' : ' disabled') +
+      ' title="' + escapeHTML(byTemp ? '色溫（K）' : '白平衡設成「色溫」時才能指定') + '"' +
+      ' value="' + (curCt === null || curCt === undefined ? '' : curCt) + '"' +
+      ' style="min-width:96px"></span>';
+  }
+
+  return '<div class="opt"><div class="opt-head">' +
+    '<span class="opt-name">白平衡</span>' +
+    '<span class="opt-cur">' + escapeHTML(parts.join(' · ') || '—') + '</span>' +
+    (ct && !byTemp ? '<span class="opt-note">選「色溫」才能指定 K 值</span>' : '') +
+    '</div><div class="opts">' + body + '</div></div>';
+}
+
 function settingsHTML() {
   if (!schema) return '<div class="hint">載入中…</div>';
   const byName = {};
@@ -694,17 +759,9 @@ function settingsHTML() {
 
   for (const [name, title] of ORDER) {
     if (name === '__iso') { const r = isoRow(byName); if (r) rows.push(r); continue; }
-    if (name === '__shutter') { const r = shutterRow(byName); if (r) rows.push(r); continue; }
     if (name === '__format') { const r = formatRow(byName); if (r) rows.push(r); continue; }
-    if (name === '__aperture') {
-      const ap = byName.aperture;
-      if (ap) rows.push(selectRow(ap, '光圈', {
-        disabled: values.exposure_mode !== 'Manual' && values.exposure_mode !== 'AperturePriority',
-        note: (values.exposure_mode !== 'Manual' && values.exposure_mode !== 'AperturePriority')
-              ? '需切換成 M 或 A 模式' : '',
-      }));
-      continue;
-    }
+    if (name === '__exposure') { const r = exposureRow(byName); if (r) rows.push(r); continue; }
+    if (name === '__wb') { const r = wbRow(byName); if (r) rows.push(r); continue; }
     const s = byName[name];
     if (!s) continue;
     const cur = values[name];
