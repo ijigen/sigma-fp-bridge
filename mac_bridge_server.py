@@ -155,6 +155,8 @@ class BridgeState:
     movie_capabilities: dict = field(default_factory=dict)
     #: release 前的設定快照，acquire 後用來還原（見 release_camera）
     settings_snapshot: dict | None = None
+    #: "stills" | "movie" | None —— 機身撥桿位置（推測而來，見 refresh_capabilities）
+    camera_mode: str | None = None
     # 快門角度換算用的幀率。機身實際幀率在 DataGroupMovie 裡，但那個
     # DataGroup 的 tag 編號還沒解出來，所以先由使用者指定。
     frame_rate: float = 24.0
@@ -475,6 +477,16 @@ async def refresh_capabilities() -> None:
     except Exception as e:
         log.debug(f"讀取錄影能力失敗：{e}")
 
+    # 機身撥桿位置沒有直接可讀的欄位（CanSetInfo5 tag 100 StillMovieSwitch
+    # 回的是 [1, 1]，看起來是「兩種都支援」而不是目前在哪一邊）。但錄影專屬
+    # 的合法值清單只在 CINE 模式下才有內容 —— 實測：STILL 時 RecordFormat /
+    # CinemaDNGImageQuality / MovieResolution / ShutterAngle 全是空的，
+    # 切到 CINE 就都有值。用這個推測模式。
+    mode = "movie" if state.movie_capabilities else "stills"
+    if mode != state.camera_mode:
+        log.info(f"機身模式：{'錄影 (CINE)' if mode == 'movie' else '拍照 (STILL)'}")
+    state.camera_mode = mode
+
     if caps != state.capabilities:
         summary = ", ".join(
             f"{k} {v.get('min')}–{v.get('max')}" for k, v in sorted(caps.items())
@@ -601,7 +613,8 @@ def _apply_and_verify(changes: dict) -> dict:
             state.camera, movie_changes, state.movie_capabilities))
     if still_changes:
         applied.update(apply_settings(state.camera, still_changes,
-                                      state.capabilities, state.frame_rate))
+                                      state.capabilities, state.frame_rate,
+                                      state.camera_mode))
 
     actual = _read_all_settings()
     mode = actual.get("exposure_mode")
@@ -817,6 +830,7 @@ async def broadcast_state(extra: dict | None = None) -> None:
         "ts": time.time(),
         "connected": state.camera_connected,
         "released": state.released_by_user,
+        "camera_mode": state.camera_mode,
         "focus_position": state.last_focus_position,
         "focus_state": state.last_focus_state,
         "focus_mode": state.last_focus_mode,
@@ -939,10 +953,12 @@ async def handle_ws_command(req: dict) -> dict | None:
         return {
             "type": "settings_schema",
             "id": request_id,
-            "settings": describe(state.capabilities)
-                        + movie_settings.describe(state.movie_capabilities),
+            "settings": describe(state.capabilities, state.camera_mode)
+                        + (movie_settings.describe(state.movie_capabilities)
+                           if state.camera_mode == "movie" else []),
             "capabilities": state.capabilities,
             "movie_capabilities": state.movie_capabilities,
+            "camera_mode": state.camera_mode,
             "frame_rate": state.frame_rate,
         }
 
@@ -1064,6 +1080,7 @@ async def handle_status(request: web.Request) -> web.Response:
     return web.json_response({
         "connected": state.camera_connected,
         "released": state.released_by_user,
+        "camera_mode": state.camera_mode,
         "focus_position": state.last_focus_position,
         "focus_state": state.last_focus_state,
         "focal_length_mm": state.last_lens_focal_mm,
@@ -1120,10 +1137,12 @@ async def handle_distance_post(request: web.Request) -> web.Response:
 async def handle_settings_schema(request: web.Request) -> web.Response:
     """所有可設定項目的中繼資料。不需要相機。"""
     return web.json_response({
-        "settings": describe(state.capabilities)
-                    + movie_settings.describe(state.movie_capabilities),
+        "settings": describe(state.capabilities, state.camera_mode)
+                    + (movie_settings.describe(state.movie_capabilities)
+                       if state.camera_mode == "movie" else []),
         "capabilities": state.capabilities,
         "movie_capabilities": state.movie_capabilities,
+        "camera_mode": state.camera_mode,
     })
 
 

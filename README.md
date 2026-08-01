@@ -598,6 +598,29 @@ in the same request is rejected.
   movie/still setting "is synchronized with the switch status", and while
   `CanSetInfo5` reports a `StillMovieSwitch` capability, no `DataGroup` exposes a
   writable field for it.
+#### Stills and movie are different cameras
+
+The body switch does not merely change what gets recorded — **it changes which
+settings exist and what values they accept.** Ignoring that is how you end up
+writing a value the camera accepts and discards.
+
+| | STILL | CINE |
+|---|---|---|
+| `RecordFormat`, `CinemaDNGImageQuality`, `MovieResolution`, `ShutterAngle` | no legal values | populated |
+| `ImageQuality`, `DNGQuality`, `StillImageResolution`, `DriveMode` | populated | populated but inert |
+| Exposure compensation | ±5 EV | ±3 EV |
+| Shutter | full APEX range | capped at 1/25 by frame rate |
+
+`camera_mode` in the status and schema responses reports which side you are on,
+and `/api/settings/schema` lists only the settings that apply. Writing one that
+does not is refused with the alternative named — `shutter_speed` in CINE points
+you at `shutter_angle` — rather than being sent and silently dropped.
+
+The switch position has no directly readable field. `CanSetInfo5` tag 100
+`StillMovieSwitch` returns `[1, 1]`, which appears to mean "both supported"
+rather than "currently here". The mode is inferred from whether the movie
+capability lists carry any values, which tracks the switch exactly in testing.
+
 #### Movie mode (CINE)
 
 With the body switch on CINE, **exposure is governed by `DataGroupMovie`, not

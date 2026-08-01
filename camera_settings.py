@@ -63,6 +63,8 @@ class Setting:
     converter: Any = None
     writable: bool = True
     note: str = ""
+    #: "both" | "stills" | "movie" —— 這個設定在哪個機身模式下有意義
+    applies_to: str = "both"
 
 
 SETTINGS: tuple[Setting, ...] = (
@@ -70,7 +72,10 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("exposure_mode", 2, "ExposureMode", "enum", enum_cls=E.ExposureMode,
             note="P / A / S / M。A 模式下快門由相機決定，S 模式下光圈由相機決定。"),
     Setting("aperture", 1, "Aperture", "apex", unit="f", converter=APERTURE),
-    Setting("shutter_speed", 1, "ShutterSpeed", "apex", unit="s", converter=SHUTTER),
+    Setting("shutter_speed", 1, "ShutterSpeed", "apex", unit="s", converter=SHUTTER,
+            applies_to="stills",
+            note="CINE 模式下無效 —— 錄影的快門由 shutter_angle 控制，"
+                 "寫這個欄位相機會收下然後丟掉。"),
     Setting("iso", 1, "ISOSpeed", "apex", unit="ISO", converter=ISO),
     Setting("iso_auto", 1, "ISOAuto", "enum", enum_cls=E.ISOAuto),
     Setting("exposure_compensation", 1, "ExpComp", "apex", unit="EV", converter=EXP_COMP),
@@ -84,10 +89,13 @@ SETTINGS: tuple[Setting, ...] = (
 
     # ── 影像格式 ─────────────────────────────────────────────────────
     Setting("image_quality", 2, "ImageQuality", "enum", enum_cls=E.ImageQuality,
-            note="DNG / JPEG / 兩者。這是靜態照片的格式，不是錄影格式。"),
+            applies_to="stills",
+            note="靜態照片的格式（DNG / JPEG）。錄影格式看 record_format。"),
     Setting("dng_quality", 4, "DNGQuality", "enum", enum_cls=E.DNGQuality,
-            note="DNG 位元深度（12 / 14 bit）。"),
-    Setting("resolution", 2, "Resolution", "enum", enum_cls=E.Resolution),
+            applies_to="stills",
+            note="靜態 DNG 的位元深度。CinemaDNG 的深度看 cinema_dng_quality。"),
+    Setting("resolution", 2, "Resolution", "enum", enum_cls=E.Resolution,
+            applies_to="stills"),
     Setting("aspect_ratio", 5, "AspectRatio", "enum", enum_cls=E.AspectRatio),
 
     # ── 影像風格 ─────────────────────────────────────────────────────
@@ -96,7 +104,8 @@ SETTINGS: tuple[Setting, ...] = (
     Setting("tone_effect", 5, "ToneEffect", "enum", enum_cls=E.ToneEffect),
 
     # ── 驅動 ─────────────────────────────────────────────────────────
-    Setting("drive_mode", 2, "DriveMode", "enum", enum_cls=E.DriveMode),
+    Setting("drive_mode", 2, "DriveMode", "enum", enum_cls=E.DriveMode,
+            applies_to="stills"),
 )
 
 BY_NAME = {s.name: s for s in SETTINGS}
@@ -269,9 +278,28 @@ def read_settings(cam, frame_rate: float | None = None) -> dict[str, Any]:
     return result
 
 
+def check_applies_to_mode(name: str, mode: str | None) -> None:
+    """擋掉在目前機身模式下無效的設定。
+
+    不擋的話，相機會收下寫入然後默默丟掉 —— 使用者只看到「設了沒反應」，
+    這正是實測時在 CINE 模式寫 shutter_speed 遇到的狀況。與其讓人查半天，
+    不如直接說清楚哪裡不對、該用什麼代替。
+    """
+    if mode is None:
+        return
+    setting = BY_NAME.get(name)
+    if setting is None or setting.applies_to in ("both", mode):
+        return
+    raise SettingError(
+        f"{name} 在{'錄影' if mode == 'movie' else '拍照'}模式下無效"
+        + (f"。{setting.note}" if setting.note else "")
+    )
+
+
 def apply_settings(cam, changes: dict[str, Any],
                    capabilities: dict | None = None,
-                   frame_rate: float | None = None) -> dict[str, Any]:
+                   frame_rate: float | None = None,
+                   mode: str | None = None) -> dict[str, Any]:
     """套用一批設定變更。
 
     同一個 DataGroup 的欄位會合併成一次寫入 —— 除了少一趟 USB，更重要的是
@@ -323,6 +351,7 @@ def apply_settings(cam, changes: dict[str, Any],
     by_group: dict[int, dict[str, Any]] = {}
     for name, value in changes.items():
         setting = BY_NAME[name]
+        check_applies_to_mode(name, mode)
         check_within_capabilities(name, value, capabilities)
         encoded = encode_value(setting, value)
         by_group.setdefault(setting.group, {})[setting.field] = encoded
@@ -421,7 +450,8 @@ def check_within_capabilities(name: str, value, capabilities: dict | None) -> No
         )
 
 
-def describe(capabilities: dict | None = None) -> list[dict[str, Any]]:
+def describe(capabilities: dict | None = None,
+             mode: str | None = None) -> list[dict[str, Any]]:
     """所有設定的中繼資料，給 UI 生控制項用。
 
     Args:
@@ -431,8 +461,12 @@ def describe(capabilities: dict | None = None) -> list[dict[str, Any]]:
     """
     out = []
     for setting in SETTINGS:
+        # 不適用於目前模式的設定直接不列 —— 列出來只會誘人去踩空
+        if mode and setting.applies_to not in ("both", mode):
+            continue
         entry: dict[str, Any] = {
             "name": setting.name,
+            "applies_to": setting.applies_to,
             "kind": setting.kind,
             "unit": setting.unit,
             "group": setting.group,

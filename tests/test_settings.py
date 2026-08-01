@@ -242,6 +242,36 @@ def test_explicit_iso_auto_is_respected():
     print("✓ 明確指定 iso_auto 時不覆蓋")
 
 
+def test_mode_specific_settings_rejected_with_alternative():
+    """CINE 模式下寫 shutter_speed 相機會默默丟掉 —— 直接擋下並指路。"""
+    cam = fake_camera.FakeCamera()
+    try:
+        CS.apply_settings(cam, {"shutter_speed": 1 / 500}, mode="movie")
+    except CS.SettingError as e:
+        assert "shutter_angle" in str(e), e
+        assert cam.set_group_log == [], "被擋下的值不該送到相機"
+        print("✓ 錄影模式下擋掉 shutter_speed 並指向 shutter_angle")
+    else:
+        raise AssertionError("應該要丟 SettingError")
+
+
+def test_mode_none_does_not_gate():
+    """還不知道模式時不要亂擋 —— 寧可讓相機自己判斷。"""
+    cam = fake_camera.FakeCamera()
+    CS.apply_settings(cam, {"shutter_speed": 1 / 500}, mode=None)
+    assert cam.set_group_log, "模式未知時不該擋"
+    print("✓ 模式未知時不做限制")
+
+
+def test_describe_hides_settings_for_other_mode():
+    stills = {d["name"] for d in CS.describe(mode="stills")}
+    movie = {d["name"] for d in CS.describe(mode="movie")}
+    assert "shutter_speed" in stills and "shutter_speed" not in movie
+    assert "image_quality" in stills and "image_quality" not in movie
+    assert "aperture" in stills and "aperture" in movie, "光圈兩邊都適用"
+    print(f"✓ describe 依模式過濾（拍照 {len(stills)} 項 / 錄影 {len(movie)} 項）")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):
