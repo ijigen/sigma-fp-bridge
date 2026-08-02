@@ -96,13 +96,16 @@ MOVIE_SETTINGS: tuple[MovieSetting, ...] = (
     # 增益、風切濾波全都沒有意義，所以 112/113/114 一起變成不可設定。也解釋
     # 了為什麼它們對影像管線和 HDMI 輸出都毫無影響 —— 它們不是影像設定。
     #
-    # ⚠️ 尚未在硬體上驗證。實測 tag 11 = 2 時錄出來的音訊仍是 2ch/16bit/48kHz、
-    # 192192 samples，跟 tag 11 = 1 完全相同，這與「聲道數」的名稱對不上。
-    # 可能是值不直接等於聲道數，也可能是名稱本身不精確。要確認的方法是把
-    # audio_record 關掉錄一段 —— 沒有音訊軌就證實了。
+    # tag 10（AudioRecord）**已在硬體上驗證**：設成 0 錄一段，檔案裡只剩
+    # vide 與 tmcd 兩軌，soun 軌整個消失。命名正確。
+    #
+    # ⚠️ 11/12/13/14 仍未驗證。實測 tag 11 = 2 時錄出來的音訊仍是
+    # 2ch/16bit/48kHz、192192 samples，跟 tag 11 = 1 完全相同，這與「聲道數」
+    # 的名稱對不上。可能是值不直接等於聲道數，也可能要 gain_adjust_method
+    # 配合才生效。
     MovieSetting("audio_record", 10, DT.UInt8, "int",
-                 note="錄音開關（CanSetInfo5: AudioRecord）。關掉之後 11/12/13/14 "
-                      "全部變成不可設定。"),
+                 note="錄音開關（CanSetInfo5: AudioRecord）。已驗證：設 0 錄出來的"
+                      "檔案沒有音訊軌。關掉之後 11/12/13/14 全部變成不可設定。"),
     MovieSetting("voice_channels", 11, DT.UInt8, "int",
                  note="聲道數（CanSetInfo5: NumOfVoiceChannels）。未驗證 —— "
                       "實測改值不影響錄出來的音訊軌。"),

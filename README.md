@@ -1138,7 +1138,11 @@ unavailable together. It also explains the silence everywhere it was looked for 
 none of this is an imaging setting, so neither the sensor path nor HDMI was ever
 going to show it.
 
-**Not verified on hardware, and one observation disagrees.** A take with
+**`AudioRecord` is verified.** A take with `tag 10 = 0` comes back carrying only
+`vide` and `tmcd` — the `soun` track is gone entirely. The name is right, and by
+extension the `+100` mapping that produced it.
+
+**The other four are not, and one observation disagrees.** A take with
 `tag 11 = 2` carries the same audio as `tag 11 = 1`: `sowt`, 2 channels, 16-bit,
 48 kHz, 192192 samples. If that tag is the channel count, the file should have
 moved. Either the value is not a channel count directly, or the name is loose.
