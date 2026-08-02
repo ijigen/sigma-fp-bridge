@@ -49,14 +49,30 @@ def recv_raw(cam, opcode, params: list[int] | None = None) -> bytes:
     相機對不該收的指令的反應包括「USB 逾時後掉線」，只能靠斷電復原。
 
     已經掃過的空號（fp 韌體 5.02）：
-      0x9010, 0x9011, 0x901A → **有回應**，正常完成但 payload 是 0 bytes。
-          代表韌體確實實作了這三個指令，只是不帶參數時沒東西可回。
-      0x901D                 → USBTimeoutError，相機掉線。這才是「沒實作」
-          的反應，正好當上面三個的對照組。
-      0x901E 之後            → 還沒掃（掃到 0x901D 就中斷了）
 
-    位置值得記：0x9012 起是 GetCamDataGroup1~3，而 0x9019 是 SetCamClockAdj、
-    0x901B 是 SnapCommand —— 0x901A 正好夾在兩者之間。
+      **0x902C → 有內容，85 bytes 的 IFD。**這是掃描唯一的實質收穫：
+
+          tag 1  UInt32 = 84
+          tag 2  UInt16 = 1
+          tag 3  UInt16 = 0
+          tag 4  UInt16 x6 = 0x9013 0x9014 0x9015 0x9023 0x9027 0x902E
+          tag 5  UInt16 x0 = 空
+
+          tag 4 全部是**讀取類 opcode**（GetCamDataGroup2/3/4/5、
+          GetCamCaptStatus，加上未文件化的 0x902E）。這個形狀最像變更通知
+          ——「這幾樣變了，該重讀」。相機 SDK 常見的模式，主機不必輪詢全部。
+          尚未驗證：改一個設定之後再問一次，看清單會不會跟著變。
+
+          附帶價值：0x902E 被相機自己列為「該讀的東西」，所以它不是廢碼。
+
+      0x9010, 0x9011, 0x901A → 正常完成但 payload 永遠 0 bytes。
+          帶參數也試過（[0] [1] [2] [0,0] [1,0] [0xFFFFFFFF]），全部一樣。
+      0x9020, 0x9021, 0x9025, 0x9026, 0x902E → 同上，空 payload。
+      0x901E, 0x901F → AttributeError: Data（回應裡沒有資料相位）。
+      0x901D, 0x9038 → USBTimeoutError，相機掉線，只能斷電。
+      0x9039 以上 → 還沒掃。
+
+    位置值得記：0x902C 就在 0x902D（GetPictFileInfo2）前面，0x902E 在後面。
 
     Raises:
         ProbeError: opcode 名稱不認得，或相機拒絕。
