@@ -1034,7 +1034,19 @@ same condition as asking with no entry at all, which is why it hangs rather than
 refusing. Everything else safe to call during a take was tried —
 `GetMovieFileInfo`, `GetPictFileInfo2`, `GetLastCommandData`,
 `GetCamDataGroupMovie`, standard PTP object enumeration — and none of them
-exposes data. PTP events are the one mechanism not yet ruled out.
+exposes data.
+
+PTP events are ruled out too, and with a control rather than by absence alone.
+Across a twelve-second take sampled every three seconds, plus before and after,
+the event queue stayed empty; so did a stills capture that demonstrably completed
+and wrote `SDIM0001.JPG`. A capture has an unambiguous completion moment, so zero
+events there means the camera does not announce state changes over PTP events in
+API mode at all — not that nothing happened to announce. `GET /api/probe/events`
+drains the queue ptpy's poller already fills, issuing nothing to the camera, so it
+is safe to call mid-take.
+
+So a live read is not available. Every mechanism the protocol offers has been
+tried, and the file simply does not exist until the take ends.
 
 ⚠️ **Asking for a transfer when the camera has no movie entry hangs the camera.**
 It stops answering, `USBTimeoutError`, and drops off USB; only power restores it.
