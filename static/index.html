@@ -102,9 +102,11 @@
   .opt.folded .opt-head { margin-bottom: 0; }
   .opt.folded .opts { display: none; }
   .opt:not(.folded) .opt-name, .opt:not(.folded) .opt-cur { display: none; }
-  /* 展開時標題整行都省掉，除非那一列有提示要講（例如「需切換成 M 模式」）。
-     用 JS 標記而不是 :has() —— 不想賭瀏覽器版本。 */
-  .opt:not(.folded).bare .opt-head { display: none; }
+  /* 展開時標題整行都省掉。提示（例如 needs M mode）由 applyFolds 移進控制項
+     區裡，跟著控制項一起出現 —— 放在標題行的話，收起狀態下會有一長串文字
+     跟著每一列，那正是收合要省掉的東西。 */
+  .opt:not(.folded) .opt-head { display: none; }
+  .opts > .opt-note { flex-basis: 100%; margin-left: 0; margin-top: 2px; }
   .opt-name { font-size: 11px; color: #8a8a8a; text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
   .opt-cur { font-size: 11.5px; color: #fff; font-family: ui-monospace, SFMono-Regular, monospace; }
   .opt-note { font-size: 11px; color: #6d6d6d; margin-left: auto; }
@@ -1246,8 +1248,13 @@ function applyFolds(box) {
     }
     const nameEl = row.querySelector('.opt-name');
     const key = nameEl ? nameEl.textContent : '';
-    const note = row.querySelector('.opt-note');
-    row.classList.toggle('bare', !(note && note.textContent.trim()));
+    // 提示搬進控制項區。重繪之後它又會回到標題行，所以每次都要搬。
+    const note = row.querySelector('.opt-head > .opt-note');
+    const opts = row.querySelector('.opts');
+    if (note && opts) {
+      if (note.textContent.trim()) opts.appendChild(note);
+      else note.remove();
+    }
     const open = openRows.has(key);
     row.classList.toggle('folded', !open);
     btn.textContent = open ? '▾' : '▸';

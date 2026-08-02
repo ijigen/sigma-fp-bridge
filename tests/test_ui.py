@@ -643,8 +643,8 @@ def test_each_setting_row_folds():
     assert "function applyFolds(" in html and "applyFolds(box);" in html, \
         "折疊沒有接進重繪"
     assert ".opt.folded .opts { display: none; }" in html, "收起時沒有藏掉控制項"
-    assert re.search(r"\.opt:not\(\.folded\) \.opt-name.*display: none", html), \
-        "展開時沒有藏掉標題"
+    assert re.search(r"\.opt:not\(\.folded\) \.opt-head \{ display: none", html), \
+        "展開時沒有藏掉標題行"
     # 狀態要存在重繪活得下來的地方 —— 每 100ms 整個 DOM 會被換掉
     assert "openRows.has(key)" in html and "openRows.delete(key)" in html
     no_comments = re.sub(r"/\*.*?\*/", "", html, flags=re.S)
@@ -724,6 +724,25 @@ def test_the_tap_to_focus_hint_is_gone():
     html = HTML.read_text()
     for gone in ("tapfocus-hint", "lv-tools", "the camera snaps to its grid"):
         assert gone not in html, f"還留著 {gone}"
+
+
+def test_notes_live_with_the_controls_not_in_the_title():
+    """提示要跟著控制項一起出現。
+
+    留在標題行的話，收起狀態下每一列後面都拖著一長串說明 —— 那正是收合
+    要省掉的東西，而且那些話只有在你真的要改那一項時才有用。
+    """
+    html = HTML.read_text()
+    assert re.search(r"row\.querySelector\('\.opt-head > \.opt-note'\)", html), \
+        "沒有把提示從標題行取出來"
+    # 連條件一起釘住 —— 只檢查「有沒有 appendChild」的話，把條件改成 false
+    # 也會照樣通過（實測過）。
+    assert re.search(
+        r"if \(note && opts\) \{\s*"
+        r"if \(note\.textContent\.trim\(\)\) opts\.appendChild\(note\);\s*"
+        r"else note\.remove\(\);", html), "提示沒有在有內容時移進控制項區"
+    assert ".opts > .opt-note" in html, "移進去的提示沒有樣式"
+    assert "classList.toggle('bare'" not in html, "還留著舊的 bare 標記"
 
 
 if __name__ == "__main__":
