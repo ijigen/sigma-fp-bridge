@@ -985,6 +985,13 @@ the byte offset and 4 is the length, both established by overlap rather than by
 trusting the reply: bytes read from N match bytes N onward of a read from 0.
 Parameters 1 and 3 must be zero.
 
+Parameter 1 may well be a file index within the take, and the tests that said
+otherwise cannot tell: they ran against MOV, where a take is one file, so asking
+for file 1 was always going to be refused. The reply structure carries a
+`FileCount` and an offset table that has never held more than one entry —
+CinemaDNG records a take as a folder of per-frame `.dng` files, which is the
+obvious case for both to matter. Untested.
+
 Verified end to end on a 30 s FHD take — 224,711,440 bytes in 4.0 s, about
 56 MB/s, matching the declared size and parsing cleanly:
 
