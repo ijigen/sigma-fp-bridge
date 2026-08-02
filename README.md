@@ -1063,12 +1063,17 @@ and 14. Recording still works — the file lands on the card and `GetMovieFileIn
 its size normally — but 0x9037 stops serving it. What it actually controls is
 unknown.
 
-The state does clear without a power cycle. An earlier version of this section
-said only power would fix it, on the strength of setting the tag back,
-release/acquire and re-recording all failing. The camera later recovered with no
-power cycle at all, after a mixture of recording from the body, a switch to STILL
-and a still capture, a switch back to CINE, and release/acquire. Which step did it
-has not been isolated.
+Recovery is by power cycle. That conclusion has flipped twice, so here is the
+whole sequence rather than just the current answer: first "only power works",
+from setting the tag back, release/acquire and re-recording all failing — a floor
+on what does not work, stated as a proof that nothing does. Then the camera
+recovered with no power cycle at all, so it became "it clears on its own, switch
+to STILL and back" — one success generalised. Then a deliberate reproduction:
+STILL and back, re-recording, release/acquire, each tried in turn, none of them
+recovered it.
+
+Note also that *writing* to tag 10 may be the trigger, not the value: one break
+followed a write of 1, the value it already held.
 
 That mapping is worth keeping: **`CanSetInfo5` tag = `DataGroupMovie` tag + 100**,
 confirmed on every setting already identified — 150/50 record format, 151/51

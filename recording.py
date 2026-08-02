@@ -419,10 +419,19 @@ def partial_movie(cam, offset: int, length: int) -> bytes:
     錄影照常、檔案照常寫進記憶卡、MovieFileInfo 照常回報正常大小，只有 0x9037
     改回 122,868。它實際控制什麼還不知道。
 
-    這個狀態**不需要斷電就會恢復**。先前這裡寫「只有斷電有效」是錯的 ——
-    當時試過設回 tag 10、release + acquire、重錄都無效就下了結論，但實際上
-    相機後來在沒有斷電的情況下自己好了。中間發生過的事有：用機身錄影、切到
-    STILL 拍一張、切回 CINE、release + acquire。哪一步是關鍵還沒隔離出來。
+    復原方式：**斷電重開是唯一可靠的**。
+
+    這一段的結論翻過兩次，兩次都是我把片面觀察寫成通則，所以把過程記下來：
+      1. 先寫「只有斷電有效」—— 依據是設回 tag 10、release+acquire、重錄都
+         無效。那是「這些方法無效」，不等於「沒有方法有效」。
+      2. 相機後來確實在沒斷電的情況下好了，於是改寫成「會自行恢復，切
+         STILL 再切回 CINE 即可」。那是拿一次成功當成通則。
+      3. 刻意重現時，切 STILL／重錄／release+acquire 逐一試過**全部無效**。
+
+    所以現在的說法是：斷電一定有效；不斷電曾經好過一次，但路徑不明、重現
+    不出來。另外要注意「寫入 tag 10」本身可能就是觸發條件 —— 有一次只是把
+    它寫成原本就有的值 1，之後傳輸就壞了。這個專案裡最省事的規則是：
+    **不要碰 tag 10。**
     """
     from construct import Container
 
@@ -479,8 +488,9 @@ def download_movie(cam, movie: MovieFile, save_dir=None,
             # 才觸發檢查。前面幾十 MB 早就全是垃圾了。
             raise RecordingError(
                 f"相機沒有回傳影片資料：要求 {want:,} bytes，卻回了 {len(got):,}。"
-                "相機暫時不服務影片傳輸。已知會自行恢復（不必斷電）—— "
-                "切到 STILL 再切回 CINE、重錄一段，然後再試一次。")
+                "相機停止服務影片傳輸。可靠的復原方式是把相機斷電重開；"
+                "曾經有一次在沒有斷電的情況下自行恢復，但重現不出來 —— "
+                "切 STILL／重錄／release+acquire 逐一試過都無效。")
         out += got
         if progress is not None:
             progress(len(out), movie.size)

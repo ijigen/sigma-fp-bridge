@@ -470,7 +470,7 @@ def test_an_overlong_chunk_is_rejected_instead_of_truncated():
     try:
         recording.download_movie(cam, movie)
     except recording.RecordingError as e:
-        assert "不服務影片傳輸" in str(e) and "122,868" in str(e), e
+        assert "斷電重開" in str(e) and "122,868" in str(e), e
         print("✓ 過長的回應被當成錯誤，不會截斷後繼續")
     else:
         raise AssertionError("應該要丟 RecordingError")
