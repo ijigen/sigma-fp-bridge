@@ -441,6 +441,9 @@ def test_focus_panel_exists_and_can_return_to_autofocus():
     # 對焦點沒有手動輸入 —— 座標系（682×1024，3:2）跟畫面（16:9）對不上，
     # 填數字等於盲填，在預覽上點直觀得多。
     assert "fp-centre" not in html and "fp-y" not in html, "還留著手動座標輸入"
+    # 對焦位置也不留手動輸入 —— 滑桿即時送出之後，數字框與 ±100 只是重複
+    for gone in ("pos-input", "btn-setpos", "stepPos"):
+        assert gone not in html, f"還留著 {gone}"
     # 實測：MF 下相機忽略對焦區域與臉眼偵測的寫入。按了沒反應比按不下去
     # 更讓人困惑，所以要標成不可用而不是放著。
     assert "MF 下對焦對象無效" in html, "MF 下沒有標示對焦對象不可用"
@@ -485,8 +488,11 @@ def test_tap_to_focus_is_behind_a_toggle():
     # 拿它當基準會讓框大兩成、位置也對不上畫面。
     assert re.search(r"size\[1\]\s*/\s*Math\.max\(1,\s*b\.width\)", html), \
         "框大小用了錯的基準"
-    assert re.search(r"fy\s*=\s*pt\[0\]\s*/\s*Math\.max\(1,\s*b\.height\)", html), \
-        "marker 位置用了錯的基準"
+    # 座標系 3:2、畫面 16:9 —— 垂直要用畫面實際看得到的高度換算，
+    # 否則框會變形也會偏大。
+    assert "function visibleSpan(" in html, "沒有處理畫面與座標系的長寬比差異"
+    assert re.search(r"h\s*=\s*\(size\[0\]\s*/\s*Math\.max\(1,\s*view\.height\)", html), \
+        "框高沒有用可見高度換算"
     # 映射要用相機宣告的有效區域，不是憑空假設
     assert "b.top" in html and "b.left" in html, "沒有用相機宣告的有效區域做映射"
     print("✓ 點選對焦有開關，預設關閉，並標出相機實際位置")

@@ -159,14 +159,6 @@
         </div>
         <input type="range" id="pos-slider" min="0" max="2000" value="0" style="margin:12px 0 8px"
                oninput="onSliderInput()" onchange="onSliderCommit()">
-        <div class="btnrow">
-          <input type="number" id="pos-input" oninput="markBusy()" onfocus="markBusy()">
-          <button class="primary" id="btn-setpos" onclick="commitPos()">設定</button>
-          <button class="sm" onclick="stepPos(-100)">−100</button>
-          <button class="sm" onclick="stepPos(-10)">−10</button>
-          <button class="sm" onclick="stepPos(10)">+10</button>
-          <button class="sm" onclick="stepPos(100)">+100</button>
-        </div>
         <div id="focus-controls" style="margin-top:12px; padding-top:12px; border-top:1px solid #2a2a2a"></div>
         <div class="row" style="margin-top:10px"><span class="label">馬達狀態</span><span class="value" id="f-state">—</span></div>
         <div class="row"><span class="label">鏡頭焦距</span><span class="value" id="f-len">—</span></div>
@@ -334,17 +326,14 @@ function render() {
   renderTapFocus();
   setText($('f-len'), st.focal_length_mm ? st.focal_length_mm + ' mm' : '—');
   if (st.focus_range) applyRange(st.focus_range);
-  if (st.focus_position != null && !busy()) {
-    $('pos-slider').value = st.focus_position;
-    $('pos-input').value = st.focus_position;
-  }
+  if (st.focus_position != null && !busy()) $('pos-slider').value = st.focus_position;
 
   setText($('btn-rec'), st.recording ? '■ 停止錄影' : '● 開始錄影');
   setText($('rec-elapsed'), st.recording && st.recording_seconds != null
     ? Math.round(st.recording_seconds) + ' 秒' : '');
 
   // 錄影按鈕只看連線，不看 recording —— 否則要停止的時候反而按不下去
-  for (const id of ['pos-slider','pos-input','btn-setpos','clip-secs'])
+  for (const id of ['pos-slider','clip-secs'])
     setDisabled($(id), !live || st.recording);
   setDisabled($('btn-rec'), !live);
   setDisabled($('btn-clip'), !live || st.recording || clipRunning);
@@ -400,7 +389,6 @@ function applyRange(r) {
   const s = $('pos-slider');
   s.min = r[0]; s.max = r[1];
   s.step = Math.max(1, Math.round((r[1] - r[0]) / 1000));
-  $('pos-input').step = s.step; $('pos-input').min = r[0]; $('pos-input').max = r[1];
   $('f-range-hint').textContent = '（' + r[0] + ' – ' + r[1] + '）';
   log('焦點範圍 ' + r[0] + '–' + r[1], 'recv');
 }
@@ -416,9 +404,7 @@ let sliderTimer = null, sliderPending = null;
 
 function onSliderInput() {
   markBusy();
-  const v = $('pos-slider').value;
-  $('pos-input').value = v;
-  sliderPending = parseInt(v);
+  sliderPending = parseInt($('pos-slider').value);
   if (sliderTimer) return;
   sliderTimer = setTimeout(() => {
     sliderTimer = null;
@@ -431,19 +417,8 @@ function onSliderCommit() {
   markBusy();
   if (sliderTimer) { clearTimeout(sliderTimer); sliderTimer = null; }
   sliderPending = null;
-  commitPos();
-}
-function commitPos() {
-  const v = parseInt($('pos-input').value);
-  if (isNaN(v)) return;
-  send({cmd: 'set_position', position: v});
-}
-function stepPos(d) {
-  markBusy();
-  let v = (parseInt($('pos-input').value) || 0) + d;
-  if (focusRange) v = Math.max(focusRange[0], Math.min(focusRange[1], v));
-  $('pos-input').value = v; $('pos-slider').value = v;
-  commitPos();
+  const v = parseInt($('pos-slider').value);
+  if (!isNaN(v)) send({cmd: 'set_position', position: v});
 }
 
 // ── 設定：階層式按鈕選單 ──────────────────────────────────────
@@ -805,12 +780,13 @@ function renderTapFocus() {
   if (marker.style.display !== want) marker.style.display = want;
   if (!show) return;
 
-  // 位置與大小都以**完整座標系**（682×1024）為基準。
+  // 座標系是 682×1024（3:2，全片幅比例），但預覽畫面是 16:9 —— 它只顯示
+  // 感光元件中間的一條。所以垂直方向要用「畫面實際看得到的高度」換算，
+  // 不是座標系的全高，否則框會變形也會偏大。
   //
-  // 先前拿「有效區域」（832 寬）當基準是錯的：那是對焦點中心能去到的範圍，
-  // 不是畫面的範圍。用它算大小會讓框大兩成，用它算位置則會讓 marker 跟
-  // 畫面上的真實位置對不上 —— 有效區域只佔畫面的一部分。
-  const fy = pt[0] / Math.max(1, b.height);
+  // 可見高度 = 寬 ÷ 畫面長寬比。畫面 16:9 時就是 1024/(16/9) ≈ 576。
+  const view = visibleSpan(b);
+  const fy = (pt[0] - view.top) / Math.max(1, view.height);
   const fx = pt[1] / Math.max(1, b.width);
   marker.style.top = (fy * 100) + '%';
   marker.style.left = (fx * 100) + '%';
@@ -819,11 +795,22 @@ function renderTapFocus() {
   const size = sizes[st.point_size || 0];
   if (size) {
     const w = (size[1] / Math.max(1, b.width)) * 100;
-    const h = (size[0] / Math.max(1, b.height)) * 100;
+    const h = (size[0] / Math.max(1, view.height)) * 100;
     marker.style.width = w + '%';
     marker.style.height = h + '%';
     marker.style.margin = '-' + (h / 2) + '% 0 0 -' + (w / 2) + '%';
   }
+}
+
+// 預覽畫面對應到座標系的哪一段。座標系是 3:2，畫面通常是 16:9 —— 上下
+// 各被裁掉一塊，只有中間那條看得見。
+function visibleSpan(b) {
+  const H = b.height || 682, W = b.width || 1024;
+  const img = $('liveview');
+  const r = img ? img.getBoundingClientRect() : null;
+  const aspect = (r && r.height) ? (r.width / r.height) : (16 / 9);
+  const visible = Math.min(H, W / aspect);
+  return {height: visible, top: (H - visible) / 2};
 }
 
 function onLiveviewClick(ev) {
@@ -837,12 +824,14 @@ function onLiveviewClick(ev) {
   // 點到哪就是哪 —— 用完整座標系換算，再夾進相機宣告的有效區域。
   // 先前是把整個畫面映射到有效區域，那會讓點擊位置系統性地偏移。
   const b = focusBounds.point || {};
-  const H = b.height || 682, W = b.width || 1024;
+  const W = b.width || 1024;
+  const view = visibleSpan(b);
   const top = b.top !== undefined ? b.top : 0;
-  const bottom = b.bottom !== undefined ? b.bottom : H;
+  const bottom = b.bottom !== undefined ? b.bottom : (b.height || 682);
   const left = b.left !== undefined ? b.left : 0;
   const right = b.right !== undefined ? b.right : W;
-  const y = Math.min(bottom, Math.max(top, Math.round(fy * H)));
+  // 垂直方向只映射畫面看得到的那一段，再夾進有效區域
+  const y = Math.min(bottom, Math.max(top, Math.round(view.top + fy * view.height)));
   const x = Math.min(right, Math.max(left, Math.round(fx * W)));
   focusApply({point: [y, x]});
 }
