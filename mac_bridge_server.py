@@ -1488,9 +1488,8 @@ async def _do_record(action: str, request: web.Request) -> web.Response:
         if not movies:
             # 沒有影片還發 0x9037，相機會 USB 逾時掉線，只能斷電。防線不是提示。
             return web.json_response(
-                {"error": "相機沒有可下載的影片。dest_to_save 設成 InComputer "
-                          "或 Null 錄的影片不會留下檔案 —— 要下載請用 InCamera "
-                          "或 Both。"},
+                {"error": "相機沒有可下載的影片。先 release + acquire 讓資料庫"
+                          "歸零，再錄一段，那一段才會落在可下載的索引 0。"},
                 status=404)
 
         if not any(m.index == 0 for m in movies):
@@ -1572,6 +1571,9 @@ async def handle_capture(request: web.Request) -> web.Response:
     都實測過，每個都拍成並下載成功。它控制的是要不要順便寫進記憶卡：
     InCamera／Both 會寫，Null／InComputer 不寫（對卡驗證過）。想連機拍攝
     又不佔卡就設 InComputer。
+
+    以上是**靜態影像**的結論。錄影下的行為還沒有有效資料 —— 唯一做過的對照
+    因為查錯資料庫索引而作廢。
     """
     if not state.camera_connected:
         return web.json_response({"error": "not connected"}, status=503)

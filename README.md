@@ -939,17 +939,20 @@ now reduced to a basename before use.
 `~/.sigma_fp_bridge/movies/`, with progress readable from `/api/status`.
 `GET /api/record/movies` lists what is available.
 
-**Record with `dest_to_save` set to `InCamera` or `Both` if you want the file.**
-For stills that setting only decides whether the card gets a copy, because the
-camera holds the frame in a buffer either way. Movies have no such buffer — a
-30 s FHD clip is around 290 MB — so with `InComputer` or `Null` there is nothing
-to fetch afterwards: `GetMovieFileInfo` reports no file at all once recording
-stops. Same eight-second take, recorded twice: `InCamera` gave a 48,128,384 byte
-file, `InComputer` gave nothing.
+**What `dest_to_save` does to a movie is not established.** An earlier version of
+this section claimed `InComputer` leaves nothing to fetch, on the strength of two
+eight-second takes: `InCamera` reported a 48,128,384 byte file and `InComputer`
+reported none. That comparison was void. The two takes landed on different
+database entries — head/tail 0/1 and 1/2 — and both were queried at index 0, so
+the second was asked about an entry that was never its own. The same index bug
+described below invalidated the experiment meant to characterise a different
+setting entirely.
 
-Whether `InComputer` streams the data out during the take is unresolved. It
-cannot be read with 0x9037 mid-recording — that returns the stale buffer
-described below and leaves the camera unable to serve transfers at all.
+What the physical argument still says is that a movie cannot be held in a buffer
+the way a still is: a 30 s FHD take is 224 MB. So `InComputer` either streams
+during the take or discards. Neither has been shown. Reading with 0x9037
+mid-recording is not the way to find out — with no entry to serve, that hangs the
+camera outright.
 
 Both opcodes are undocumented and unwrapped by sigma-ptpy, so this came from
 reading bytes. `SigmaGetMovieFileInfo` (0x9036) turns out to use the same shape
