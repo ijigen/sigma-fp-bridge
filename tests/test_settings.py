@@ -319,6 +319,43 @@ def test_shutter_speed_allowed_when_camera_is_in_speed_mode():
     print("✓ 相機切到速度模式時 shutter_speed 解除封鎖")
 
 
+def test_newly_exposed_settings_round_trip():
+    """DataGroup4/5 裡一直沒被接出來的設定。
+
+    刻意不做能力驗證 —— CanSetInfo5 對這些欄位的編碼形狀不一致（EImageStab
+    宣告 [0,1] 但實際值是 Off(2)），拿去當可選值清單會擋掉合法設定。靠寫入
+    後讀回比對就好。
+    """
+    import sigma_ptpy.enum as E
+    cam = fake_camera.FakeCamera()
+    cases = {
+        "electronic_stabilization": E.EImageStab.On,
+        "dc_crop_mode": E.DCCropMode.On,
+        "loc_distortion": E.LOCDistortion.Off,
+        "loc_vignetting": E.LOCVignetting.Auto,
+        "interval_timer_seconds": 30,
+        "interval_timer_frames": 5,
+    }
+    for name, value in cases.items():
+        setting = CS.BY_NAME[name]
+        raw = value.value if hasattr(value, "value") else value
+        cam.groups[setting.group][setting.field] = value
+        got = CS.read_settings(cam).get(name)
+        expected = value.name if hasattr(value, "name") else value
+        assert got == expected, f"{name}: 讀回 {got!r}，預期 {expected!r}"
+    print(f"✓ 新接出的 {len(cases)} 個設定讀得回來")
+
+
+def test_read_only_status_is_not_writable():
+    """放大倍率與間隔計時器剩餘量是相機自己算的，不能出現在可寫設定裡。"""
+    names = {s.name for s in CS.SETTINGS}
+    for name in ("lv_magnify_ratio", "interval_seconds_remain", "interval_frames_remain"):
+        assert name not in names, f"{name} 不該是可寫設定"
+        assert any(n == name for n, _, _ in CS.STATUS_FIELDS), \
+            f"{name} 應該在唯讀狀態裡"
+    print("✓ 唯讀狀態沒有混進可寫設定")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

@@ -116,6 +116,46 @@ SETTINGS: tuple[Setting, ...] = (
                  "/api/capture 能不能把影像抓回電腦 —— 下載讀的是相機的 buffer。"
                  "要連機拍攝又不佔卡，設 InComputer 或 Null。"),
 
+    # ── 影像處理與穩定 ───────────────────────────────────────────────
+    #
+    # 這一批一直在 DataGroup4/5 裡，只是沒被接出來。
+    #
+    # 刻意不做能力驗證：CanSetInfo5 對這些欄位的編碼形狀不一致 —— EImageStab
+    # 宣告 [0, 1] 但實際值是 Off(2)，DCCropMode 宣告 [1, 0, -1] 而 -1 不是合法
+    # 的 enum 值，ShutterSound 的 [0, 5, 1] 又像是 [min, max, step]。把它們當成
+    # 可選值清單會擋掉合法的設定。所以這裡靠寫入後讀回比對 —— 寫不進去會如實
+    # 回報 requested/actual，而不是先用一個我讀不懂的清單去猜。
+    Setting("electronic_stabilization", 4, "EImageStab", "enum", enum_cls=E.EImageStab,
+            note="電子防手震。錄影時有效，會裁切畫面。"),
+    Setting("dc_crop_mode", 4, "DCCropMode", "enum", enum_cls=E.DCCropMode,
+            note="APS-C 裁切模式。Auto 會依鏡頭自動判斷。"),
+    Setting("high_iso_ext", 4, "HighISOExt", "enum", enum_cls=E.HighISOExt,
+            applies_to="stills", note="高感光度擴展。"),
+    Setting("cont_shoot_speed", 4, "ContShootSpeed", "enum", enum_cls=E.ContShootSpeed,
+            applies_to="stills", note="連拍速度。"),
+    Setting("hdr", 4, "HDR", "enum", enum_cls=E.HDR, applies_to="stills"),
+    Setting("fill_light", 4, "FillLight", "int", applies_to="stills",
+            note="補光（Fill Light）強度。"),
+
+    # ── 鏡頭光學校正 ─────────────────────────────────────────────────
+    Setting("loc_distortion", 4, "LOCDistortion", "enum", enum_cls=E.LOCDistortion,
+            note="畸變校正。"),
+    Setting("loc_chromatic_aberration", 4, "LOCChromaticAberration", "enum",
+            enum_cls=E.LOCChromaticAberration, note="色差校正。"),
+    Setting("loc_diffraction", 4, "LOCDiffraction", "enum", enum_cls=E.LOCDiffraction,
+            note="繞射校正。"),
+    Setting("loc_vignetting", 4, "LOCVignetting", "enum", enum_cls=E.LOCVignetting,
+            note="周邊光量校正。"),
+
+    # ── 間隔計時器（縮時攝影）─────────────────────────────────────────
+    #
+    # CanSetInfo5 只在 STILL 模式下宣告這兩個可設定（CINE 下是空的），
+    # 所以標成 stills。
+    Setting("interval_timer_seconds", 5, "IntervalTimerSecond", "int", unit="s",
+            applies_to="stills", note="間隔計時器的間隔秒數。"),
+    Setting("interval_timer_frames", 5, "IntervalTimerFrame", "int", unit="張",
+            applies_to="stills", note="間隔計時器的張數。0 = 無限。"),
+
     # ── 驅動 ─────────────────────────────────────────────────────────
     Setting("drive_mode", 2, "DriveMode", "enum", enum_cls=E.DriveMode,
             applies_to="stills"),
@@ -268,6 +308,11 @@ STATUS_FIELDS = (
     ("lens_focal_mm", 1, "CurrentLensFocalLength"),
     ("lens_wide_mm", 3, "LensWideFocalLength"),
     ("lens_tele_mm", 3, "LensTeleFocalLength"),
+    # live view 放大倍率。CanSetInfo5 701 是空的（不可設定），所以只讀不寫。
+    ("lv_magnify_ratio", 4, "LVMagnifyRatio"),
+    # 間隔計時器的剩餘量。這兩個是相機自己倒數的，不是設定。
+    ("interval_seconds_remain", 5, "IntervalTimerSecondRemain"),
+    ("interval_frames_remain", 5, "IntervalTimerFrameRemain"),
 )
 
 
