@@ -1,3 +1,7 @@
+
+
+https://github.com/user-attachments/assets/32b5e32b-f669-43c7-a34f-81bc41edbcac
+
 # sigma-fp-bridge
 
 Control a **Sigma fp** over USB — focus, exposure, movie settings, recording,
