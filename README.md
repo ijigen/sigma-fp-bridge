@@ -154,10 +154,10 @@ Then start the bridge. You should see:
 
 ```
 INFO sigma-bridge | 相機已連線
-INFO sigma-bridge | 瀏覽器測試: http://192.168.x.x:8765/
+INFO sigma-bridge | 瀏覽器測試: http://192.168.x.x:1025/
 ```
 
-Open `http://localhost:8765/` and drag the focus slider. The lens should move in real-time.
+Open `http://localhost:1025/` and drag the focus slider. The lens should move in real-time.
 
 Nothing to undo afterwards — no system state was changed.
 
@@ -450,7 +450,7 @@ Quick test:
                        │ Wi-Fi / local network
         ┌──────────────┴──────────────────────────┐
         │  Clients                                │
-        │  - Browser at http://host:8765/         │
+        │  - Browser at http://host:1025/         │
         │  - Future: iOS app via Bonjour          │
         │  - Anything that speaks WebSocket / HTTP│
         └─────────────────────────────────────────┘
@@ -550,19 +550,19 @@ reached USB (see [camera worker](#camera-worker)).
 ### REST
 
 ```bash
-curl http://localhost:8765/api/status
-curl -X POST http://localhost:8765/api/focus  -d '{"position":1500}' -H "Content-Type: application/json"
-curl -X POST http://localhost:8765/api/distance -d '{"distance":2.5}' -H "Content-Type: application/json"
+curl http://localhost:1025/api/status
+curl -X POST http://localhost:1025/api/focus  -d '{"position":1500}' -H "Content-Type: application/json"
+curl -X POST http://localhost:1025/api/distance -d '{"distance":2.5}' -H "Content-Type: application/json"
 
 # Camera settings
-curl http://localhost:8765/api/settings/schema   # what's settable, with choices
-curl http://localhost:8765/api/settings
-curl -X POST http://localhost:8765/api/settings -H 'Content-Type: application/json' \
+curl http://localhost:1025/api/settings/schema   # what's settable, with choices
+curl http://localhost:1025/api/settings
+curl -X POST http://localhost:1025/api/settings -H 'Content-Type: application/json' \
   -d '{"aperture": 2.8, "iso": 800, "exposure_mode": "Manual"}'
 
 # Hand the body back without stopping the bridge (see Gotcha 4)
-curl -X POST http://localhost:8765/api/release
-curl -X POST http://localhost:8765/api/acquire
+curl -X POST http://localhost:1025/api/release
+curl -X POST http://localhost:1025/api/acquire
 ```
 
 ### Camera settings
@@ -895,9 +895,9 @@ range. `capture()` now does that itself before shooting, to recover from a run
 that died mid-flight.
 
 ```bash
-curl -X POST 'http://localhost:8765/api/capture'            # shoot and download
-curl -X POST 'http://localhost:8765/api/capture?fetch=0'    # shoot only
-curl -X POST 'http://localhost:8765/api/capture?af=1'       # autofocus first
+curl -X POST 'http://localhost:1025/api/capture'            # shoot and download
+curl -X POST 'http://localhost:1025/api/capture?fetch=0'    # shoot only
+curl -X POST 'http://localhost:1025/api/capture?af=1'       # autofocus first
 ```
 
 Autofocus is off by default: this project drives focus over PTP, and letting the
@@ -1304,7 +1304,7 @@ write — 341 is the true centre of the 682-row area.
 ### Live view
 
 ```
-GET http://localhost:8765/liveview.mjpeg
+GET http://localhost:1025/liveview.mjpeg
 ```
 
 Plain MJPEG stream, ~25 fps. Drop into `<img src="...">` or read with OpenCV.

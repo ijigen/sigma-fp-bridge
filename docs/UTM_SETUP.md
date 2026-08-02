@@ -150,7 +150,7 @@ chmod +x run_linux.sh   # 待會會新增這個檔案
 成功的話會印：
 ```
 2026-06-05 ... INFO sigma-bridge | 相機已連線
-2026-06-05 ... INFO sigma-bridge |   瀏覽器測試:   http://VM_IP:8765/
+2026-06-05 ... INFO sigma-bridge |   瀏覽器測試:   http://VM_IP:1025/
 ```
 
 ---
@@ -160,7 +160,7 @@ chmod +x run_linux.sh   # 待會會新增這個檔案
 在 Mac 開瀏覽器：
 
 ```
-http://VM_IP:8765/
+http://VM_IP:1025/
 ```
 
 應該看到控制面板、live view、可以設 focus position！
@@ -170,7 +170,7 @@ http://VM_IP:8765/
 ## 後續：iPhone 連線
 
 VM 的網路通常會跟 Mac 共享同網段。如果你的 Wi-Fi 跟 Mac 同一個：
-- iPhone 也能直接連 `http://VM_IP:8765/`
+- iPhone 也能直接連 `http://VM_IP:1025/`
 - Bonjour 也能找到（_sigmafp._tcp）
 
 如果 UTM 用「Shared Network」模式，VM 在自己的 NAT 後面，iPhone 可能要：

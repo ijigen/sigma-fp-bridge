@@ -1249,5 +1249,29 @@ async def test_setting_a_point_turns_face_detection_off():
     print("✓ 指定對焦點會關掉臉／眼偵測")
 
 
+async def test_the_port_is_unprivileged_and_overridable():
+    """1025 是非特權範圍的第一個。
+
+    這支程式平常是 sudo 跑的（要從 ptpcamerad 手上搶相機），但綁的埠不必
+    跟著吃特權 —— 綁在 1024 以下的話，之後就算相機那邊不用 root 了，也還是
+    會卡在這裡。
+    """
+    assert B.PORT == 1025, f"預設埠變成 {B.PORT}"
+    assert B.PORT > 1024, "綁在特權範圍內"
+
+    # 覆寫要在另一個行程裡驗 —— reload 會把 B 的 state / worker 全部換掉，
+    # 之後的測試就對著新的模組物件跑了。
+    import subprocess, sys as _sys, os
+    env = dict(os.environ, SIGMA_BRIDGE_PORT="9999")
+    root = str(Path(__file__).resolve().parent.parent)
+    got = subprocess.run(
+        [_sys.executable, "-c",
+         f"import sys; sys.path.insert(0, {root!r}); sys.path.insert(0, {str(Path(__file__).resolve().parent)!r});"
+         "import fake_camera, mac_bridge_server as M; print(M.PORT)"],
+        capture_output=True, text=True, env=env, cwd=root)
+    assert got.stdout.strip() == "9999", f"環境變數覆寫沒有生效：{got.stdout!r} {got.stderr[-300:]}"
+    print("✓ 埠是非特權的，且可用環境變數覆寫")
+
+
 if __name__ == "__main__":
     asyncio.run(main())
