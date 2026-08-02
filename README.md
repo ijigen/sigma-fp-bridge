@@ -1028,12 +1028,20 @@ so once `head` advanced past 0, every later take looked like it had produced
 nothing. That symptom was misread for a long time as "the reply latches to the
 first clip of the session and never updates".
 
-**`GetPartialMovieFile` only ever serves entry 0.** Proven by the end boundary
-rather than by trusting the reply: with three entries sized 29,352,984 /
-29,251,032 / 26,482,656, reads were refused at exactly 29,352,984 — entry 0's
-length. The first parameter is not an index (1 or 2 just return the 120 KB
-rejection buffer), and querying `GetMovieFileInfo` for another index does not
-select it either.
+**`GetPartialMovieFile` only ever serves entry 0** — position zero itself, not
+whatever `head` points at. Those two were indistinguishable for a long time
+because `head` was zero every time it was checked; separating them took two takes
+of different lengths:
+
+- entries 0 (31,464,592) and 1 (40,311,528) both present: reads were refused at
+  exactly 31,464,592, so entry 0 is what was being served
+- entry 0 released, `head` now 1 with entry 1 still present: the next read
+  returned `USBTimeoutError` and the camera dropped off USB
+
+So it is bound to the slot, and once `head` moves past it that slot is the
+"nothing to serve" case that hangs the camera. Walking the entries by releasing
+them one at a time does not work. Getting a second take downloadable means
+release, acquire and record again.
 
 So the working sequence is one clip at a time:
 
