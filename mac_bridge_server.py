@@ -90,6 +90,10 @@ from sigma_fp_focus import (
 
 log = logging.getLogger("sigma-bridge")
 
+#: 版本號。執行檔的檔名由 sigma-fp-bridge.spec 從這裡讀出來 —— 只有一個
+#: 來源，檔名和程式回報的版本才不會各說各話。
+VERSION = "0.1.1"
+
 #: 10/25 —— fp 出貨的日子（2019-10-25）。
 #:
 #: 剛好也是「非特權」範圍的第一個埠。這支程式平常是 sudo 跑的（要從

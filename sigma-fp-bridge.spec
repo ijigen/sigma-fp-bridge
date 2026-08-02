@@ -10,14 +10,25 @@ dylib 一起收進去。那個套件本來就是為了「sudo 之下 DYLD_* 被�
 static/ 要明確帶進去：網頁是從檔案讀的，不在 import 圖裡，PyInstaller
 看不到。
 
-檔名帶平台與架構，而且是算出來的不是寫死的 —— 寫死的話在 Intel Mac 上
-build 會產出一個名字騙人的檔案，而那正是別人下載後才會發現的那種錯。
+檔名帶版本、平台與架構，而且都是算出來的不是寫死的 —— 寫死的話在 Intel Mac
+上 build 會產出一個名字騙人的檔案，而那正是別人下載後才會發現的那種錯。
+
+版本從 mac_bridge_server.py 用正規表示式讀，不 import —— import 會把 usb、
+aiohttp 那一串連帶拉進 spec 的執行環境，只為了一個字串。
 """
 import platform
+import re
 import sys
+from pathlib import Path
+
+_SRC = Path(SPECPATH) / "mac_bridge_server.py"
+_m = re.search(r'^VERSION = "([^"]+)"', _SRC.read_text(), re.M)
+if not _m:
+    raise SystemExit("找不到 VERSION —— 檔名會少掉版本號，寧可現在就停")
+VERSION = _m.group(1)
 
 _OS = {"darwin": "macos", "win32": "windows"}.get(sys.platform, sys.platform)
-NAME = f"sigma-fp-bridge-{_OS}-{platform.machine()}"
+NAME = f"sigma-fp-bridge-v{VERSION}-{_OS}-{platform.machine()}"
 
 a = Analysis(
     ['mac_bridge_server.py'],
