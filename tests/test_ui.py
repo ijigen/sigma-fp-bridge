@@ -821,6 +821,20 @@ def test_the_client_never_writes_files_to_the_computer():
         assert endpoint not in html, f"網頁碰到了會存檔的 {endpoint}"
 
 
+def test_unknown_frame_size_is_not_the_largest_one():
+    """對焦框大小的索引 0 是**最大**的框，而 0 也是「還沒收到」的預設值。
+
+    寫 `st.point_size || 0` 的話，兩者在 || 之下無法分辨 —— 狀態還沒到就
+    畫成最大框，而那正是使用者第一次進入時看到的東西。這跟 GOTCHAS 裡
+    「零是合法值」是同一個坑。
+    """
+    html = HTML.read_text()
+    assert "st.point_size || 0" not in html, "又用 || 0 把未知當成索引 0"
+    assert re.search(r"st\.point_size == null \? null : sizes\[st\.point_size\]", html), \
+        "不知道框大小時仍然畫了尺寸"
+    assert "i === st.point_size" in html, "選中狀態仍把未知當成 0"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

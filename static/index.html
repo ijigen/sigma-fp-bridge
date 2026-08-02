@@ -880,8 +880,11 @@ function renderTapFocus() {
                         / Math.max(1, b.width) * 100) + '%';
   }
 
+  // 不能寫 st.point_size || 0 —— 0 是合法值（最大的框），跟「還沒收到」
+  // 在 || 之下無法分辨。狀態還沒到就會畫成最大框，而那是使用者第一次
+  // 進來看到的東西。不知道就不改尺寸。
   const sizes = b.point_sizes || [];
-  const size = sizes[st.point_size || 0];
+  const size = st.point_size == null ? null : sizes[st.point_size];
   if (size) {
     const w = (size[1] / Math.max(1, b.width)) * 100;
     const h = (size[0] / Math.max(1, view.height)) * 100;
@@ -934,7 +937,7 @@ function onLiveviewClick(ev) {
   const b = focusBounds.point || {};
   const W = b.width || 1024;
   const view = visibleSpan(b);
-  const lim = reachable(b, st.point_size || 0);
+  const lim = reachable(b, st.point_size == null ? 1 : st.point_size);
   // 垂直方向只映射畫面看得到的那一段，再夾進可達範圍
   const y = Math.min(lim.bottom, Math.max(lim.top,
     Math.round(view.top + fy * view.height)));
@@ -1035,7 +1038,7 @@ function renderFocusControls() {
   // 都是相機自己決定的。
   const sizeLocked = isMF || activeTarget !== 'point';
   const sizeOpts = sizes.map((sz, i) =>
-    '<button class="o' + (i === (st.point_size || 0) ? ' on' : '') +
+    '<button class="o' + (i === st.point_size ? ' on' : '') +
     '" data-focus="point_size" data-val="' + i + '"' +
     (sizeLocked ? ' disabled data-locked="1"' : '') + '>' + sz[1] + '×' + sz[0] +
     '</button>').join('');
