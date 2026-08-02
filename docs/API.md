@@ -11,15 +11,38 @@ Requests that need the camera answer `503 {"error": "not connected"}` when it is
 not. Bad input is `400`. A camera operation that does not come back is `504`
 with the step it stalled on.
 
-- [Status](#status)
-- [Live view](#live-view)
-- [Settings](#settings)
-- [Focus](#focus)
-- [Recording](#recording)
-- [Stills](#stills)
-- [Handing the camera back](#handing-the-camera-back)
-- [WebSocket](#websocket)
-- [Research endpoints](#research-endpoints)
+```
+GET   /api/status              never blocks, answers even when PTP is wedged
+GET   /liveview.mjpeg          MJPEG stream, ~24 fps
+
+GET   /api/settings/schema     what is settable right now, with legal values
+GET   /api/settings            current values
+POST  /api/settings            write, read back, report what was ignored
+
+GET   /api/focus               focus state
+POST  /api/focus               drive the motor      {"position": N}
+GET   /api/focus/bounds        coordinate space and options
+POST  /api/focus/mode          mode / subject / area / point / frame size
+
+POST  /api/record/start|stop   recording → the camera's card
+GET   /api/record/movies       what is on the card
+GET   /api/record/download     pull index 0 back, ~56 MB/s
+POST  /api/record/clear        release a database entry
+
+POST  /api/capture             shoot and download
+
+POST  /api/release             give the body its controls back
+POST  /api/acquire             take them again, restoring settings
+
+WS    /ws                      live state + commands
+
+      /api/probe/*  /api/dump/*    research only
+```
+
+- [Status](#status) · [Live view](#live-view) · [Settings](#settings) ·
+  [Focus](#focus) · [Recording](#recording) · [Stills](#stills) ·
+  [Handing the camera back](#handing-the-camera-back) ·
+  [WebSocket](#websocket) · [Research endpoints](#research-endpoints)
 
 ---
 
@@ -139,7 +162,7 @@ back and compared:
 
 `rejected` is the useful part. The camera accepts writes it then ignores; this
 is how you find out. See
-[the list of cases](GOTCHAS.md#the-camera-accepts-writes-it-then-ignores).
+[the list of cases](GOTCHAS.md#5-writes-that-are-accepted-and-ignored).
 
 Enum values may be given as names or as raw numbers. Numbers matter because the
 camera's list of legal values is sometimes larger than any library's enum.
@@ -194,13 +217,13 @@ curl -X POST http://localhost:1025/api/focus \
 
 Out-of-range values are clamped and reported, not refused.
 
-Repeated calls coalesce: while a position write is in flight, later ones replace
-each other and only the newest is sent. Positions are absolute, so dropping
-intermediate values changes nothing — this is what makes a slider that sends
-continuously while dragging viable over a one-transaction-at-a-time bus.
+**Repeated calls coalesce.** While a write is in flight, later ones replace each
+other and only the newest is sent. Positions are absolute, so dropping the
+middle ones changes nothing — which is what makes a continuously-sending slider
+viable over a one-transaction bus.
 
 **This forces the camera into manual focus** (see
-[the trap](GOTCHAS.md#writing-a-focus-position-turns-off-autofocus-for-good)).
+[the trap](GOTCHAS.md#10-a-position-write-forces-mf)).
 `POST /api/focus/mode` is the way back.
 
 ### `GET /api/focus/bounds`
@@ -295,7 +318,7 @@ Pulls index 0 to the machine running the bridge, in 1 MB chunks, at around
 Refused with `409` while recording, and with `404` when there is nothing at
 index 0. Those guards are not politeness: the underlying opcode takes the camera
 off the USB bus when misused, and only a power cycle brings it back. See
-[the trap](GOTCHAS.md#movie-download-has-one-slot).
+[the trap](GOTCHAS.md#8-movie-download-has-one-slot).
 
 ### `POST /api/record/clear?image_id=N`
 
@@ -329,7 +352,7 @@ DNG, JPEG and DNG+JPEG all work. Two files come back for DNG+JPEG.
 whether you can download the image; all four were tested.
 
 The database entry is released afterwards, without which
-[the shutter stops working](GOTCHAS.md#an-unreleased-database-entry-stops-the-shutter).
+[the shutter stops working](GOTCHAS.md#7-an-unreleased-entry-stops-the-shutter).
 
 ---
 
@@ -391,9 +414,9 @@ Include `"id"` in a command and the matching `ack` carries it back.
 
 ## Research endpoints
 
-Not needed to use the bridge. They exist because the alternative was
-edit-code → restart → look, and that loop is slow enough that you start
-guessing instead of measuring.
+Not needed to use the bridge. They exist because the alternative loop —
+edit code → restart → look — is slow enough that you start guessing instead of
+measuring.
 
 ### `GET /api/probe/ptp`
 
@@ -413,11 +436,9 @@ curl -X POST http://localhost:1025/api/probe/ptp \
   -d '{"opcode": "0x902c", "params": []}'
 ```
 
-Returns `bytes`, `raw_hex`, `ascii` and `uint32_le` — several views because you
-do not know which one will show the structure.
-
-Names or hex both work, which is what makes scanning undocumented opcodes
-possible.
+Returns `bytes`, `raw_hex`, `ascii` and `uint32_le` — several views, because you
+do not know which one will show the structure. Names or hex both work, which is
+what makes scanning undocumented opcodes possible.
 
 > Sending unknown opcodes can leave the camera in a state only a power cycle
 > clears. `SigmaGetPartialMovieFile` during recording is blocked here for that

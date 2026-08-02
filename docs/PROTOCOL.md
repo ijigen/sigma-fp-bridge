@@ -1,21 +1,27 @@
 # The Sigma fp over USB PTP
 
-**This protocol is Sigma's, not ours** — the opcodes, the data groups and the
-tag numbers are the camera's. What is ours is the measuring: everything here was
-checked against a real fp, and where the SDK documentation and the camera
-disagree, the camera wins and the disagreement is written down.
+**The protocol is Sigma's. The measuring is ours.** Everything here was checked
+against a real fp; where the SDK and the camera disagree, the camera wins.
 
-Some of it is not in the SDK at all and was worked out from the camera's
-behaviour: the `+100` relationship that names the movie tags, `0x902C`, the
-single-slot movie download and what misusing it does, the rule for where the AF
-point may go, and the fp's own colour mode table.
+Not in the SDK, worked out from behaviour: the `+100` relationship that names
+the movie tags, `0x902C`, the single-slot movie download, where the AF point may
+go, the fp's colour mode table.
 
-(The HTTP API this project puts in front of all this is [a separate
-thing](API.md), and that one is ours.)
+*(The HTTP API this project puts in front of it is [a separate thing](API.md).)*
 
-The reference implementation is this repository. Start from
-[`sigma_fp_focus.py`](../sigma_fp_focus.py) for the low-level layer and
-[`ifd.py`](../ifd.py) for the encoding.
+```
+     your code
+         │
+    sigma-ptpy ──── patched, see GOTCHAS
+         │
+       ptpy
+         │
+       pyusb ──── libusb
+         │
+     ┌───┴────┐
+     │Sigma fp│  vendor opcodes 0x90xx
+     └────────┘
+```
 
 - [Getting on the bus](#getting-on-the-bus)
 - [The session](#the-session)
@@ -34,42 +40,38 @@ The reference implementation is this repository. Start from
 
 ## Getting on the bus
 
-The fp is a standard USB PTP device (vendor `0x1003`) with a vendor extension.
-Any PTP library gets you a session; the interesting operations are all vendor
-opcodes in the `0x90xx` range.
+Standard USB PTP device, vendor `0x1003`. Any PTP library gets you a session;
+everything interesting is a vendor opcode in `0x90xx`.
 
-This project uses [sigma-ptpy](https://github.com/makanikai/sigma-ptpy) on top of
-[ptpy](https://github.com/Parrot-Developers/ptpy) and pyusb. sigma-ptpy models
-the SDK closely, which is useful, but it was written against the SD Quattro
-generation and several of its tables are wrong for the fp. Those cases are
-called out below.
+[sigma-ptpy](https://github.com/makanikai/sigma-ptpy) models the SDK closely but
+was written for the SD Quattro — several of its tables are wrong for the fp
+([which ones](GOTCHAS.md#3-sigma-ptpy-is-for-a-different-camera)).
 
-**On macOS you are competing for the device.** `ptpcamerad` grabs any PTP camera
-the moment it enumerates. See [GOTCHAS.md](GOTCHAS.md#macos-fights-you-for-the-camera).
+On macOS you are [competing for the device](GOTCHAS.md#1-macos-takes-the-camera-first).
 
 ---
 
 ## The session
 
 ```
-ConfigApi      0x9035   open the vendor API
-  ... everything else ...
-CloseApplication 0x902F  leave it
+                    ConfigApi 0x9035
+   body controls  ─────────────────────►  body controls DEAD
+   work                                   vendor opcodes work
+   vendor opcodes                         settings were RESET
+   return nothing
+                    CloseApplication 0x902F
+                  ◄─────────────────────
 ```
 
-`ConfigApi` is not optional. Until you send it the vendor opcodes return nothing
-useful.
+`ConfigApi` is not optional, and it costs two things:
 
-Two consequences that are easy to learn the hard way:
+| | |
+|---|---|
+| Every control on the body goes dead | dial, buttons, touchscreen — until `CloseApplication` |
+| Settings are reset | whatever the operator set before you connected is gone |
 
-**Every control on the body goes dead** while the API is open. That is the
-protocol, not a fault. The dial, the buttons, the touchscreen — all inert until
-you send `CloseApplication`.
-
-**`ConfigApi` resets settings.** Anything the operator set on the body before you
-connected is gone. If you want it back you have to read the settings before
-opening the API and write them again after — which is what this bridge does
-around release/acquire.
+To hand the camera back and take it again without destroying their setup, read
+the settings before closing and write them back after re-opening.
 
 ---
 
@@ -268,7 +270,7 @@ vignetting; they cannot be written separately.
 Exposure values are **APEX-encoded**, not raw. f/2.0 is `24`, not `2`.
 sigma-ptpy ships the conversion tables and one of its aperture codes is wrong
 (`101` is missing, its neighbours being 99 = f/51 and 104 = f/64) — see
-[the patches](GOTCHAS.md#sigma-ptpy-needs-patching).
+[the patches](GOTCHAS.md#3-sigma-ptpy-is-for-a-different-camera).
 
 ### DataGroupMovie
 
@@ -314,27 +316,13 @@ CanSetInfo5 tag = DataGroupMovie tag + 100
 So `110` describes tag 10, `162` describes tag 62. That is how the audio fields
 were named.
 
-Three things about this structure will mislead you, all measured:
+Three ways this will mislead you, all measured:
 
-**1. The encoding of the contents is not consistent.** Some entries are lists of
-allowed values. Others are not. `DCCropMode` declares `[1, 0, -1]`;
-`LOCVignetting` declares `[0, -1]` and does not include the value currently in
-effect. Treating every entry as a value list produces controls that refuse legal
-settings.
-
-This repo only trusts an entry as a value list when it contains no negatives
-**and** contains the value currently in effect. Anything unverifiable is
-rejected rather than assumed.
-
-**2. Absence does not mean refusal.** White balance declares `[1..12]`, which
-does not include `14` (Color Temp.). The camera accepts 14 and 15 anyway, in
-both body modes, and reads them back. Meanwhile `13` — also absent — really is
-refused. The declaration is what the body menu offers, not what the API takes.
-
-**3. An empty entry does mean refusal, and that part is reliable.** `810
-EImageStab` reads `[0, 1]` under MOV and `[]` under CinemaDNG, which matches the
-fp not supporting electronic stabilisation with CinemaDNG. Emptiness is a
-trustworthy signal even though the contents are not.
+| | Example | What to do |
+|---|---|---|
+| Contents are **not** a consistent value list | `DCCropMode` → `[1, 0, -1]`; `LOCVignetting` → `[0, -1]`, missing the value in effect | trust it only when it has no negatives **and** contains the current value |
+| **Absence ≠ refusal** | WB declares `[1..12]`; `14` Color Temp. is accepted anyway. `13` really is refused. | it lists the body menu, not what the API takes |
+| **Empty = refusal**, reliably | `810 EImageStab` → `[0,1]` under MOV, `[]` under CinemaDNG | grey it out |
 
 Focus-related entries:
 
@@ -389,11 +377,27 @@ offer a focus slider.
 The factory value `54 01 00 02` is `(340, 512)` — dead centre of the 682×1024
 space, which is how the ordering was confirmed.
 
-The coordinate space is 682×1024, a 3:2 frame. **A 16:9 preview only shows the
-middle band of it**, so mapping a click on the preview to a coordinate has to
-account for the crop or the marker drifts vertically.
+The coordinate space is 682×1024, a 3:2 frame:
 
-Where the point may go:
+```
+  x=0                                            x=1024
+y=0 ┌──────────────────────────────────────────────┐
+    │                                              │
+    │        ┌────────────────────────────┐        │ ← AF area
+ 85 │        │                            │        │   613
+    │        │      ┌──────────────┐      │        │
+    │        │      │              │      │        │ ← where the
+    │        │      │   ● 340,512  │      │        │   point may go
+    │        │      │              │      │        │   (64×64 frame)
+    │        │      └──────────────┘      │        │
+597 │        │      117          565      │        │
+    │        └────────────────────────────┘        │
+    │        96   128        896   928             │
+y=682 ──────────────────────────────────────────────┘
+```
+
+**A 16:9 preview only shows the middle band**, so mapping a click has to account
+for the crop or the marker drifts vertically.
 
 ```
 reachable centre = FocusAreaValidArea inset by half the current DMFSize
@@ -448,11 +452,18 @@ interval.
 ## Stills
 
 ```
-SnapCommand 0x901B          fire
-GetCamCaptStatus 0x9015     poll until the image is ready
-GetPictFileInfo2 0x902D     find out what was produced
-GetBigPartialPictFile 0x9022  pull it in chunks
-ClearImageDBSingle 0x901C   release the entry
+  read database tail          ← this is the entry number
+         │
+  SnapCommand           0x901B      fire
+         │
+  GetCamCaptStatus      0x9015      poll ──┐
+         │                    ▲            │ until ready
+         │                    └────────────┘
+  GetPictFileInfo2      0x902D      what was produced
+         │
+  GetBigPartialPictFile 0x9022      pull it, in chunks
+         │
+  ClearImageDBSingle    0x901C      release, or the shutter stops
 ```
 
 `GetPictFileInfo2` returns a variable-length structure:
@@ -485,35 +496,34 @@ Recording is two opcodes on DataGroupMovie, and the footage lands on the card.
 Pulling it back:
 
 ```
-GetMovieFileInfo    0x9036   parameter = database entry index
-GetPartialMovieFile 0x9037   parameters = (0, offset, 0, length)
+  GetMovieFileInfo     0x9036   param = database index
+         │
+         ▼
+  is there a movie at index 0?
+         │
+    no ──┴── yes
+     │        │
+     ▼        ▼
+  DO NOT   GetPartialMovieFile 0x9037  (0, offset, 0, length)
+  CALL              │
+  (kills the        └── len(data) != requested → error, not a partial read
+   connection)
 ```
 
 `MovieFileInfo` has the same shape as `PictFileInfo2` but with 64-bit fields and
 **no `FileAddress`** — the movie is addressed by database slot, not by memory
 address.
 
-Measured behaviour of `0x9037`, all of it load-bearing:
+Measured behaviour of `0x9037`, all load-bearing:
 
-**It serves database slot 0 and nothing else.** The parameter that looks like an
-index is not one. Once the database head has advanced past 0, the movie you just
-recorded cannot be pulled at all; you have to release and re-acquire so the
-database starts from 0 again.
+| | |
+|---|---|
+| Serves **slot 0 only** | the index-looking parameter is not one. Head past 0 → your take is unreachable; release + acquire to reset. |
+| **Nothing there → the camera dies** | `USBTimeoutError`, drops off USB, power cycle only. Restarting your program does nothing. |
+| **Short read = garbage** | 122,868 bytes of something else. Treat `len != requested` as an error, never accumulate. |
+| **Never during recording** | measured twice: once stopped serving, once dropped off the bus. |
 
-**Calling it when there is no servable movie kills the connection.** Not an
-error return: `USBTimeoutError`, and the camera drops off USB entirely. Only a
-power cycle brings it back. Restarting your program does not help — it is the
-camera's state, not the session's. Guard the call.
-
-**A short read is garbage, not a partial read.** Ask for a chunk near the end
-and you can get 122,868 bytes of something that is not your file. Treat
-`len(data) != requested` as an error rather than accumulating it, or you will
-write a file that looks plausible and is not.
-
-**Do not send it while recording.** Measured twice: once the camera stopped
-serving transfers, once it dropped off the bus.
-
-Throughput is around **56 MB/s** with 1 MB chunks.
+~56 MB/s with 1 MB chunks.
 
 ### Reading during a take
 
@@ -537,15 +547,13 @@ This is also why the movie download only ever works on a fresh database.
 
 ## What is not reachable
 
-**UHD 12-bit CinemaDNG at 29.97 fps.** On the body this requires switching USB
-into external-SSD mode, and in that mode the camera is a mass-storage device —
-the vendor API is not there to ask. Every undocumented opcode from `0x9010` to
-`0x9042` was scanned looking for a way to enable it from the API side; none
-does. The data path in SSD mode is block writes to the attached volume, not PTP.
+**UHD 12-bit CinemaDNG at 29.97 fps.** It needs USB in external-SSD mode, and in
+that mode the camera is a mass-storage device — there is no vendor API to ask.
+Every undocumented opcode `0x9010`–`0x9042` was scanned for a way in; none. The
+data path there is block writes to the volume, not PTP.
 
-**PTP events.** The event endpoint exists and this body never uses it, verified
-with a stills capture as a control — the camera reports nothing where an event
-would be the obvious mechanism. Poll instead.
+**PTP events.** The endpoint exists; this body never uses it. Verified with a
+stills capture as a control. Poll instead.
 
 ---
 

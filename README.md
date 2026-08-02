@@ -118,7 +118,7 @@ sudo ./run_mac.sh                # creates the venv on first run
 
 Homebrew is not required: [`libusb-package`](https://pypi.org/project/libusb-package/)
 ships a libusb loaded by absolute path, which matters because
-[`sudo` strips `DYLD_*`](docs/GOTCHAS.md#sudo-strips-dyld_).
+[`sudo` strips `DYLD_*`](docs/GOTCHAS.md#2-sudo-strips-dyld_).
 
 Build a single file:
 
