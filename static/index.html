@@ -33,7 +33,7 @@
   .dot.pulse { animation: pulse 1.1s ease-in-out infinite; }
   @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .25 } }
 
-  .liveview { width: 100%; aspect-ratio: 16/9; background: #000; display: block; object-fit: contain; }
+  .liveview { width: 100%; aspect-ratio: 16/9; background: #000; display: block; }
   .liveview-off { width: 100%; aspect-ratio: 16/9; background: #0c0c0c; display: flex; align-items: center; justify-content: center; color: #666; font-size: 13px; text-align: center; padding: 20px; }
 
   .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 7px 0; border-bottom: 1px solid #2a2a2a; font-size: 13px; }
@@ -170,7 +170,7 @@
     <div>
       <div class="panel flush">
         <div id="lv-wrap" style="position:relative; line-height:0">
-          <img id="liveview" class="liveview" alt="">
+          <canvas id="liveview" class="liveview"></canvas>
           <div id="lv-afarea"></div>
           <div id="lv-marker"></div>
         </div>
@@ -251,24 +251,68 @@ function log(text, cls = '') {
 
 // ── 連線 ──────────────────────────────────────────────────────────
 function wireLiveview() {
-  const img = $('liveview');
-  if (!img || img.__wired) return;
-  img.__wired = true;
-  img.addEventListener('click', onLiveviewClick);
-  // MJPEG 是一條開著不關的連線。bridge 重啟、USB 斷一下、網路抖一下，那條
-  // 連線就死了 —— 而 <img> 仍然帶著 src，所以下面那句「沒有 src 才設定」永遠
-  // 不會再跑，畫面就一直空著到你手動重新整理為止。實際遇到的情況是：換成
-  // 打包版重開 bridge，舊分頁的預覽再也沒回來，看起來像打包壞了。
-  img.addEventListener('error', () => restartLiveview());
+  const c = $('liveview');
+  if (!c || c.__wired) return;
+  c.__wired = true;
+  c.addEventListener('click', onLiveviewClick);
 }
 
-let liveviewRetry = null, liveviewSeq = 0;
+// 預覽走 WebSocket，不走 MJPEG。
+//
+// 差別不只是傳輸：<img> 的 MJPEG 解碼器會**排隊**，它不會丟掉舊影格，所以
+// 只要解碼跟不上，延遲就一路累積下去 —— 那就是「lag 好嚴重」的來源，而且
+// 重新整理才會好。這裡只留最新的一張（lvPending 永遠被新的蓋掉），解碼跟
+// 不上就直接跳過中間那些，延遲不會累積。
+//
+// 傳輸本身也快一點：同一個方法量（大步跳焦，看第幾張影格反映出來），
+// MJPEG 292 ms，WebSocket 221 ms。
+let lvSock = null, lvPending = null, lvBusy = false, liveviewRetry = null;
+
+function startLiveview() {
+  if (lvSock) return;
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  lvSock = new WebSocket(proto + '//' + location.host + '/ws/liveview');
+  lvSock.binaryType = 'arraybuffer';
+  lvSock.onmessage = ev => {
+    // 標頭裡有拍攝當下的對焦位置，但不拿來更新畫面上的數字 —— 那會跟定時
+    // 廣播的狀態互相覆蓋，數字在兩個來源之間跳。這裡只要影像。
+    const n = new DataView(ev.data).getUint32(0);
+    lvPending = new Blob([new Uint8Array(ev.data, 4 + n)], {type: 'image/jpeg'});
+    drawLiveview();
+  };
+  lvSock.onclose = () => { lvSock = null; restartLiveview(); };
+  lvSock.onerror = () => { try { lvSock.close(); } catch (e) {} };
+}
+
+function drawLiveview() {
+  if (lvBusy || !lvPending) return;
+  lvBusy = true;
+  const blob = lvPending;
+  lvPending = null;                       // 期間到的影格會蓋在 lvPending 上
+  createImageBitmap(blob).then(bmp => {
+    const c = $('liveview');
+    if (c) {
+      if (c.width !== bmp.width || c.height !== bmp.height) {
+        c.width = bmp.width; c.height = bmp.height;
+      }
+      c.getContext('2d').drawImage(bmp, 0, 0);
+    }
+    bmp.close();
+    lvBusy = false;
+    drawLiveview();                       // 有更新的就接著畫，沒有就停
+  }).catch(() => { lvBusy = false; });
+}
+
+function stopLiveview() {
+  if (lvSock) { const s = lvSock; lvSock = null; try { s.close(); } catch (e) {} }
+  lvPending = null;
+}
 
 function restartLiveview() {
-  const img = $('liveview');
-  if (!img || liveviewRetry) return;
-  img.removeAttribute('src');
-  // 等一下再接。相機還沒好時 render() 本來就不會給 src，不用怕接不上。
+  // 等一下再接。bridge 重啟、USB 斷一下都會走到這裡，而相機還沒好的時候
+  // render() 本來就不會叫我們開，所以不用怕接不上。
+  stopLiveview();
+  if (liveviewRetry) return;
   liveviewRetry = setTimeout(() => { liveviewRetry = null; render(); }, 1000);
 }
 
@@ -281,7 +325,7 @@ function connect() {
     send({cmd: 'describe_settings'});
     send({cmd: 'get_settings'});
     loadFocusBounds();
-    // WebSocket 重連通常代表 bridge 重啟過，那條 MJPEG 連線一定已經死了。
+    // WebSocket 重連通常代表 bridge 重啟過，預覽那條也一定已經死了。
     restartLiveview();
   };
   ws.onclose = () => { log('WebSocket closed, retrying in 2s', 'err'); st.wsDown = true; render(); setTimeout(connect, 2000); };
@@ -343,13 +387,7 @@ function render() {
 
   setShown($('liveview'), live);
   setShown($('liveview-off'), !live);
-  // 帶上序號：換一個 URL 才會真的開新連線，沿用同一個 URL 時瀏覽器可能
-  // 直接復用那條已經死掉的。
-  if (live) {
-    if (!$('liveview').getAttribute('src'))
-      $('liveview').src = '/liveview.mjpeg?t=' + (++liveviewSeq);
-  }
-  else if ($('liveview').getAttribute('src')) { $('liveview').removeAttribute('src'); }
+  if (live) startLiveview(); else stopLiveview();
   setText($('liveview-off'), st.released
     ? 'Released to the body \u2014 no live view. Press Take Control to resume.'
     : st.wsDown ? 'bridge connection lost' : 'Camera not connected');

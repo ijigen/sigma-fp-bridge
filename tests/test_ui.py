@@ -782,24 +782,39 @@ def test_recording_does_not_push_the_layout_around():
 
 
 def test_live_view_recovers_from_a_dropped_stream():
-    """MJPEG 是一條開著不關的連線，bridge 重啟就死了。
+    """預覽那條連線是開著不關的，bridge 重啟就死了。
 
-    <img> 仍然帶著 src，而 render() 只在「沒有 src」時才設定 —— 所以斷掉之
-    後畫面會一直空著到手動重新整理為止。實際遇到的情況是換成打包版重開
-    bridge，舊分頁的預覽再也沒回來，看起來像打包壞了。
+    斷掉之後畫面會一直空著到手動重新整理為止。實際遇到的情況是換成打包版
+    重開 bridge，舊分頁的預覽再也沒回來，看起來像打包壞了。
     """
     html = HTML.read_text()
     assert "function restartLiveview(" in html, "沒有重接串流的路徑"
-    assert re.search(r"img\.addEventListener\('error', \(\) => restartLiveview\(\)\)", html), \
-        "<img> 載入失敗時沒有重接"
+    onclose = html[html.index("lvSock.onclose"):]
+    assert "restartLiveview()" in onclose[:200], "串流斷掉時沒有重接"
     # WebSocket 重連代表 bridge 重啟過，那條串流一定死了
     onopen = html[html.index("ws.onopen = () =>"):]
     onopen = onopen[:onopen.index("ws.onclose")]
     assert "restartLiveview()" in onopen, "重新連上 bridge 時沒有重接串流"
     assert html.count("ws.onopen") == 1, "有兩個 onopen，後面那個會蓋掉前面"
-    # 沿用同一個 URL 時瀏覽器可能復用已經死掉的連線
-    assert re.search(r"'/liveview\.mjpeg\?t=' \+ \(\+\+liveviewSeq\)", html), \
-        "重接時沒有換 URL"
+
+
+def test_live_view_drops_stale_frames_instead_of_queueing_them():
+    """預覽只畫最新的一張，跟不上就跳過中間。
+
+    這是換掉 MJPEG 的理由。<img> 的 MJPEG 解碼器會排隊而且不丟舊影格，
+    所以解碼一旦跟不上，延遲就一路累積，重新整理才會好 —— 使用者回報的
+    「lag 好嚴重」就是這個。傳輸本身也差 70 ms（實測 MJPEG 292 ms，
+    WebSocket 221 ms，同一個方法：大步跳焦看第幾張影格反映出來）。
+
+    守的是「有一個只保留最新影格的欄位，而且解碼中不會再開一個」。
+    """
+    html = HTML.read_text()
+    assert "lvPending" in html, "沒有保留最新影格的地方"
+    assert re.search(r"if \(lvBusy \|\| !lvPending\) return", html),         "解碼中還會再開一個，那就是排隊"
+    assert re.search(r"lvPending = null;", html), "畫完沒有把待畫的清掉"
+    assert "createImageBitmap" in html, "沒有非同步解碼"
+    # 別再回頭用 <img src=mjpeg> —— 那條路的延遲會累積
+    assert "liveview.mjpeg" not in html, "預覽又走回 MJPEG"
 
 
 def test_the_client_does_not_poll_for_something_it_ignores():
