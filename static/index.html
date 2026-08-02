@@ -170,17 +170,6 @@
           <button id="btn-rec" class="danger" onclick="toggleRec()">● 開始錄影</button>
           <span class="hint" id="rec-elapsed"></span>
         </div>
-        <h3>測試片段</h3>
-        <div class="btnrow">
-          <input type="number" id="clip-secs" value="2" min="0.5" max="30" step="0.5" style="min-width:70px">
-          <span class="hint">秒</span>
-          <button id="btn-clip" onclick="recordClip()">錄一段並回報產出</button>
-        </div>
-        <div class="hint" style="margin-top:7px">
-          會寫進記憶卡。是否成功以相機的 capture status 與 image DB tail 判斷；
-          movie file info 只認 MOV，而且同一連線內會過期，不可信。
-        </div>
-        <div class="row" style="margin-top:10px"><span class="label">Capture status</span><span class="value" id="rec-status">—</span></div>
       </div>
     </div>
 
@@ -214,7 +203,6 @@
 <script>
 let ws = null, st = {}, schema = null, values = {};
 let shutterUnit = 'time', renderedKey = null, busyUntil = 0, focusRange = null;
-let clipRunning = false;   // 錄製測試片段中；render() 會據此停用按鈕
 
 const $ = id => document.getElementById(id);
 const busy = () => Date.now() < busyUntil;
@@ -273,7 +261,6 @@ function handle(m) {
       schema = m.settings;
       renderedKey = null; renderSettings(); break;
     case 'settings': values = m.settings; renderSettings(); break;
-    case 'capture_status': $('rec-status').textContent = m.status.status || m.status.error || '—'; break;
     case 'ack':
       if (m.schema) schema = m.schema;
       if (m.camera_mode) st.camera_mode = m.camera_mode;
@@ -333,10 +320,9 @@ function render() {
     ? Math.round(st.recording_seconds) + ' 秒' : '');
 
   // 錄影按鈕只看連線，不看 recording —— 否則要停止的時候反而按不下去
-  for (const id of ['pos-slider','clip-secs'])
+  for (const id of ['pos-slider'])
     setDisabled($(id), !live || st.recording);
   setDisabled($('btn-rec'), !live);
-  setDisabled($('btn-clip'), !live || st.recording || clipRunning);
   setDisabled($('btn-release'), !connected || !!st.released);
   setDisabled($('btn-acquire'), !st.released);
   // 錄影中不讓人改設定：曝光在錄製途中變動會毀掉這一鏡
@@ -1193,28 +1179,6 @@ function setShutterUnit(u) {
 // ── 錄影 ──────────────────────────────────────────────────────────
 function toggleRec() { send({cmd: st.recording ? 'record_stop' : 'record_start'}); }
 
-async function recordClip() {
-  const secs = parseFloat($('clip-secs').value);
-  if (!(secs > 0 && secs <= 30)) { flash('err', '秒數要在 0–30 之間'); return; }
-  if (!confirm('錄 ' + secs + ' 秒到記憶卡？')) return;
-  log('錄製 ' + secs + ' 秒…', 'send');
-  clipRunning = true; render();
-  try {
-    const r = await fetch('/api/record/clip?seconds=' + secs, {method: 'POST'});
-    const d = await r.json();
-    if (d.error) { log('錄影失敗：' + d.error, 'err'); flash('err', d.error); return; }
-    const sa = d.status_after || {}, sb = d.status_before || {};
-    log('結果 ' + sa.status + '，image DB tail ' + sb.db_tail + ' → ' + sa.db_tail, 'recv');
-    log(d.produced_something ? '✓ 有產生新檔案' : '✗ 沒有產生新檔案', d.produced_something ? 'recv' : 'err');
-    if (d.movie_info && d.movie_info.strings && d.movie_info.strings.length)
-      log('movie info（可能過期）：' + d.movie_info.strings.join(' / '), 'recv');
-    $('rec-status').textContent = sa.status || '—';
-  } catch (e) {
-    log('錄影請求失敗：' + e, 'err');
-  } finally {
-    clipRunning = false; render();
-  }
-}
 
 // ── 校準 ──────────────────────────────────────────────────────────
 

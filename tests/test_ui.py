@@ -498,6 +498,19 @@ def test_tap_to_focus_is_behind_a_toggle():
     print("✓ 點選對焦有開關，預設關閉，並標出相機實際位置")
 
 
+def test_the_protocol_probe_ui_is_gone():
+    """測試片段那一區是反推協定時用的，不是操作介面。
+
+    它的說明在講「movie file info 不可信、要看 capture status 與 image DB
+    tail」—— 那是給當時的我看的筆記，對使用相機的人沒有意義。錄影與下載
+    都能用了之後，它只剩雜訊。端點留著（/api/record/clip 仍可用於研究）。
+    """
+    html = HTML.read_text()
+    for gone in ("測試片段", "btn-clip", "clip-secs", "recordClip", "rec-status"):
+        assert gone not in html, f"還留著 {gone}"
+    print("✓ 協定探測用的 UI 已移除")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):
