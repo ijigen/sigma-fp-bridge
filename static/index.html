@@ -805,23 +805,21 @@ function renderTapFocus() {
   if (marker.style.display !== want) marker.style.display = want;
   if (!show) return;
 
-  // 對焦座標 → 有效區域內的比例 → 畫面像素
-  const top = b.top !== undefined ? b.top : 0;
-  const bottom = b.bottom !== undefined ? b.bottom : b.height;
-  const left = b.left !== undefined ? b.left : 0;
-  const right = b.right !== undefined ? b.right : b.width;
-  const fy = (pt[0] - top) / Math.max(1, bottom - top);
-  const fx = (pt[1] - left) / Math.max(1, right - left);
+  // 位置與大小都以**完整座標系**（682×1024）為基準。
+  //
+  // 先前拿「有效區域」（832 寬）當基準是錯的：那是對焦點中心能去到的範圍，
+  // 不是畫面的範圍。用它算大小會讓框大兩成，用它算位置則會讓 marker 跟
+  // 畫面上的真實位置對不上 —— 有效區域只佔畫面的一部分。
+  const fy = pt[0] / Math.max(1, b.height);
+  const fx = pt[1] / Math.max(1, b.width);
   marker.style.top = (fy * 100) + '%';
   marker.style.left = (fx * 100) + '%';
 
-  // 框的大小照相機給的實際尺寸畫，不要用固定像素 —— 使用者選了「小框」
-  // 卻看到一樣大的方塊，那個控制項就等於沒有意義。
   const sizes = b.point_sizes || [];
   const size = sizes[st.point_size || 0];
   if (size) {
-    const w = (size[1] / Math.max(1, right - left)) * 100;
-    const h = (size[0] / Math.max(1, bottom - top)) * 100;
+    const w = (size[1] / Math.max(1, b.width)) * 100;
+    const h = (size[0] / Math.max(1, b.height)) * 100;
     marker.style.width = w + '%';
     marker.style.height = h + '%';
     marker.style.margin = '-' + (h / 2) + '% 0 0 -' + (w / 2) + '%';
@@ -836,13 +834,16 @@ function onLiveviewClick(ev) {
   const fx = Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width));
   const fy = Math.min(1, Math.max(0, (ev.clientY - r.top) / r.height));
 
+  // 點到哪就是哪 —— 用完整座標系換算，再夾進相機宣告的有效區域。
+  // 先前是把整個畫面映射到有效區域，那會讓點擊位置系統性地偏移。
   const b = focusBounds.point || {};
+  const H = b.height || 682, W = b.width || 1024;
   const top = b.top !== undefined ? b.top : 0;
-  const bottom = b.bottom !== undefined ? b.bottom : (b.height || 682);
+  const bottom = b.bottom !== undefined ? b.bottom : H;
   const left = b.left !== undefined ? b.left : 0;
-  const right = b.right !== undefined ? b.right : (b.width || 1024);
-  const y = Math.round(top + fy * (bottom - top));
-  const x = Math.round(left + fx * (right - left));
+  const right = b.right !== undefined ? b.right : W;
+  const y = Math.min(bottom, Math.max(top, Math.round(fy * H)));
+  const x = Math.min(right, Math.max(left, Math.round(fx * W)));
   focusApply({point: [y, x]});
 }
 

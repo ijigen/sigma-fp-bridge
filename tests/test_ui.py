@@ -481,6 +481,12 @@ def test_tap_to_focus_is_behind_a_toggle():
     # 抓不到「改成 34px」這種變異，實測過。
     assert re.search(r"marker\.style\.width\s*=\s*w\s*\+", html), \
         "marker 沒有依實際框大小按比例繪製"
+    # 基準要是完整座標系，不是有效區域。有效區域是「對焦點中心能去到的範圍」，
+    # 拿它當基準會讓框大兩成、位置也對不上畫面。
+    assert re.search(r"size\[1\]\s*/\s*Math\.max\(1,\s*b\.width\)", html), \
+        "框大小用了錯的基準"
+    assert re.search(r"fy\s*=\s*pt\[0\]\s*/\s*Math\.max\(1,\s*b\.height\)", html), \
+        "marker 位置用了錯的基準"
     # 映射要用相機宣告的有效區域，不是憑空假設
     assert "b.top" in html and "b.left" in html, "沒有用相機宣告的有效區域做映射"
     print("✓ 點選對焦有開關，預設關閉，並標出相機實際位置")
