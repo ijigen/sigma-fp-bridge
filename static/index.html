@@ -375,9 +375,9 @@ function renderNotices() {
       'live view, no focus control. Taking control resets the camera; your earlier ' +
       'settings are restored, but <b>changes made on the body are lost</b>.'));
   }
-  if (st.recording) {
-    out.push(notice('info', 'Recording', 'Settings are locked \u2014 changing exposure mid-take ruins the shot.'));
-  }
+  // 錄影中不另外掛橫幅：它會在開始 / 停止的瞬間把底下整片版面往下推，而
+  // 那正是你盯著畫面的時候。頂端的 REC 徽章和被停用的控制項已經說明了同
+  // 一件事，而且它們不改變版面高度。
   const mode = values.exposure_mode;
   setHTML($('notices'), out.join(''));
 }

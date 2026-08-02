@@ -768,6 +768,19 @@ def test_the_whole_title_line_opens_a_collapsed_row():
         "收起的標題沒有可點的游標"
 
 
+def test_recording_does_not_push_the_layout_around():
+    """錄影中的橫幅會在開始 / 停止的瞬間把底下整片版面往下推 —— 而那正是
+    你盯著畫面的時候。頂端的 REC 徽章和被停用的控制項說的是同一件事，而且
+    不改變版面高度。
+    """
+    html = HTML.read_text()
+    assert "changing exposure mid-take" not in html, "錄影橫幅還在"
+    assert "notice('info', 'Recording'" not in html, "錄影橫幅還在"
+    # 講同一件事的另外兩個管道要留著
+    assert 'class="badge rec"' in html, "頂端沒有 REC 徽章"
+    assert re.search(r"setDisabled\(", html), "錄影中沒有停用控制項的機制"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):
