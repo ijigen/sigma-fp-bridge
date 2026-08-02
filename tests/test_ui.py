@@ -745,6 +745,23 @@ def test_notes_live_with_the_controls_not_in_the_title():
     assert "classList.toggle('bare'" not in html, "還留著舊的 bare 標記"
 
 
+def test_the_whole_title_line_opens_a_collapsed_row():
+    """收起狀態下那一行就是這一列的全部內容 —— 要求對準左邊那顆小按鈕沒有
+    道理。展開時標題是藏起來的，所以不會誤觸。
+
+    按鈕在兩個狀態下做的事相反，形狀也不一樣：收起是箭頭，展開是叉。
+    """
+    html = HTML.read_text()
+    assert re.search(r"const toggle = \(\) => \{", html), "沒有共用的開關"
+    assert re.search(r"if \(head\) head\.onclick = toggle;", html), \
+        "標題行不能點開"
+    assert "btn.onclick = toggle;" in html, "按鈕沒有接上同一個開關"
+    assert re.search(r"btn\.textContent = open \? '\\u00d7' : '\\u203a';", html), \
+        "展開後左邊不是叉"
+    assert ".opt.folded .opt-head { cursor: pointer; }" in html, \
+        "收起的標題沒有可點的游標"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

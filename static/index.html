@@ -89,13 +89,15 @@
   .opt { padding: 10px 0; border-bottom: 1px solid #262626; }
   .opt:last-child { border-bottom: none; }
   .opt-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+  .opt.folded .opt-head { cursor: pointer; }
+  .opt.folded:hover .opt-name, .opt.folded:hover > .fold { color: #ddd; }
   /* 設定調好之後就很少再動，但每一列的按鈕都常駐著，一個面板要捲很久。
      收起時只留標題和目前值，展開時只留控制項 —— 控制項自己就說明了它是
      什麼，標題再佔一行是多的。 */
   .opt { display: flex; align-items: flex-start; gap: 8px; }
   .opt > .opt-body { flex: 1 1 auto; min-width: 0; }
   .opt > .fold { flex: 0 0 auto; width: 18px; height: 18px; padding: 0; line-height: 1;
-    font-size: 10px; color: #7a7a7a; background: none; border: none; cursor: pointer;
+    font-size: 13px; color: #7a7a7a; background: none; border: none; cursor: pointer;
     margin-top: 1px; }
   .opt > .fold:hover { color: #ddd; background: none; }
   .opt.folded { padding: 4px 0; }
@@ -1257,12 +1259,19 @@ function applyFolds(box) {
     }
     const open = openRows.has(key);
     row.classList.toggle('folded', !open);
-    btn.textContent = open ? '▾' : '▸';
+    // 收起時是「打開」的箭頭，展開時是「關掉」的叉 —— 同一顆按鈕，但它在
+    // 兩個狀態下做的事相反，形狀就該不一樣。
+    btn.textContent = open ? '\u00d7' : '\u203a';
     btn.title = open ? 'collapse' : key;
-    btn.onclick = () => {
+    const toggle = () => {
       if (open) openRows.delete(key); else openRows.add(key);
       applyFolds(box);
     };
+    btn.onclick = toggle;
+    // 收起狀態下整條標題都可以點開 —— 那一行就是這一列現在的全部內容，
+    // 要求對準左邊那顆小按鈕沒有道理。展開時標題是藏起來的，不會誤觸。
+    const head = row.querySelector('.opt-head');
+    if (head) head.onclick = toggle;
   });
 }
 
