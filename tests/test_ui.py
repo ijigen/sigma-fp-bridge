@@ -480,16 +480,21 @@ def test_focus_panel_exists_and_can_return_to_autofocus():
     print("✓ 對焦面板可切換模式 / 臉眼偵測 / 區域 / 對焦點")
 
 
-def test_tap_to_focus_is_behind_a_toggle():
-    """在預覽畫面上點選對焦點，預設關閉。
+def test_tap_to_focus_follows_the_af_point_subject():
+    """點選對焦不是獨立開關 —— 它就是「對焦對象 = AF Point」這件事。
 
-    預覽是拿來看構圖的，隨手一點就把焦點移走會很煩 —— 所以要有開關，而且
-    預設是關的。開啟時畫面上要標出相機實際採用的位置（它會吸附到格點），
-    不然使用者分不出「點歪了」和「相機吸附了」。
+    多一個開關等於要求使用者把兩件同一回事的設定對齊，忘了對齊就會覺得
+    點了沒反應。交給臉／眼偵測時對焦點由相機決定，MF 下相機根本不對焦。
+
+    開啟時畫面上要標出相機實際採用的位置（它會吸附到格點），不然使用者
+    分不出「點歪了」和「相機吸附了」。
     """
     html = HTML.read_text()
-    assert 'id="btn-tapfocus"' in html, "沒有點選對焦的開關"
-    assert "let tapFocus = false" in html, "點選對焦預設不是關閉"
+    assert "function tapFocusOn(" in html, "點選對焦沒有跟著對焦對象"
+    assert 'id="btn-tapfocus"' not in html, "還留著獨立開關"
+    assert re.search(r"tapFocusOn\(\)[\s\S]{0,200}face_eye_af", html), \
+        "沒有依對焦對象判斷"
+    assert re.search(r"st\.focus_mode !== 'MF'", html), "MF 下沒有關掉"
     assert "function onLiveviewClick(" in html, "預覽沒有點擊處理"
     assert 'id="lv-marker"' in html, "沒有標示對焦點的 marker"
     assert "getBoundingClientRect" in html, "沒有把點擊換算成畫面比例"
@@ -645,6 +650,43 @@ def test_each_setting_row_folds():
     no_comments = re.sub(r"/\*.*?\*/", "", html, flags=re.S)
     assert ":has(" not in no_comments, "用了 :has()，瀏覽器支援不保證"
     print("✓ 每個設定群組可折疊，狀態撐得過重繪")
+
+
+def test_frame_size_is_locked_unless_the_subject_is_the_af_point():
+    """對焦框大小只在 AF Point 下有意義 —— 交給臉／眼偵測時，框的位置和
+    大小都是相機自己決定的，MF 下相機根本不對焦。
+    """
+    html = HTML.read_text()
+    assert re.search(r"const sizeLocked = isMF \|\| activeTarget !== 'point'", html), \
+        "沒有依對焦對象鎖定框大小"
+    block = html[html.index("const sizeLocked"):]
+    block = block[:block.index("</span>' : '')")]
+    assert "sizeLocked ? ' disabled data-locked=" in block, "鎖定沒有接到按鈕上"
+
+
+def test_position_focus_mode_and_frame_size_share_one_row():
+    """三者都是在講同一顆鏡頭要對哪裡、怎麼對 —— 分三列只是把一件事攤開。"""
+    html = HTML.read_text()
+    assert '<span class="label">Position</span>' not in html, "還留著獨立的 Position 一列"
+    assert '<span class="opt-name">AF Point</span>' not in html, "還留著獨立的 AF Point 一列"
+    body = html[html.index("const html = '<div class=\"opt\"><div class=\"opt-head\">' +"):]
+    body = body[:body.index("</div></div>';")]
+    for token in ("f-pos", "Focus Mode", "Subject", "Frame Size"):
+        assert token in body, f"{token} 沒有併進那一列"
+    # 位置的數值不能進 html 字串 —— 那會讓這一列每 100ms 重建
+    assert "st.focus_position" not in body, "位置的數值被寫進了 html，會造成不斷重建"
+
+
+def test_dynamic_ids_are_read_safely():
+    """f-pos 這些現在由對焦面板產生 —— 面板還沒渲染時它們不存在。"""
+    html = HTML.read_text()
+    assert re.search(r"function setText\(el, v\) \{ if \(!el\) return;", html), \
+        "setText 沒有防呆"
+    assert "$('f-range-hint').textContent" not in html, \
+        "還在直接取用可能不存在的元素"
+    # 面板重建後範圍提示要重新填，只填一次的話重建後就空著
+    assert re.search(r"setText\(\$\('f-range-hint'\), focusRange", html), \
+        "範圍提示沒有每次重繪都填"
 
 
 if __name__ == "__main__":

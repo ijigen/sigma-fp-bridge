@@ -172,7 +172,6 @@
         </div>
         <div id="liveview-off" class="liveview-off"></div>
         <div class="btnrow" id="lv-tools" style="padding:8px 10px; line-height:normal">
-          <button class="sm" id="btn-tapfocus">Tap to Focus: Off</button>
           <span class="hint" id="tapfocus-hint"></span>
         </div>
       </div>
@@ -186,14 +185,9 @@
       </div>
       <div class="panel">
         <h2>Focus</h2>
-        <div class="row">
-          <span class="label">Position</span>
-          <span class="value"><b id="f-pos">—</b> <span id="f-range-hint" class="hint"></span>
-            <span id="f-lens" class="hint"></span></span>
-        </div>
-        <input type="range" id="pos-slider" min="0" max="2000" value="0" style="margin:12px 0 8px"
+        <div id="focus-controls"></div>
+        <input type="range" id="pos-slider" min="0" max="2000" value="0" style="margin:10px 0 4px"
                oninput="onSliderInput()" onchange="onSliderCommit()">
-        <div id="focus-controls" style="margin-top:12px; padding-top:12px; border-top:1px solid #2a2a2a"></div>
       </div>
 
     </div>
@@ -239,7 +233,7 @@ function markBusy() { busyUntil = Date.now() + 4000; }
 // 銷毀重建 —— 版面因此抖動、捲軸亂飄，按鈕在你按下的瞬間被換掉所以按不到。
 // 下面三個 helper 讓渲染變成冪等：值沒變就完全不碰 DOM。
 function setHTML(el, html) { if (el.__last !== html) { el.innerHTML = html; el.__last = html; } }
-function setText(el, v) { const t = (v === null || v === undefined) ? '—' : String(v); if (el.textContent !== t) el.textContent = t; }
+function setText(el, v) { if (!el) return; const t = (v === null || v === undefined) ? '—' : String(v); if (el.textContent !== t) el.textContent = t; }
 function setDisabled(el, v) { v = !!v; if (el.disabled !== v) el.disabled = v; }
 function setShown(el, v) { const d = v ? '' : 'none'; if (el.style.display !== d) el.style.display = d; }
 
@@ -254,9 +248,8 @@ function log(text, cls = '') {
 
 // ── 連線 ──────────────────────────────────────────────────────────
 function wireLiveview() {
-  const img = $('liveview'), btn = $('btn-tapfocus');
+  const img = $('liveview');
   if (img && !img.__wired) { img.__wired = true; img.addEventListener('click', onLiveviewClick); }
-  if (btn && !btn.__wired) { btn.__wired = true; btn.onclick = toggleTapFocus; }
 }
 
 function connect() {
@@ -334,14 +327,15 @@ function render() {
     ? 'Released to the body \u2014 no live view. Press Take Control to resume.'
     : st.wsDown ? 'bridge connection lost' : 'Camera not connected');
 
+  renderFocusControls();
   setText($('f-pos'), st.focus_position);
+  setText($('f-range-hint'), focusRange ? '(' + focusRange[0] + '\u2013' + focusRange[1] + ')' : '');
   // 馬達狀態和焦距都是在描述這一列講的那顆鏡頭 —— 各佔一列只是把同一件事
   // 拆開放。接在位置後面，兩列的空間就省下來了。
   setText($('f-lens'), [
     st.focus_state === 1 ? 'Focusing' : st.focus_state === 0 ? 'Idle' : '',
     st.focal_length_mm ? st.focal_length_mm + ' mm' : '',
   ].filter(Boolean).join(' · '));
-  renderFocusControls();
   renderTapFocus();
   if (st.focus_range) applyRange(st.focus_range);
   if (st.focus_position != null && !busy()) $('pos-slider').value = st.focus_position;
@@ -407,7 +401,6 @@ function applyRange(r) {
   const s = $('pos-slider');
   s.min = r[0]; s.max = r[1];
   s.step = Math.max(1, Math.round((r[1] - r[0]) / 1000));
-  $('f-range-hint').textContent = '（' + r[0] + ' – ' + r[1] + '）';
   log('Focus range ' + r[0] + '\u2013' + r[1], 'recv');
 }
 
@@ -796,19 +789,18 @@ const CROP_PARTS = [
 // 所以這裡把點擊位置正規化之後映射到「有效區域」，並在畫面上標出相機實際
 // 採用的位置（它會吸附到格點）。映射若有偏差，marker 跟手指的落差會直接
 // 看得出來 —— 這比假裝精確好。
-let tapFocus = false;
-
-function toggleTapFocus() {
-  tapFocus = !tapFocus;
-  renderTapFocus();
+// 點選對焦不再是獨立開關 —— 它就是「對焦對象 = AF Point」這件事。多開一個
+// 開關等於要求使用者把兩件同一回事的設定對齊，忘了對齊就會覺得點了沒反應。
+// MF 下相機不會自己對焦，點了也沒有意義。
+function tapFocusOn() {
+  return !st.face_eye_af || st.face_eye_af === 'Off'
+    ? st.focus_mode !== 'MF'
+    : false;
 }
 
 function renderTapFocus() {
-  const btn = $('btn-tapfocus'), img = $('liveview'), marker = $('lv-marker');
-  const area = $('lv-afarea');
-  if (!btn) return;
-  setText(btn, 'Tap to Focus: ' + (tapFocus ? 'On' : 'Off'));
-  btn.classList.toggle('primary', tapFocus);
+  const img = $('liveview'), marker = $('lv-marker'), area = $('lv-afarea');
+  const tapFocus = tapFocusOn();
   if (img) img.classList.toggle('tap', tapFocus);
   setText($('tapfocus-hint'), tapFocus
     ? 'tap inside the dashed frame to move the AF point (the camera snaps to its grid)' : '');
@@ -889,7 +881,7 @@ function visibleSpan(b) {
 }
 
 function onLiveviewClick(ev) {
-  if (!tapFocus || !focusBounds) return;
+  if (!tapFocusOn() || !focusBounds) return;
   const img = $('liveview');
   const r = img.getBoundingClientRect();
   if (!r.width || !r.height) return;
@@ -992,10 +984,26 @@ function renderFocusControls() {
   if (needAF) notes.push('no effect in MF');
   if (st.camera_mode === 'movie') notes.push('AF-C falls back to AF-S in CINE');
 
-  const rows = [];
-  rows.push('<div class="opt"><div class="opt-head">' +
+  // 對焦點沒有手動輸入 —— 在預覽上點比填座標直觀得多，而且座標系
+  // （682×1024，3:2）跟畫面（16:9）對不上，填數字等於盲填。
+  const b = focusBounds.point || {};
+  const sizes = b.point_sizes || [];
+  // 對焦框大小只在 AF Point 下有意義 —— 交給臉／眼偵測時，框的位置和大小
+  // 都是相機自己決定的。
+  const sizeLocked = isMF || activeTarget !== 'point';
+  const sizeOpts = sizes.map((sz, i) =>
+    '<button class="o' + (i === (st.point_size || 0) ? ' on' : '') +
+    '" data-focus="point_size" data-val="' + i + '"' +
+    (sizeLocked ? ' disabled data-locked="1"' : '') + '>' + sz[1] + '×' + sz[0] +
+    '</button>').join('');
+
+  // 位置的數值變動太頻繁，不能進 html 字串 —— 那會讓這一列每 100ms 重建。
+  // 放固定的 id，交給 render() 填。
+  const html = '<div class="opt"><div class="opt-head">' +
     '<span class="opt-name">Focus</span>' +
-    '<span class="opt-cur">' + escapeHTML(cur || '—') + '</span>' +
+    '<span class="opt-cur">' + escapeHTML(cur || '—') + ' · ' +
+      '<b id="f-pos">—</b> <span id="f-range-hint" class="hint"></span> ' +
+      '<span id="f-lens" class="hint"></span></span>' +
     (notes.length ? '<span class="opt-note">' + escapeHTML(notes.join(' · ')) + '</span>' : '') +
     '</div><div class="opts">' +
     focusGroup('mode', 'Focus Mode', st.focus_mode, focusBounds.focus_modes || [], fm, false) +
@@ -1003,30 +1011,9 @@ function renderFocusControls() {
     TARGETS.map(t => '<button class="o' + (t.id === activeTarget ? ' on' : '') +
       '" data-target="' + t.id + '"' + (isMF ? ' disabled data-locked="1"' : '') +
       '>' + t.label + '</button>').join('') + '</span>' +
-    '</div></div>');
-
-  // 對焦點沒有手動輸入 —— 在預覽上點比填座標直觀得多，而且座標系
-  // （682×1024，3:2）跟畫面（16:9）對不上，填數字等於盲填。
-  const pt = st.focus_point;
-  const b = focusBounds.point || {};
-  const sizes = b.point_sizes || [];
-  const sizeOpts = sizes.map((sz, i) =>
-    '<button class="o' + (i === (st.point_size || 0) ? ' on' : '') +
-    '" data-focus="point_size" data-val="' + i + '">' + sz[1] + '×' + sz[0] +
-    '</button>').join('');
-
-  rows.push('<div class="opt"><div class="opt-head">' +
-    '<span class="opt-name">AF Point</span>' +
-    '<span class="opt-cur">' + (pt && pt.length === 2 ? pt[0] + ', ' + pt[1] : '—') + '</span>' +
-    '<span class="opt-note">' +
-    (tapFocus ? 'tap the preview to move it (switches to 1-Point Selection)'
-              : 'turn on Tap to Focus above, then tap the preview') +
-    '</span></div>' +
-    (sizeOpts ? '<div class="opts"><span class="grp">' +
-      '<span class="grp-label">Frame Size</span>' + sizeOpts + '</span></div>' : '') +
-    '</div>');
-
-  const html = rows.join('');
+    (sizeOpts ? '<span class="grp"><span class="grp-label">Frame Size</span>' +
+      sizeOpts + '</span>' : '') +
+    '</div></div>';
   if (box.__last === html) return;
   box.innerHTML = html;
   box.__last = html;
