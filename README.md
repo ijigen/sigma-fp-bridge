@@ -10,7 +10,12 @@ The name changed when the rest outgrew it; the git history still says
 `sigma-fp-focus-bridge` and that is deliberate — the record of what was tried,
 got wrong and corrected is a large part of what this repo is worth.
 
-![demo](docs/demo.gif) <!-- 影片連結之後補 -->
+![The bridge driving a Sigma fp over USB](docs/demo.png)
+
+<!-- The walkthrough video is attached to the repo rather than committed: GitHub
+     only plays video it hosts itself, so a file in the tree would render as a
+     link, not a player. Drag the .mov into a release or a comment and paste the
+     resulting URL here. -->
 
 > **🤖 Built by pair-programming with [openclaw](https://github.com/openclaw)**, an AI agent harness.
 > Most of the protocol reverse-engineering and library patching in this repo came from a Claude-driven agent stepping through PTP details much faster than I could solo.
