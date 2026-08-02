@@ -1019,9 +1019,13 @@ function renderFocusControls() {
     setHTML(box, '<div class="hint">loading focus options\u2026</div>');
     return;
   }
-  // 區域變了，相機宣告的框大小就跟著變 —— 重抓，不要沿用舊的那一組
-  if (st.focus_area && boundsArea && st.focus_area !== boundsArea && !loadingBounds) {
-    boundsArea = st.focus_area;
+  // 區域變了，相機宣告的框大小就跟著變 —— 重抓，不要沿用舊的那一組。
+  //
+  // 不能要求 boundsArea 為真才比較：bounds 是在第一則狀態訊息之前抓的，
+  // 那時還不知道區域，boundsArea 因此是 undefined —— 要求它為真的話條件
+  // 永遠不成立，也就永遠不會重抓。「還不知道」和「已知的某個值」不是
+  // 同一件事，這裡跟 point_size 的 `|| 0` 是同一類錯誤。
+  if (st.focus_area && st.focus_area !== boundsArea && !loadingBounds) {
     loadFocusBounds(true);
   }
 
