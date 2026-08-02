@@ -50,7 +50,25 @@ def recv_raw(cam, opcode, params: list[int] | None = None) -> bytes:
 
     已經掃過的空號（fp 韌體 5.02）：
 
-      **0x902C → 有內容，85 bytes 的 IFD。**這是掃描唯一的實質收穫：
+      **0x902C → 變更通知（已驗證）。**85 bytes 的 IFD，tag 4 是一串讀取類
+          opcode，而那串會隨相機操作改變：
+
+              起點        [CaptStatus, 0x902E]
+              改 ISO 後    [CaptStatus, 0x902E, GetCamDataGroupFocus]
+              移動對焦後    [GetDG2, CaptStatus, 0x902E, GetCamCanSetInfo5]
+
+          tag 1 跟著清單長度走（72 → 78 → 80），是 payload 大小。
+          ⚠️ 保留：bridge 背景一直在輪詢對焦，所以「清單會變」是確定的，
+          「哪一項對應哪個動作」不是 —— 沒辦法把單一項目歸因到單一操作。
+
+          對 bridge 的實際價值：目前是定時重讀全部設定，有了它可以只重讀
+          被點名的那幾組。
+
+      **0x9039 → 有內容，25 bytes 的 IFD**（DataLength=20、1 個 entry、
+          tag 1 是 UInt8）。⚠️ 沒抓到那個值 —— 探測腳本只印了前 16 bytes 的
+          摘要，而值落在第 17~20 byte。要重讀得再斷電一次。
+
+      0x902C 原始內容：
 
           tag 1  UInt32 = 84
           tag 2  UInt16 = 1
@@ -63,14 +81,17 @@ def recv_raw(cam, opcode, params: list[int] | None = None) -> bytes:
           ——「這幾樣變了，該重讀」。相機 SDK 常見的模式，主機不必輪詢全部。
           尚未驗證：改一個設定之後再問一次，看清單會不會跟著變。
 
-          附帶價值：0x902E 被相機自己列為「該讀的東西」，所以它不是廢碼。
+          附帶價值：0x902E **每一份清單裡都有**，但不論什麼時機、帶什麼參數
+          （[0] [1] [0x902E] [1,0]）讀它都是空的。相機持續點名一個永遠沒有
+          內容的東西，這點還沒解釋。
 
       0x9010, 0x9011, 0x901A → 正常完成但 payload 永遠 0 bytes。
           帶參數也試過（[0] [1] [2] [0,0] [1,0] [0xFFFFFFFF]），全部一樣。
       0x9020, 0x9021, 0x9025, 0x9026, 0x902E → 同上，空 payload。
       0x901E, 0x901F → AttributeError: Data（回應裡沒有資料相位）。
       0x901D, 0x9038 → USBTimeoutError，相機掉線，只能斷電。
-      0x9039 以上 → 還沒掃。
+      0x903A → USBTimeoutError，相機掉線。
+      0x903B 以上 → 還沒掃。
 
     位置值得記：0x902C 就在 0x902D（GetPictFileInfo2）前面，0x902E 在後面。
 
