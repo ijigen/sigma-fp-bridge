@@ -20,33 +20,49 @@ tethered stills — from a browser, a script, or anything that speaks HTTP.
 
 ## Run it
 
-**1.** Turn the camera on. Connect it to the computer with a USB-C cable.
+**1.** Download `sigma-fp-bridge` from [**Releases**](../../releases).
+For an **Apple Silicon** Mac. On an Intel Mac, [build it](#from-source).
 
-**2.** The camera screen asks how to connect. Tap **Camera Control**.
+**2.** Turn the camera on. Connect it to the computer with a USB-C cable.
 
-**3.** In a terminal, run:
+**3.** The camera screen asks how to connect. Tap **Camera Control**.
+
+**4.** Open Terminal and paste these four lines:
 
 ```bash
-sudo ./dist/sigma-fp-bridge
+cd ~/Downloads
+chmod +x sigma-fp-bridge
+xattr -d com.apple.quarantine sigma-fp-bridge
+sudo ./sigma-fp-bridge
 ```
 
-**4.** Open this in a browser:
+It asks for your Mac password. Typing shows nothing — that is normal.
+
+**5.** Open this in a browser:
 
 ```
 http://localhost:1025/
 ```
 
-Done. To stop it, press `Ctrl` + `C` in the terminal.
+Done. To stop it, press `Ctrl` + `C` in the Terminal.
+
+Next time, only the last line is needed.
 
 ### If it does not work
 
 | | |
 |---|---|
+| *"cannot be opened because the developer cannot be verified"* | You skipped the `xattr` line. Run it and try again. |
+| `Permission denied` | You skipped the `chmod` line. |
+| `Bad CPU type in executable` | Intel Mac. [Build from source](#from-source). |
+| `No such file or directory` | The file is not in `~/Downloads`. `cd` to wherever you put it. |
 | The camera screen shows no menu | Camera menu: **SYSTEM → USB Mode → Camera Control** |
 | The buttons on the camera do nothing | Normal. Click **Release to Body** in the browser to get them back. |
 | Nothing appears in the browser | Wait a few seconds and reload. The bridge keeps retrying on its own. |
-| `command not found` | You are in the wrong folder. `cd` to the folder holding `dist`. |
-| Port 1025 is taken | `SIGMA_BRIDGE_PORT=9000 sudo -E ./dist/sigma-fp-bridge`, then open `http://localhost:9000/` |
+| Port 1025 is taken | `SIGMA_BRIDGE_PORT=9000 sudo -E ./sigma-fp-bridge`, then open `http://localhost:9000/` |
+
+<sub>The binary is ad-hoc signed, not notarised — hence the `xattr` line. If you
+would rather not do that, build it yourself; the source is right here.</sub>
 
 ---
 
@@ -131,6 +147,10 @@ Build a single file:
 .venv/bin/python -m pip install pyinstaller
 .venv/bin/python -m PyInstaller sigma-fp-bridge.spec
 ```
+
+Output is `dist/sigma-fp-bridge`, one file, arm64, about 7 MB. It is what gets
+attached to a release; it is not committed, because a binary in the tree is
+downloaded by everyone who clones and wanted by almost none of them.
 
 Tests need no camera — a fake one stands in:
 
