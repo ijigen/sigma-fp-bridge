@@ -1,7 +1,8 @@
 # HTTP and WebSocket API
 
-Everything the browser page does, it does through this. Nothing here is private
-to the UI.
+**This API is this project's own design**, not Sigma's. It is a layer over the
+camera's PTP protocol, which is [documented separately](PROTOCOL.md). Everything
+the browser page does, it does through this — nothing here is private to the UI.
 
 Default base URL: `http://localhost:1025/`. Override the port with
 `SIGMA_BRIDGE_PORT`.

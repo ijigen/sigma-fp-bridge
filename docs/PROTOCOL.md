@@ -1,7 +1,17 @@
 # The Sigma fp over USB PTP
 
-Everything here was measured against a real fp. Where the SDK documentation and
-the camera disagree, the camera wins and the disagreement is written down.
+**This protocol is Sigma's, not ours** — the opcodes, the data groups and the
+tag numbers are the camera's. What is ours is the measuring: everything here was
+checked against a real fp, and where the SDK documentation and the camera
+disagree, the camera wins and the disagreement is written down.
+
+Some of it is not in the SDK at all and was worked out from the camera's
+behaviour: the `+100` relationship that names the movie tags, `0x902C`, the
+single-slot movie download and what misusing it does, the rule for where the AF
+point may go, and the fp's own colour mode table.
+
+(The HTTP API this project puts in front of all this is [a separate
+thing](API.md), and that one is ours.)
 
 The reference implementation is this repository. Start from
 [`sigma_fp_focus.py`](../sigma_fp_focus.py) for the low-level layer and
