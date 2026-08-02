@@ -353,6 +353,11 @@ def close_camera(cam: SigmaPTPy) -> None:
             print(f"警告：釋放 USB interface 失敗：{e}", file=sys.stderr)
 
 
+#: 上面那則備援提示只印一次。CINE 模式下每次讀設定都會撞到同一個 IndexError，
+#: 每輪刷七八行，而內容完全相同。
+_CANSETINFO5_WARNED = False
+
+
 def read_info5_raw(cam: SigmaPTPy) -> bytes:
     """跟相機要 CanSetInfo5，回傳它的原始 payload bytes。
 
@@ -382,8 +387,14 @@ def read_info5_raw(cam: SigmaPTPy) -> bytes:
         # 我們只要原始 bytes，自己用 ifd.py 解，所以只要側錄有攔到就繼續。
         if "CanSetInfo5" not in _LAST_RAW:
             raise
-        print(f"提示：sigma-ptpy 解 CanSetInfo5 失敗（{type(e).__name__}: {e}），"
-              "改用側錄到的原始 bytes 自行解析。", file=sys.stderr)
+        # 每次讀設定都會撞到，一輪下來刷掉七八行 —— 而它講的是同一件事，
+        # 而且備援路徑本來就有效。只在第一次講，之後靜靜走備援。
+        global _CANSETINFO5_WARNED
+        if not _CANSETINFO5_WARNED:
+            _CANSETINFO5_WARNED = True
+            print(f"提示：sigma-ptpy 解 CanSetInfo5 失敗（{type(e).__name__}: {e}），"
+                  "改用側錄到的原始 bytes 自行解析。這則訊息只講一次。",
+                  file=sys.stderr)
 
     raw = _LAST_RAW.get("CanSetInfo5")
     if raw is None:

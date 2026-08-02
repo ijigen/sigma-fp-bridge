@@ -390,6 +390,34 @@ def test_capabilities_values_are_all_dicts():
     print(f"✓ {len(caps)} 個能力值都是 dict，v.get('min') 不會炸")
 
 
+def test_the_cansetinfo5_fallback_notice_prints_once():
+    """CINE 模式下每次讀設定都會撞到同一個 IndexError。
+
+    備援路徑有效，訊息也正確，但每輪刷七八行相同內容會把真正的問題蓋掉 ——
+    這次那個 'list' object has no attribute 'get' 就是埋在裡面。
+    """
+    import io
+    import contextlib
+    import sigma_fp_focus as F
+
+    class Boom:
+        def get_cam_can_set_info5(self):
+            F._LAST_RAW["CanSetInfo5"] = b"\x08\x00\x00\x00\x00\x00\x00\x00"
+            raise IndexError("list index out of range")
+
+    F._CANSETINFO5_WARNED = False
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        for _ in range(5):
+            try:
+                F.read_info5_raw(Boom())
+            except Exception:
+                pass
+    hits = err.getvalue().count("sigma-ptpy 解 CanSetInfo5 失敗")
+    assert hits == 1, f"提示印了 {hits} 次，應該只印一次"
+    print("✓ CanSetInfo5 備援提示只印一次")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):
