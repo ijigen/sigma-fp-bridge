@@ -1059,11 +1059,16 @@ hardware, not to produce a tidy error message.
 **`DataGroupMovie` tag 10 is a master switch — do not set it to 0.** Its
 capability entry allows `[0, 1]`, and turning it off empties capability tags 110,
 112, 113 and 114, which by the +100 mapping are the movie group's tags 10, 12, 13
-and 14. Recording still produces a file of plausible size and
-`GetMovieFileInfo` still reports it, but 0x9037 will not serve it. Setting the tag
-back to 1, release/acquire, and re-recording all fail to restore it; only power
-does. What it actually controls is unknown, but the cost of finding out is a power
-cycle.
+and 14. Recording still works — the file lands on the card and `GetMovieFileInfo` reports
+its size normally — but 0x9037 stops serving it. What it actually controls is
+unknown.
+
+The state does clear without a power cycle. An earlier version of this section
+said only power would fix it, on the strength of setting the tag back,
+release/acquire and re-recording all failing. The camera later recovered with no
+power cycle at all, after a mixture of recording from the body, a switch to STILL
+and a still capture, a switch back to CINE, and release/acquire. Which step did it
+has not been isolated.
 
 That mapping is worth keeping: **`CanSetInfo5` tag = `DataGroupMovie` tag + 100**,
 confirmed on every setting already identified — 150/50 record format, 151/51

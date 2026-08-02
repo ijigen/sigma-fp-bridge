@@ -415,10 +415,14 @@ def partial_movie(cam, offset: int, length: int) -> bytes:
     所以要下載第二段影片，得先 release + acquire 讓資料庫歸零，再錄。
 
     ⚠️ **不要把 DataGroupMovie 的 tag 10 設成 0。** 那是一個主開關 —— 關掉之後
-    能力 tag 110/112/113/114 全部變成不可設定，而且錄出來的影片再也傳不回來
-    （MovieFileInfo 照樣回報正常大小，0x9037 卻只回 122,868）。把 tag 10 設回 1、
-    release + acquire、重錄，都救不回來，只有斷電有效。它實際控制什麼還不知道，
-    但代價已經很清楚。
+    能力 tag 110/112/113/114 全部變成不可設定，而且相機會停止服務影片傳輸：
+    錄影照常、檔案照常寫進記憶卡、MovieFileInfo 照常回報正常大小，只有 0x9037
+    改回 122,868。它實際控制什麼還不知道。
+
+    這個狀態**不需要斷電就會恢復**。先前這裡寫「只有斷電有效」是錯的 ——
+    當時試過設回 tag 10、release + acquire、重錄都無效就下了結論，但實際上
+    相機後來在沒有斷電的情況下自己好了。中間發生過的事有：用機身錄影、切到
+    STILL 拍一張、切回 CINE、release + acquire。哪一步是關鍵還沒隔離出來。
     """
     from construct import Container
 
@@ -475,8 +479,8 @@ def download_movie(cam, movie: MovieFile, save_dir=None,
             # 才觸發檢查。前面幾十 MB 早就全是垃圾了。
             raise RecordingError(
                 f"相機沒有回傳影片資料：要求 {want:,} bytes，卻回了 {len(got):,}。"
-                "相機進入了不再服務影片傳輸的狀態 —— 重啟 bridge 與 "
-                "release/acquire 都無效（已實測），要把相機斷電重開。")
+                "相機暫時不服務影片傳輸。已知會自行恢復（不必斷電）—— "
+                "切到 STILL 再切回 CINE、重錄一段，然後再試一次。")
         out += got
         if progress is not None:
             progress(len(out), movie.size)
