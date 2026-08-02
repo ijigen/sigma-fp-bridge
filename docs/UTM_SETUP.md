@@ -51,7 +51,7 @@ Apple Silicon 用 **arm64 版**，不是 x86_64。
    - **Storage**：使用整個 disk
    - **Profile**：
      - Server name: `sigma-bridge`
-     - Username: `dido`（或你喜歡的）
+     - Username: 自己取一個（下面的例子用 `you`）
      - Password: 設個你記得的（待會要 SSH）
    - **SSH**：**勾選 "Install OpenSSH server"** ← 重要！
    - **Featured snaps**：全部跳過
@@ -69,9 +69,9 @@ VM 重啟到登入畫面，登入後：
 ip addr show
 ```
 
-找 `enp0s1` 或類似網卡，記下 IP（例如 `192.168.64.5`）。
+找 `enp0s1` 或類似網卡，記下 IP（UTM 的共享網路通常是 `192.168.64.x`）。
 
-也可以從 Mac 端用 `arp -a` 看 192.168.64.* 段。
+也可以從 Mac 端用 `arp -a` 看 `192.168.64.*` 段。
 
 ---
 
@@ -80,7 +80,7 @@ ip addr show
 在 Mac 終端：
 
 ```bash
-ssh dido@192.168.64.5  # 換成你 VM 的 IP
+ssh you@VM_IP        # 換成上一步記下的帳號與 IP
 ```
 
 進去後做基本更新：
@@ -126,13 +126,13 @@ sudo apt install -y python3-pip python3-venv git libusb-1.0-0-dev
 
 ```bash
 cd ~/Desktop/sigma-fp-focus-poc
-scp -r . dido@192.168.64.5:~/sigma-bridge/
+scp -r . you@VM_IP:~/sigma-bridge/
 ```
 
 進 VM：
 
 ```bash
-ssh dido@192.168.64.5
+ssh you@VM_IP
 cd ~/sigma-bridge
 chmod +x run_linux.sh   # 待會會新增這個檔案
 ```
@@ -150,7 +150,7 @@ chmod +x run_linux.sh   # 待會會新增這個檔案
 成功的話會印：
 ```
 2026-06-05 ... INFO sigma-bridge | 相機已連線
-2026-06-05 ... INFO sigma-bridge |   瀏覽器測試:   http://192.168.64.5:8765/
+2026-06-05 ... INFO sigma-bridge |   瀏覽器測試:   http://VM_IP:8765/
 ```
 
 ---
@@ -160,7 +160,7 @@ chmod +x run_linux.sh   # 待會會新增這個檔案
 在 Mac 開瀏覽器：
 
 ```
-http://192.168.64.5:8765/
+http://VM_IP:8765/
 ```
 
 應該看到控制面板、live view、可以設 focus position！
@@ -170,7 +170,7 @@ http://192.168.64.5:8765/
 ## 後續：iPhone 連線
 
 VM 的網路通常會跟 Mac 共享同網段。如果你的 Wi-Fi 跟 Mac 同一個：
-- iPhone 也能直接連 `http://192.168.64.5:8765/`
+- iPhone 也能直接連 `http://VM_IP:8765/`
 - Bonjour 也能找到（_sigmafp._tcp）
 
 如果 UTM 用「Shared Network」模式，VM 在自己的 NAT 後面，iPhone 可能要：

@@ -2,3 +2,16 @@
 __pycache__/
 *.py[cod]
 .DS_Store
+
+# PyInstaller
+build/
+dist/
+
+# 相機抓回來的東西 —— 那是實拍素材，不屬於原始碼
+*.mov
+*.dng
+*.jpg
+*.jpeg
+*.mp4
+photos/
+movies/

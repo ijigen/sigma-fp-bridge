@@ -134,6 +134,16 @@ def _restore_ownership(path: Path) -> None:
         log.debug(f"還原 {path} 擁有者失敗：{e}")
 
 
+def _app_dir() -> Path:
+    """程式自己所在的目錄。
+
+    打包成單一執行檔時，資料是解壓到暫存目錄的，__file__ 指不到那裡 ——
+    PyInstaller 會把路徑放在 sys._MEIPASS。沒有這個分支的話，打包出來的
+    執行檔開得起來，但網頁會 404。
+    """
+    return Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
+
+
 STATE_DIR = _resolve_state_dir()
 LIVE_VIEW_INTERVAL_S = 0.04  # live view 目標間隔（~25fps 上限，實際看相機跟得上多少）
 STATE_BROADCAST_INTERVAL_S = 0.1  # 10Hz state push to clients
@@ -1237,7 +1247,7 @@ async def handle_ws_command(req: dict) -> dict | None:
 # ─────────────────────────────────────────────────────────────────────────────
 
 async def handle_index(request: web.Request) -> web.Response:
-    html_file = Path(__file__).parent / "static" / "index.html"
+    html_file = _app_dir() / "static" / "index.html"
     if html_file.exists():
         return web.FileResponse(html_file)
     return web.Response(text="static/index.html not found", status=404)

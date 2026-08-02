@@ -142,6 +142,22 @@ Open `http://localhost:8765/` and drag the focus slider. The lens should move in
 
 Nothing to undo afterwards — no system state was changed.
 
+### A single-file build
+
+If you would rather not carry a virtualenv around:
+
+```bash
+.venv/bin/python -m pip install pyinstaller
+.venv/bin/python -m PyInstaller sigma-fp-bridge.spec
+sudo ./dist/sigma-fp-bridge
+```
+
+`static/` is declared in the spec because the page is read from disk and so is
+invisible to the import graph. libusb needs no special handling: `libusb-package`
+ships a PyInstaller hook, and it is already a dependency for the reason described
+under [The five gotchas](#the-five-gotchas) — under `sudo`, macOS strips `DYLD_*`
+and the Homebrew copy of libusb stops being findable.
+
 ---
 
 ## The five gotchas
