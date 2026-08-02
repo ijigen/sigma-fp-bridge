@@ -21,7 +21,7 @@ got wrong and corrected is a large part of what this repo is worth.
 
 A Python bridge server that talks to Sigma fp over USB PTP and exposes:
 
-- **WebSocket API** for real-time focus control (`set_position`, `get_state`, calibration)
+- **WebSocket API** for real-time focus control (`set_position`, `get_state`)
 - **REST API** for one-shot HTTP commands — settings, recording, capture, download
 - **MJPEG live view stream** browsers / OpenCV / OBS can consume
 - **Bonjour / mDNS broadcast** so iOS clients can auto-discover the bridge
@@ -407,7 +407,6 @@ Quick test:
         │  ├─ REST /api/*      (one-shot HTTP)    │
         │  ├─ MJPEG /liveview.mjpeg (live view)   │
         │  ├─ Bonjour _sigmafp._tcp               │
-        │  └─ Calibration JSON store              │
         └──────────────┬──────────────────────────┘
                        │ USB-C (PTP, opcodes 0x9012-0x9037)
                        ▼
@@ -482,10 +481,7 @@ frame stream, and live view surviving a motor-settle wait.
 
 ```javascript
 ws.send(JSON.stringify({cmd: "set_position", position: 1500}));
-ws.send(JSON.stringify({cmd: "set_distance", distance: 2.5}));  // uses calibration table
 ws.send(JSON.stringify({cmd: "get_state"}));
-ws.send(JSON.stringify({cmd: "calibration_add", distance: 2.0, position: 1500}));
-ws.send(JSON.stringify({cmd: "calibration_clear"}));
 ws.send(JSON.stringify({cmd: "set_active_lens", lens_id: "28mm_art"}));
 
 // Camera settings
