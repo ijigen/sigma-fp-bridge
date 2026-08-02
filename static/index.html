@@ -252,7 +252,24 @@ function log(text, cls = '') {
 // ── 連線 ──────────────────────────────────────────────────────────
 function wireLiveview() {
   const img = $('liveview');
-  if (img && !img.__wired) { img.__wired = true; img.addEventListener('click', onLiveviewClick); }
+  if (!img || img.__wired) return;
+  img.__wired = true;
+  img.addEventListener('click', onLiveviewClick);
+  // MJPEG 是一條開著不關的連線。bridge 重啟、USB 斷一下、網路抖一下，那條
+  // 連線就死了 —— 而 <img> 仍然帶著 src，所以下面那句「沒有 src 才設定」永遠
+  // 不會再跑，畫面就一直空著到你手動重新整理為止。實際遇到的情況是：換成
+  // 打包版重開 bridge，舊分頁的預覽再也沒回來，看起來像打包壞了。
+  img.addEventListener('error', () => restartLiveview());
+}
+
+let liveviewRetry = null, liveviewSeq = 0;
+
+function restartLiveview() {
+  const img = $('liveview');
+  if (!img || liveviewRetry) return;
+  img.removeAttribute('src');
+  // 等一下再接。相機還沒好時 render() 本來就不會給 src，不用怕接不上。
+  liveviewRetry = setTimeout(() => { liveviewRetry = null; render(); }, 1000);
 }
 
 function connect() {
@@ -264,6 +281,8 @@ function connect() {
     send({cmd: 'describe_settings'});
     send({cmd: 'get_settings'});
     loadFocusBounds();
+    // WebSocket 重連通常代表 bridge 重啟過，那條 MJPEG 連線一定已經死了。
+    restartLiveview();
   };
   ws.onclose = () => { log('WebSocket closed, retrying in 2s', 'err'); st.wsDown = true; render(); setTimeout(connect, 2000); };
   ws.onerror = () => {};
@@ -324,7 +343,12 @@ function render() {
 
   setShown($('liveview'), live);
   setShown($('liveview-off'), !live);
-  if (live) { if (!$('liveview').getAttribute('src')) $('liveview').src = '/liveview.mjpeg'; }
+  // 帶上序號：換一個 URL 才會真的開新連線，沿用同一個 URL 時瀏覽器可能
+  // 直接復用那條已經死掉的。
+  if (live) {
+    if (!$('liveview').getAttribute('src'))
+      $('liveview').src = '/liveview.mjpeg?t=' + (++liveviewSeq);
+  }
   else if ($('liveview').getAttribute('src')) { $('liveview').removeAttribute('src'); }
   setText($('liveview-off'), st.released
     ? 'Released to the body \u2014 no live view. Press Take Control to resume.'

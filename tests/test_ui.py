@@ -781,6 +781,27 @@ def test_recording_does_not_push_the_layout_around():
     assert re.search(r"setDisabled\(", html), "錄影中沒有停用控制項的機制"
 
 
+def test_live_view_recovers_from_a_dropped_stream():
+    """MJPEG 是一條開著不關的連線，bridge 重啟就死了。
+
+    <img> 仍然帶著 src，而 render() 只在「沒有 src」時才設定 —— 所以斷掉之
+    後畫面會一直空著到手動重新整理為止。實際遇到的情況是換成打包版重開
+    bridge，舊分頁的預覽再也沒回來，看起來像打包壞了。
+    """
+    html = HTML.read_text()
+    assert "function restartLiveview(" in html, "沒有重接串流的路徑"
+    assert re.search(r"img\.addEventListener\('error', \(\) => restartLiveview\(\)\)", html), \
+        "<img> 載入失敗時沒有重接"
+    # WebSocket 重連代表 bridge 重啟過，那條串流一定死了
+    onopen = html[html.index("ws.onopen = () =>"):]
+    onopen = onopen[:onopen.index("ws.onclose")]
+    assert "restartLiveview()" in onopen, "重新連上 bridge 時沒有重接串流"
+    assert html.count("ws.onopen") == 1, "有兩個 onopen，後面那個會蓋掉前面"
+    # 沿用同一個 URL 時瀏覽器可能復用已經死掉的連線
+    assert re.search(r"'/liveview\.mjpeg\?t=' \+ \(\+\+liveviewSeq\)", html), \
+        "重接時沒有換 URL"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):
