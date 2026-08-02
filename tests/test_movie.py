@@ -476,6 +476,41 @@ def test_an_overlong_chunk_is_rejected_instead_of_truncated():
         raise AssertionError("應該要丟 RecordingError")
 
 
+def test_a_short_chunk_is_rejected_on_the_first_request():
+    """迴歸：只擋「比要求長」是不夠的，而且不能只斷言「最後有報錯」。
+
+    不服務傳輸時相機回固定 122,868 bytes。分塊是 1 MB 的話那比要求短，舊的
+    檢查放行，於是一路被當成短讀取累積 —— 直到剩餘量小於 122,868 才報錯。
+    所以「有丟例外」在兩種寫法下都成立；要分辨得看**第幾塊**就停。實測那次
+    在報錯前已經累積了三十幾 MB 垃圾。
+    """
+    import recording
+    calls = []
+    cam = _MovieCam(b"")
+
+    def fake(ptp):
+        if ptp.OperationCode == "SigmaGetPartialMovieFile":
+            calls.append(ptp.Parameter[3])
+            return types.SimpleNamespace(Data=b"\x00" * 122868)
+        return types.SimpleNamespace(Data=REAL_MOVIE_INFO)
+
+    cam.recv = fake
+    movie = recording.MovieFile(filename="A.MOV", path_name="C",
+                                format="MOV", size=8 << 20)
+    original = recording.MOVIE_CHUNK_BYTES
+    recording.MOVIE_CHUNK_BYTES = 1 << 20
+    try:
+        recording.download_movie(cam, movie)
+    except recording.RecordingError as e:
+        assert "122,868" in str(e), e
+        assert len(calls) == 1, f"第 {len(calls)} 塊才停 —— 前面全累積成垃圾了"
+        print("✓ 長度不符在第一塊就停，不會累積成垃圾檔案")
+    else:
+        raise AssertionError("應該要拒絕")
+    finally:
+        recording.MOVIE_CHUNK_BYTES = original
+
+
 def test_a_truncated_movie_download_is_an_error():
     """相機提前停止回傳時要報錯，不能默默交出半個檔案。"""
     import recording

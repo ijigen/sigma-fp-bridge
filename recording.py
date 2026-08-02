@@ -413,6 +413,12 @@ def partial_movie(cam, offset: int, length: int) -> bytes:
     「選定」要讀哪個。
 
     所以要下載第二段影片，得先 release + acquire 讓資料庫歸零，再錄。
+
+    ⚠️ **不要把 DataGroupMovie 的 tag 10 設成 0。** 那是一個主開關 —— 關掉之後
+    能力 tag 110/112/113/114 全部變成不可設定，而且錄出來的影片再也傳不回來
+    （MovieFileInfo 照樣回報正常大小，0x9037 卻只回 122,868）。把 tag 10 設回 1、
+    release + acquire、重錄，都救不回來，只有斷電有效。它實際控制什麼還不知道，
+    但代價已經很清楚。
     """
     from construct import Container
 
@@ -460,14 +466,17 @@ def download_movie(cam, movie: MovieFile, save_dir=None,
         if not got:
             raise RecordingError(
                 f"下載中斷：已取得 {len(out):,} / {movie.size:,} bytes")
-        if len(got) > want:
-            # 要 N 個 byte 卻拿到更多，代表讀到的是別的東西的殘留。
-            # 這裡曾經寫成 got[:want] 默默截斷 —— 結果是大小正確、內容全錯
-            # 的檔案，而且一路到最後才發現。寧可在第一塊就停。
+        if len(got) != want:
+            # 健康的相機一律精確回傳要求的長度（256 bytes 到 4 MB 都驗過）。
+            #
+            # 這裡原本只擋「比要求長」，短的就接受 —— 那是個真正的漏洞：
+            # 不服務傳輸時相機回的是固定 122,868 bytes，比 1 MB 的分塊小，
+            # 於是一路被當成短讀取累積進檔案，直到最後剩餘量小於 122,868
+            # 才觸發檢查。前面幾十 MB 早就全是垃圾了。
             raise RecordingError(
                 f"相機沒有回傳影片資料：要求 {want:,} bytes，卻回了 {len(got):,}。"
-                "相機進入了不再服務影片傳輸的狀態 —— 重啟 bridge 沒有用，"
-                "要把相機斷電重開。")
+                "相機進入了不再服務影片傳輸的狀態 —— 重啟 bridge 與 "
+                "release/acquire 都無效（已實測），要把相機斷電重開。")
         out += got
         if progress is not None:
             progress(len(out), movie.size)

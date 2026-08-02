@@ -1056,6 +1056,21 @@ therefore checks that a movie exists at entry 0 before issuing anything, and the
 endpoint refuses when the entry is not 0. Those checks are there to protect the
 hardware, not to produce a tidy error message.
 
+**`DataGroupMovie` tag 10 is a master switch — do not set it to 0.** Its
+capability entry allows `[0, 1]`, and turning it off empties capability tags 110,
+112, 113 and 114, which by the +100 mapping are the movie group's tags 10, 12, 13
+and 14. Recording still produces a file of plausible size and
+`GetMovieFileInfo` still reports it, but 0x9037 will not serve it. Setting the tag
+back to 1, release/acquire, and re-recording all fail to restore it; only power
+does. What it actually controls is unknown, but the cost of finding out is a power
+cycle.
+
+That mapping is worth keeping: **`CanSetInfo5` tag = `DataGroupMovie` tag + 100**,
+confirmed on every setting already identified — 150/50 record format, 151/51
+CinemaDNG quality, 152/52 MOV quality, 160/60 resolution, 161/61 frame rate. It
+makes CanSetInfo5 a directory of what a movie tag will accept, and it is how tag
+10 was spotted as a gate over three other tags in the first place.
+
 Separately, a request whose first or third parameter is non-zero comes back as a
 fixed 122,868 bytes. That reply is harmless — the session keeps working — and it
 is not malformed either: 122,868 + 12 = 122,880, exactly 120 KB, and 12 bytes is
