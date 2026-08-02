@@ -64,9 +64,9 @@ def recv_raw(cam, opcode, params: list[int] | None = None) -> bytes:
           對 bridge 的實際價值：目前是定時重讀全部設定，有了它可以只重讀
           被點名的那幾組。
 
-      **0x9039 → 有內容，25 bytes 的 IFD**（DataLength=20、1 個 entry、
-          tag 1 是 UInt8）。⚠️ 沒抓到那個值 —— 探測腳本只印了前 16 bytes 的
-          摘要，而值落在第 17~20 byte。要重讀得再斷電一次。
+      **0x9039 → 有內容，25 bytes 的 IFD**：DataLength=20、一個 entry，
+          tag 1 是 UInt8，值 0。單一旗標，意義不明。完整位元組：
+          14 00 00 00 01 00 00 00 01 00 01 00 01 00 00 00 00 00 00 00 00 00 00 00 18
 
       0x902C 原始內容：
 
@@ -91,7 +91,10 @@ def recv_raw(cam, opcode, params: list[int] | None = None) -> bytes:
       0x901E, 0x901F → AttributeError: Data（回應裡沒有資料相位）。
       0x901D, 0x9038 → USBTimeoutError，相機掉線，只能斷電。
       0x903A → USBTimeoutError，相機掉線。
-      0x903B 以上 → 還沒掃。
+      0x903B ~ 0x9042 → AttributeError: Data（沒有資料相位），而且相機安然無恙。
+
+    掃描到此完整（0x9010 ~ 0x9042）。結論：除了 0x902C 之外沒有任何未文件化的
+    指令提供得出內容，也沒有任何跟外接 SSD 或 USB 模式有關的東西。
 
     位置值得記：0x902C 就在 0x902D（GetPictFileInfo2）前面，0x902E 在後面。
 
