@@ -1111,39 +1111,35 @@ inputs are not all observable, "it works now" does not identify what fixed it.
 Note also that *writing* to tag 10 may be the trigger, not the value: one break
 followed a write of 1, the value it already held.
 
-Tags 11, 12, 13 and 62 accept writes and read back changed, and affect nothing
-observable from the host. A take recorded with `tag 11 = 2` is structurally
-identical to the reference — 4.004 s, timescale 24000, `avc1` 1920×1080 with 96
-samples, `sowt` 2ch/16bit 48 kHz with 192192 samples, `tmcd` — differing only in
-byte count, by 0.7%, well inside the noise. Live view is unmoved too: every value
-of all four tags returns a 1620×911 frame within 1% of the others.
+**The unidentified movie tags are audio.** sigma-ptpy's `CanSetInfo5` field table
+names them, and the `+100` mapping carries the names straight across:
 
-Two independent views of the imaging pipeline, and neither responds. HDMI was
-then checked directly — a monitor on the output while every value of all four
-tags was stepped through, six seconds apart — and nothing changed there either.
+| movie tag | CanSetInfo5 | name |
+|---|---|---|
+| 10 | 110 | `AudioRecord` |
+| 11 | 111 | `NumOfVoiceChannels` |
+| 12 | 112 | `GainAdjustMethod` |
+| 13 | 113 | `ManualGainAdjustEV` |
+| 14 | 114 | `WindNoiseCanceller` |
+| 62 | 162 | `Binning` |
 
-Writing them does reveal what they accept, and it does not match what the camera
-declares:
+That explains the gate: with recording off, channel count, gain method, manual
+gain and wind filtering have nothing to apply to, so 112, 113 and 114 all go
+unavailable together. It also explains the silence everywhere it was looked for —
+none of this is an imaging setting, so neither the sensor path nor HDMI was ever
+going to show it.
 
-- **tag 13 is a switch, not a range.** `CanSetInfo5` 113 advertises
-  `[-128, 127, 1]`, but writing 100 or -100 both read back as 1, and only 0 reads
-  back as 0.
-- **tag 62 cannot be written at all.** Writes are accepted without error and the
-  value stays 0; `CanSetInfo5` 162 is empty, which agrees.
-- tag 12 takes 0–3 and only its first element ever moves; tag 11 takes 1 and 2.
+**Not verified on hardware, and one observation disagrees.** A take with
+`tag 11 = 2` carries the same audio as `tag 11 = 1`: `sowt`, 2 channels, 16-bit,
+48 kHz, 192192 samples. If that tag is the channel count, the file should have
+moved. Either the value is not a channel count directly, or the name is loose.
+`tag 13` is also declared `[-128, 127, 1]` — plausible for a gain in EV — but only
+ever reads back 0 or 1, which may be because gain is not in manual mode. And
+`tag 14` does not appear in `DataGroupMovie` at all, only in the capability list.
 
-**The leading hypothesis is that this group configures host transfer, not
-imaging.** The one observable effect any of them has is tag 10's: with it off,
-0x9037 stops serving. That was read as the camera breaking, but a switch that
-disables movie transfer is also just a switch doing its job, and it would explain
-why the group is invisible to the sensor path and to HDMI alike — nothing in it
-is an imaging setting. Against that reading: setting tag 10 back to 1 does not
-restore transfers, which a plain enable should.
+The clean test is to record with `AudioRecord` off and check for a `soun` track.
 
-Nothing further is decidable from here. It needs the SDK's own DataGroupMovie tag
-table.
-
-One earlier line of attack is closed:
+One earlier line of attack is closed:One earlier line of attack is closed:
 comparing the file size the camera reports after a fixed-length take is not
 sensitive enough. Five takes with nothing changed at all span 31,224,912 to
 33,199,960 bytes — 6.1% — because H.264 tracks the scene. Every difference

@@ -85,6 +85,35 @@ MOVIE_SETTINGS: tuple[MovieSetting, ...] = (
                       "UHD / FHD 四種組合、以及多個幀率下都不開放調整它，"
                       "所以無法用『各錄一段比對產出』的方式判讀。"),
     MovieSetting("movie_resolution", 60, DT.UInt8, "int"),
+
+    # ── 音訊 ─────────────────────────────────────────────────────────
+    #
+    # 名稱來自 sigma-ptpy 的 CamCanSetInfo5 欄位表（schema.py），對照關係是
+    # 「CanSetInfo5 tag = DataGroupMovie tag + 100」—— 這個規律在所有已識別的
+    # 設定上都成立（150/50、151/51、152/52、160/60、161/61、162/62）。
+    #
+    # 這解釋了 tag 10 為什麼是主開關：錄音關掉之後，聲道數、增益方式、手動
+    # 增益、風切濾波全都沒有意義，所以 112/113/114 一起變成不可設定。也解釋
+    # 了為什麼它們對影像管線和 HDMI 輸出都毫無影響 —— 它們不是影像設定。
+    #
+    # ⚠️ 尚未在硬體上驗證。實測 tag 11 = 2 時錄出來的音訊仍是 2ch/16bit/48kHz、
+    # 192192 samples，跟 tag 11 = 1 完全相同，這與「聲道數」的名稱對不上。
+    # 可能是值不直接等於聲道數，也可能是名稱本身不精確。要確認的方法是把
+    # audio_record 關掉錄一段 —— 沒有音訊軌就證實了。
+    MovieSetting("audio_record", 10, DT.UInt8, "int",
+                 note="錄音開關（CanSetInfo5: AudioRecord）。關掉之後 11/12/13/14 "
+                      "全部變成不可設定。"),
+    MovieSetting("voice_channels", 11, DT.UInt8, "int",
+                 note="聲道數（CanSetInfo5: NumOfVoiceChannels）。未驗證 —— "
+                      "實測改值不影響錄出來的音訊軌。"),
+    MovieSetting("gain_adjust_method", 12, DT.Int8, "int",
+                 note="增益調整方式（CanSetInfo5: GainAdjustMethod）。未驗證。"),
+    MovieSetting("manual_gain_ev", 13, DT.Int8, "int",
+                 note="手動增益 EV（CanSetInfo5: ManualGainAdjustEV）。未驗證 —— "
+                      "相機宣告 -128~127，但實測只收 0/1。"),
+    MovieSetting("wind_noise_canceller", 14, DT.UInt8, "int",
+                 note="風切聲抑制（CanSetInfo5: WindNoiseCanceller）。未驗證 —— "
+                      "DataGroupMovie 讀出來沒有 tag 14。"),
     MovieSetting("frame_rate", 61, DT.URational, "rational", "fps",
                  note="⚠ 寫 29.97 相機存成 30、寫 59.94 存成 60，而 23.98 / 25 / 50 "
                       "都正常 —— 儘管相機自己把 29.97 與 59.94 列為合法、"
