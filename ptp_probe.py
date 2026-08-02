@@ -48,6 +48,16 @@ def recv_raw(cam, opcode, params: list[int] | None = None) -> bytes:
     ⚠️ 用數值探未知 opcode 是有風險的：沒辦法知道那是讀取還是寫入指令，而這台
     相機對不該收的指令的反應包括「USB 逾時後掉線」，只能靠斷電復原。
 
+    已經掃過的空號（fp 韌體 5.02）：
+      0x9010, 0x9011, 0x901A → **有回應**，正常完成但 payload 是 0 bytes。
+          代表韌體確實實作了這三個指令，只是不帶參數時沒東西可回。
+      0x901D                 → USBTimeoutError，相機掉線。這才是「沒實作」
+          的反應，正好當上面三個的對照組。
+      0x901E 之後            → 還沒掃（掃到 0x901D 就中斷了）
+
+    位置值得記：0x9012 起是 GetCamDataGroup1~3，而 0x9019 是 SetCamClockAdj、
+    0x901B 是 SnapCommand —— 0x901A 正好夾在兩者之間。
+
     Raises:
         ProbeError: opcode 名稱不認得，或相機拒絕。
     """
