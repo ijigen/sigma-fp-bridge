@@ -73,8 +73,8 @@ reported rather than accepted.
 
 - **CINE is the tested path.** STILL works — tethered capture, DNG+JPEG,
   stills-only settings — but has had far less use.
-- **macOS is the tested platform.** Linux should work; [in a
-  VM](docs/UTM_SETUP.md) is documented.
+- **macOS is the tested platform.** There is a Linux launcher and nothing
+  should stop it working there, but it has not been run.
 - One body, one lens (45mm F2.8 DG DN). If yours behaves differently, please
   open an issue.
 - **UHD 12-bit CinemaDNG is not reachable** over USB
@@ -89,8 +89,6 @@ reported rather than accepted.
 | **[docs/API.md](docs/API.md)** | Every endpoint and WebSocket message |
 | **[docs/PROTOCOL.md](docs/PROTOCOL.md)** | The camera's PTP protocol, measured |
 | **[docs/GOTCHAS.md](docs/GOTCHAS.md)** | The traps, likeliest first |
-| [docs/UTM_SETUP.md](docs/UTM_SETUP.md) | Running in a Linux VM |
-| [docs/iphone_architecture.md](docs/iphone_architecture.md) | Notes on a phone client |
 
 Writing your own implementation: GOTCHAS first, PROTOCOL second. The protocol is
 just work; the traps are what cost time.
