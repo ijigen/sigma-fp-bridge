@@ -120,7 +120,11 @@
   .lockicon { font-size: 10px; opacity: .8; }
   .opts select { min-width: 120px; max-width: 160px; }
   /* 同一列裡的多個小群組：用細標籤與分隔線區隔，免得三排按鈕黏成一團 */
-  #lv-marker { position:absolute; width:34px; height:34px; margin:-17px 0 0 -17px;
+  /* 用 transform 置中，不要用負 margin：margin-top 的百分比是相對容器的
+     **寬度**算的，不是高度。畫面 16:9 時垂直方向會多偏 1.78 倍 —— 對焦框
+     會高出虛線框上緣、又碰不到下緣。transform 的百分比才是相對自己的尺寸。*/
+  #lv-marker { position:absolute; width:34px; height:34px;
+    transform:translate(-50%, -50%);
     border:2px solid #4da3ff; border-radius:3px; pointer-events:none; display:none;
     box-shadow:0 0 0 1px rgba(0,0,0,.6), inset 0 0 0 1px rgba(0,0,0,.6) }
   #lv-marker.snap { border-color:#7ee787 }
@@ -809,7 +813,6 @@ function renderTapFocus() {
     const h = (size[0] / Math.max(1, view.height)) * 100;
     marker.style.width = w + '%';
     marker.style.height = h + '%';
-    marker.style.margin = '-' + (h / 2) + '% 0 0 -' + (w / 2) + '%';
   }
 }
 

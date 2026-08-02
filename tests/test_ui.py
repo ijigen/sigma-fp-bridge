@@ -598,6 +598,20 @@ def test_the_af_area_is_drawn_on_the_preview():
     print("✓ 相機的 AF 範圍畫在預覽上")
 
 
+def test_the_focus_marker_is_centred_with_transform_not_margin():
+    """margin-top 的百分比是相對**容器的寬度**算的，不是高度。
+
+    對焦框的大小是用百分比設的（框的尺寸來自相機座標系），所以用負 margin
+    置中時，垂直方向會多偏「寬高比」倍 —— 16:9 下約 1.78 倍。看到的就是框
+    高出 AF 虛線框的上緣、卻碰不到下緣。
+    """
+    html = HTML.read_text()
+    assert "transform:translate(-50%, -50%)" in html, "對焦框沒有用 transform 置中"
+    assert not re.search(r"marker\.style\.margin", html), \
+        "還在用負 margin 置中，垂直方向會偏"
+    print("✓ 對焦框用 transform 置中（負 margin 的垂直百分比是錯的）")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):
