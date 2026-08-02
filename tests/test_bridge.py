@@ -1353,10 +1353,21 @@ async def test_choosing_face_detection_turns_pre_af_on():
                 assert body["continuous_af"] == "On", \
                     f"選了臉部偵測卻沒開 Pre-AF，相機不會去找臉：{body}"
 
+                # 之後切對焦模式不能把 Pre-AF 關掉 —— 那會讓臉部偵測
+                # 默默死掉，而使用者只會看到「剛剛還好好的，現在又沒反應」
+                body = await (await session.post(
+                    f"{base}/api/focus/mode", json={"mode": "AF_S"})).json()
+                assert body["continuous_af"] == "On", \
+                    f"切模式把偵測需要的 Pre-AF 關掉了：{body}"
+
                 # 關掉偵測不該順手開 Pre-AF
                 body = await (await session.post(
                     f"{base}/api/focus/mode", json={"face_eye_af": "Off"})).json()
                 assert body["face_eye_af"] == "Off", body
+                body = await (await session.post(
+                    f"{base}/api/focus/mode", json={"mode": "AF_S"})).json()
+                assert body["continuous_af"] == "Off", \
+                    f"沒有偵測卻開著 Pre-AF，AF-S 會變成連續對焦：{body}"
         finally:
             await runner.cleanup()
     print("✓ 選臉／眼偵測會一併開 Pre-AF，否則相機根本不會去找")

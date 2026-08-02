@@ -627,6 +627,39 @@ def test_declared_choices_can_be_topped_up_with_measured_values():
     print("✓ 只在量過的地方補上宣告漏掉的值")
 
 
+def test_the_fake_camera_matches_the_real_focus_mode_rule():
+    """假相機的對焦模式規則要跟真的一致。
+
+    真的那邊把 Pre-AF 從「AF 系列都開」改成「只有 AF-C」之後，假的忘了跟，
+    於是六個套件全過而真機行為不同。假相機一分岔，測試就開始說謊，而那
+    比沒有測試更糟 —— 沒有測試至少你知道自己不知道。
+    """
+    import importlib.util
+    from sigma_ptpy.enum import PreConstAF
+    root = Path(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location(
+        "_real_sfp", root / "sigma_fp_focus.py")
+    real = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(real)
+
+    class Cam:
+        def __init__(self): self.wrote = []
+        def set_cam_data_group_focus(self, g): self.wrote.append(g)
+
+    for mode in ("MF", "AF_S", "AF_C"):
+        r = Cam()
+        real.set_focus_mode(r, mode)
+        want = r.wrote[0].PreConstAF.name
+        # 假的 set_focus_mode 是模組層級的函式，要先 install() 才會被塞進
+        # sys.modules —— 不是 FakeCamera 的方法。
+        import sys as _sys
+        f = fake_camera.install()
+        _sys.modules["sigma_fp_focus"].set_focus_mode(f, mode)
+        got = f.focus_settings["PreConstAF"].name
+        assert got == want, f"{mode}: 真的給 {want}，假的給 {got}"
+    print("✓ 假相機的 Pre-AF 規則與真模組一致")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

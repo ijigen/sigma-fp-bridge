@@ -1381,8 +1381,20 @@ async def handle_focus_mode(request: web.Request) -> web.Response:
 
     actions = []
     if "mode" in data:
-        actions.append(lambda: set_focus_mode(
-            state.camera, data["mode"], data.get("continuous_af")))
+        def apply_mode():
+            want = data.get("continuous_af")
+            if want is None:
+                # Pre-AF 預設只跟 AF-C 走（開給 AF-S 會讓它一直獵取，
+                # 表現得像 AF-C）。但臉／眼偵測需要 Pre-AF 才會運作 ——
+                # 偵測開著時就不能關掉它，否則使用者每切一次對焦模式，
+                # 臉部偵測就默默死一次。
+                now = get_focus_state(state.camera)
+                detecting = _enum_name(getattr(now, "FaceEyeAF", None)) not in (
+                    None, "Off")
+                if detecting:
+                    want = True
+            set_focus_mode(state.camera, data["mode"], want)
+        actions.append(apply_mode)
     if "face_eye_af" in data:
         actions.append(lambda: set_face_eye_af(state.camera, data["face_eye_af"]))
         # 相機的臉／眼偵測只在 Pre-AF 開著時才運作。實測：關著時

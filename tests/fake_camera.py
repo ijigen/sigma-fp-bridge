@@ -473,7 +473,11 @@ def install(camera: FakeCamera | None = None) -> FakeCamera:
             except KeyError as e:
                 raise ValueError(f"不認得的對焦模式：{mode}") from e
         if continuous_af is None:
-            continuous_af = mode is not FocusMode.MF
+            # 跟真的 sigma_fp_focus.set_focus_mode 一致：Pre-AF 只跟 AF-C 走。
+            # 這裡曾經是 `mode is not FocusMode.MF`，真的那邊修掉之後假的
+            # 忘了跟，於是套件全過而真機行為不同 —— 假相機一分岔，測試就
+            # 開始說謊。
+            continuous_af = mode is FocusMode.AF_C
         c._tick("set_focus_mode")
         c.focus_settings["FocusMode"] = mode
         c.focus_settings["PreConstAF"] = PreConstAF.On if continuous_af else PreConstAF.Off
