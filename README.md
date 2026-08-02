@@ -15,31 +15,33 @@ tethered stills — from a browser, a script, or anything that speaks HTTP.
 
 ## Run it
 
+**1.** Turn the camera on. Connect it to the computer with a USB-C cable.
+
+**2.** The camera screen asks how to connect. Tap **Camera Control**.
+
+**3.** In a terminal, run:
+
 ```bash
 sudo ./dist/sigma-fp-bridge
 ```
 
-Then open **<http://localhost:1025/>**.
+**4.** Open this in a browser:
 
-### Connecting the camera
+```
+http://localhost:1025/
+```
 
-1. **USB-C cable**, camera to computer. A charge-only cable will not do.
-2. The camera shows a **USB mode** menu — choose **Camera Control**.
-   *Mass Storage* mounts the card, *Video Class (UVC)* makes it a webcam;
-   neither speaks this protocol. No menu means a mode is pinned:
-   **SYSTEM → USB Mode**.
-3. Run the bridge. It waits for the camera and reconnects on its own, so the
-   order does not matter.
+Done. To stop it, press `Ctrl` + `C` in the terminal.
 
-`sudo` is not about USB permissions — macOS's `ptpcamerad` grabs the camera the
-moment it appears, and root wins that race
-([details](docs/GOTCHAS.md#macos-fights-you-for-the-camera)).
+### If it does not work
 
-While connected, **every control on the camera body is dead**. That is the
-protocol, not a fault. **Release to Body** hands it back.
-
-Other port: `SIGMA_BRIDGE_PORT=9000 sudo -E ./dist/sigma-fp-bridge`.
-(1025 is 10/25, the day the fp shipped.)
+| | |
+|---|---|
+| The camera screen shows no menu | Camera menu: **SYSTEM → USB Mode → Camera Control** |
+| The buttons on the camera do nothing | Normal. Click **Release to Body** in the browser to get them back. |
+| Nothing appears in the browser | Wait a few seconds and reload. The bridge keeps retrying on its own. |
+| `command not found` | You are in the wrong folder. `cd` to the folder holding `dist`. |
+| Port 1025 is taken | `SIGMA_BRIDGE_PORT=9000 sudo -E ./dist/sigma-fp-bridge`, then open `http://localhost:9000/` |
 
 ---
 
