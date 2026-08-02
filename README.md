@@ -665,13 +665,22 @@ changed and whose values mean nothing to the reader is just clutter — but the
 protocol mapping and API access stay, so anyone who works out what gates it can
 pick up where this left off.
 
-**Two frame rates do not take.** Writing 29.97 stores 30 and 59.94 stores 60,
-while 23.98, 25 and 50 are stored as asked — even though the camera lists 29.97
-and 59.94 as legal and does not list 30 or 60 at all. Tested across both formats
-and both resolutions, with the same result each time. **The cause is unknown.**
-23.98 is an NTSC fractional rate and works, so a recording-standard setting does
-not explain it. The value is read back and the mismatch reported rather than
-passed off as success.
+**Two frame rates do not take, and the camera is what rounds them.** Writing
+29.97 stores 30 and 59.94 stores 60, while 23.98, 25 and 50 are stored as asked —
+even though the camera lists 29.97 and 59.94 as legal and does not list 30 or 60
+at all.
+
+This was carried as unexplained for a long time, on the assumption that the
+encoding might be at fault. It is not. Writing `tag 61` directly, bypassing every
+layer of this project, gives the same result for `(2997, 100)` and for the exact
+NTSC ratio `(30000, 1001)`: both read back `(3000, 100)`. `(5994, 100)` reads back
+`(6000, 100)`, and `(2398, 100)` reads back unchanged.
+
+So the rounding is in the firmware, and probably only in the label. A 23.98 take
+carries `mvhd` timescale 24000, i.e. 24000/1001 — the camera works in NTSC
+denominators internally. A take at the reported "30" would most likely show
+timescale 30000 with 1001-tick samples, which is 29.97. Confirming that needs a
+recording downloaded and its sample deltas read.
 
 **Still/movie mode is `DataGroupMovie` tag 1** — 1 for STILL, 2 for CINE. Writing
 it switches the body: the screen changes, and the whole capability set swaps over
