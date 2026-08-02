@@ -81,6 +81,11 @@ class FakeCamera:
         self.media_free_space = 19366
         #: 對焦模式 / 臉眼偵測 / 區域 / 對焦點
         self.focus_settings: dict = {}
+        #: 相機宣告接受的列舉值。照實機：色彩模式有 16 個，其中 13~16 是
+        #: sigma-ptpy 的 enum 不認得的（fp 的 Off / Teal and Orange 之類）。
+        self.choice_values: dict = {
+            "color_mode": [15, 14, 13, 12, 8, 7, 6, 10, 9, 5, 4, 3, 2, 1, 11, 16],
+        }
         self.files: list = []
         # /api/dump/* 用的原始 IFD payload
         # 照實機：658 是焦點範圍，215/216/217 是 ISO 與曝光補償的定點數範圍，
@@ -511,6 +516,12 @@ def install(camera: FakeCamera | None = None) -> FakeCamera:
     mod.read_info5_raw = read_info5_raw
     mod.read_movie_group_raw = read_movie_group_raw
     mod.read_capabilities = read_capabilities
+
+    def read_choice_values(c):
+        c._tick("choice_values")
+        return dict(c.choice_values)
+
+    mod.read_choice_values = read_choice_values
     mod.set_focus_position = set_focus_position
     mod.CamDataGroupFocusExt = FakeFocusState
     sys.modules["sigma_fp_focus"] = mod

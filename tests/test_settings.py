@@ -418,6 +418,30 @@ def test_the_cansetinfo5_fallback_notice_prints_once():
     print("✓ CanSetInfo5 備援提示只印一次")
 
 
+def test_choices_follow_what_the_camera_declares():
+    """選項要以相機宣告的為準，enum 只負責提供名稱。
+
+    使用者回報色彩模式少了一個 Off。查下去是這台相機宣告 16 個色彩模式
+    （13/14/15/16 在內），而 sigma-ptpy 的 enum 只認得 12 個 —— UI 的選項
+    全部來自 enum，所以那四個看不到也選不了。函式庫跟不上韌體是常態，
+    以相機說的為準才不會漏。
+    """
+    import sigma_ptpy.enum as E
+    declared = [15, 14, 13, 12, 8, 7, 6, 10, 9, 5, 4, 3, 2, 1, 11, 16]
+    entries = {e["name"]: e for e in
+               CS.describe(choice_values={"color_mode": declared})}
+    choices = entries["color_mode"]["choices"]
+    assert len(choices) == len(declared), f"{len(choices)} 個選項，相機說有 {len(declared)}"
+    # enum 認得的用名稱，不認得的用數字 —— 不認得不代表不能用
+    assert "Cinema" in choices, choices
+    for unknown in ("13", "14", "15", "16"):
+        assert unknown in choices, f"相機宣告的 {unknown} 沒有出現在選項裡"
+    # 沒有相機資料時退回 enum，不能整個變空
+    fallback = {e["name"]: e for e in CS.describe()}["color_mode"]["choices"]
+    assert fallback == [m.name for m in E.ColorMode], fallback
+    print(f"✓ 選項跟著相機走（{len(choices)} 個，其中 4 個 enum 不認得）")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

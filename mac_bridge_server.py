@@ -66,6 +66,7 @@ from sigma_fp_focus import (
     leave_api_mode,
     open_camera,
     read_capabilities,
+    read_choice_values,
     read_info5_raw,
     read_movie_group_raw,
     close_camera,
@@ -169,6 +170,9 @@ class BridgeState:
     movie_progress: dict | None = None
     #: 相機唯讀狀態（卡片空間、電池、鏡頭焦段），讀設定時一併更新
     camera_status: dict | None = None
+    #: 相機當下接受的列舉值 {設定名稱: [原始值]}。跟 capabilities 分開存 ——
+    #: 那個字典的每個值都是帶 min/max 的 dict，形狀不同的東西不能混進去。
+    choice_values: dict = field(default_factory=dict)
     #: 錄影時快門用速度還是角度（DataGroupMovie tag 6：1 = 速度、2 = 角度）
     shutter_unit: int | None = None
     #: "stills" | "movie" | None —— 機身撥桿位置（推測而來，見 refresh_capabilities）
@@ -487,6 +491,9 @@ async def refresh_capabilities() -> None:
         caps = await worker.call(
             lambda: read_capabilities(state.camera), priority=Priority.STATUS
         )
+        state.choice_values = await worker.call(
+            lambda: read_choice_values(state.camera), priority=Priority.STATUS
+        )
     except CameraUnavailable:
         return
     except Exception as e:
@@ -617,7 +624,8 @@ def _full_schema() -> list:
     各自組一份，改了前兩個卻漏掉 ack —— 而 ack 正是 UI 每次操作後用來更新
     schema 的那條路，於是切換快門單位後整組控制項消失。
     """
-    return (describe(state.capabilities, state.camera_mode, _shutter_speed_allowed())
+    return (describe(state.capabilities, state.camera_mode, _shutter_speed_allowed(),
+                     state.choice_values)
             + _movie_schema() + _capture_mode_schema())
 
 

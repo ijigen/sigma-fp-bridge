@@ -122,6 +122,7 @@
   /* 同一列裡的多個小群組：用細標籤與分隔線區隔，免得三排按鈕黏成一團 */
   .grp { display: flex; align-items: center; gap: 5px; }
   .grp + .grp { margin-left: 4px; padding-left: 10px; border-left: 1px solid #333; }
+  .grp-label { font-size: 11px; color: #8a8a8a; margin-right: 5px; align-self: center }
 </style>
 </head>
 <body>
@@ -449,10 +450,7 @@ const ORDER = [
   ['cont_shoot_speed',      '連拍速度'],
   ['hdr',                   'HDR'],
   ['fill_light',            '補光'],
-  ['loc_distortion',        '畸變校正'],
-  ['loc_chromatic_aberration', '色差校正'],
-  ['loc_diffraction',       '繞射校正'],
-  ['loc_vignetting',        '周邊光量'],
+  ['__loc',                 '鏡頭校正'],
   ['interval_timer_seconds','間隔秒數'],
   ['interval_timer_frames', '間隔張數'],
 ];
@@ -742,6 +740,42 @@ function exposureRow(byName) {
 // 白平衡與色溫合併：色溫只有在白平衡設成 ColorTemp 時才會生效，
 // 其他預設（自動 / 日光 / 陰影…）下相機自己決定色溫。分成兩列的話，
 // 使用者會在色溫那格輸入數字然後發現沒反應。
+// 四項鏡頭光學校正各佔一列太佔版面，而且它們是同一類東西、選項也一樣。
+// 併成一列，每項只留下拉選單。
+const LOC_PARTS = [
+  ['loc_distortion',           '畸變'],
+  ['loc_chromatic_aberration', '色差'],
+  ['loc_diffraction',          '繞射'],
+  ['loc_vignetting',           '暗角'],
+];
+
+function locRow(byName) {
+  const present = LOC_PARTS.filter(([name]) => byName[name]);
+  if (!present.length) return '';
+
+  const parts = [], body = [];
+  for (const [name, short] of present) {
+    const s = byName[name];
+    const cur = values[name];
+    if (cur !== null && cur !== undefined && cur !== 'Null')
+      parts.push(short + ' ' + labelFor(s, cur));
+    body.push('<span class="grp"><span class="grp-label">' + short + '</span>' +
+      '<select data-set="' + name + '">' +
+      optionsFor(usefulChoices(s), cur, c => labelFor(s, c)) + '</select></span>');
+  }
+  return '<div class="opt"><div class="opt-head">' +
+    '<span class="opt-name">鏡頭校正</span>' +
+    '<span class="opt-cur">' + escapeHTML(parts.join(' · ') || '—') + '</span>' +
+    '</div><div class="opts">' + body.join('') + '</div></div>';
+}
+
+// Null 是「相機沒有回報」的佔位，不是使用者可以選的東西 —— 顯示成 — 只會讓人
+// 以為那是一個選項。除非目前值就是它（那要看得到自己在哪）。
+function usefulChoices(setting) {
+  const cur = values[setting.name];
+  return (setting.choices || []).filter(c => c !== 'Null' || c === cur);
+}
+
 function wbRow(byName) {
   const wb = byName.white_balance, ct = byName.color_temp;
   if (!wb && !ct) return '';
@@ -847,16 +881,17 @@ function settingsHTML() {
     if (name === '__format') { const r = formatRow(byName); if (r) rows.push(r); continue; }
     if (name === '__exposure') { const r = exposureRow(byName); if (r) rows.push(r); continue; }
     if (name === '__wb') { const r = wbRow(byName); if (r) rows.push(r); continue; }
+    if (name === '__loc') { const r = locRow(byName); if (r) rows.push(r); continue; }
     const s = byName[name];
     if (!s) continue;
     const cur = values[name];
 
     if (s.choices && s.choices.length) {
-      let choices = s.choices;
+      let choices = usefulChoices(s);
       const white = CHOICE_WHITELIST[name];
       if (white) {
-        choices = s.choices.filter(v => white.indexOf(String(v)) >= 0 || String(v) === String(cur));
-        if (!choices.length) choices = s.choices;
+        const w = choices.filter(v => white.indexOf(String(v)) >= 0 || String(v) === String(cur));
+        if (w.length) choices = w;
       }
       const needsM = NEEDS_MANUAL[name] && !manual;
       // 沒有單位也沒有標籤的整數選項 —— 我們知道相機接受這些值，

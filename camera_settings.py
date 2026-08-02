@@ -560,9 +560,54 @@ def check_within_capabilities(name: str, value, capabilities: dict | None) -> No
         )
 
 
+#: 設定 ↔ CanSetInfo5 的 tag。用來知道「相機**現在**接受哪些值」。
+#:
+#: 為什麼需要：enum 只說明「這個欄位理論上有哪些值」，而 sigma-ptpy 的 enum
+#: 未必跟得上韌體。實例：這台相機宣告 16 個色彩模式（含 13/14/15/16），
+#: sigma-ptpy 只認得 12 個 —— 於是 UI 少了四個選項，其中一個就是 CinemaDNG
+#: 會用到的「Off」。以相機宣告的為準，enum 只負責提供名稱。
+#:
+#: 名稱取自 sigma-ptpy 的 CanSetInfo5 欄位表。
+INFO5_CHOICE_TAGS = {
+    "drive_mode": 1,
+    "cont_shoot_speed": 2,
+    "image_quality": 11,
+    "dng_quality": 12,
+    "resolution": 20,
+    "aspect_ratio": 21,
+    "exposure_mode": 200,
+    "metering_mode": 250,
+    "white_balance": 301,
+    "color_mode": 320,
+    "fill_light": 340,
+    "hdr": 350,
+    "dc_crop_mode": 500,
+    "loc_distortion": 501,
+    "loc_chromatic_aberration": 502,
+    "loc_diffraction": 503,
+    "loc_vignetting": 504,
+    "electronic_stabilization": 810,
+}
+
+
+def label_for_value(setting: "Setting", raw: int) -> str:
+    """把原始數值換成名稱；enum 不認得就回數字字串。
+
+    不認得**不代表不能用** —— 相機宣告它可設定就是可設定。顯示成數字至少
+    讓人選得到，也讓「這是韌體有而函式庫沒有的值」這件事看得出來。
+    """
+    if setting.enum_cls is not None:
+        try:
+            return setting.enum_cls(raw).name
+        except ValueError:
+            pass
+    return str(raw)
+
+
 def describe(capabilities: dict | None = None,
              mode: str | None = None,
-             also_allowed: set | None = None) -> list[dict[str, Any]]:
+             also_allowed: set | None = None,
+             choice_values: dict | None = None) -> list[dict[str, Any]]:
     """所有設定的中繼資料，給 UI 生控制項用。
 
     Args:
@@ -588,7 +633,12 @@ def describe(capabilities: dict | None = None,
             "note": setting.note,
         }
         if setting.kind == "enum":
-            entry["choices"] = [m.name for m in setting.enum_cls]
+            # 相機宣告的優先。enum 只在它認得的時候提供名稱。
+            declared = (choice_values or {}).get(setting.name)
+            if declared:
+                entry["choices"] = [label_for_value(setting, v) for v in declared]
+            else:
+                entry["choices"] = [m.name for m in setting.enum_cls]
         elif setting.kind == "apex":
             # 換算表是這個型別「理論上」的所有值
             values = sorted({v for _, v in setting.converter._ApexConverter__dectable})

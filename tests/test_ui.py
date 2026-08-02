@@ -403,6 +403,27 @@ def test_every_test_file_runs_all_of_its_tests():
     print("✓ 每個測試檔的測試都在執行區塊之前定義")
 
 
+def test_lens_corrections_share_one_row_and_null_is_not_an_option():
+    """四項鏡頭校正是同一類東西，選項也一樣 —— 各佔一列太佔版面。
+
+    另外 Null 是「相機沒有回報」的佔位。把它畫成一個叫「—」的按鈕，等於邀請
+    使用者去選一個不存在的設定。
+    """
+    html = HTML.read_text()
+    assert "function locRow(" in html, "沒有鏡頭校正的合併列"
+    # 檢查 ORDER 裡的那個中文標題，不是欄位名 —— 欄位名在 LOC_PARTS 裡也有
+    for title in ("'畸變校正'", "'色差校正'", "'繞射校正'", "'周邊光量'"):
+        assert title not in html, f"{title} 還單獨佔一列"
+    for name in ("loc_distortion", "loc_chromatic_aberration",
+                 "loc_diffraction", "loc_vignetting"):
+        assert name in html, f"{name} 整個不見了"
+    assert "'__loc'" in html and "locRow(byName)" in html, "合併列沒有接進 ORDER"
+
+    assert "function usefulChoices(" in html, "沒有濾掉 Null 的地方"
+    assert "let choices = usefulChoices(s)" in html, "一般選項列沒有用它"
+    print("✓ 鏡頭校正併成一列，Null 不會變成可選項")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

@@ -209,6 +209,27 @@ def _sv_to_iso(sv: float) -> int:
     return int(round(100 * (2 ** (sv - 5))))
 
 
+def read_choice_values(cam: SigmaPTPy) -> dict:
+    """相機**現在**接受哪些列舉值，依設定名稱分。
+
+    跟 read_capabilities 分開，因為值的形狀不同：那裡每個值是帶 min/max 的
+    dict，這裡是原始數值的清單。混在一起的後果實測過 —— 消費端對著 list
+    呼叫 .get("min")，整個狀態讀取炸掉，而錯誤訊息裡沒有任何線索。
+    """
+    from camera_settings import INFO5_CHOICE_TAGS
+
+    out: dict[str, list[int]] = {}
+    try:
+        ifd = parse_ifd(read_info5_raw(cam))
+    except Exception:
+        return out
+    for name, tag in INFO5_CHOICE_TAGS.items():
+        entry = find_tag(ifd, tag)
+        if entry is not None and entry.values:
+            out[name] = list(entry.values)
+    return out
+
+
 def read_capabilities(cam: SigmaPTPy) -> dict:
     """讀相機當下實際接受的數值範圍。
 
