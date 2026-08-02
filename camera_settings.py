@@ -254,6 +254,48 @@ def encode_value(setting: Setting, value) -> Any:
 SHUTTER_ANGLE = "shutter_angle"
 
 
+#: 相機主動回報、但不是「設定」的欄位 —— 唯讀狀態。
+#:
+#: 這些一直都在 DataGroup1/3 裡，只是沒被讀出來。其中 MediaFreeSpace 特別值得
+#: 一提：這個專案先前懷疑「拍不成是不是記憶卡滿了」，還記下「主機端查不到」——
+#: 其實一直查得到，只是沒去看。
+STATUS_FIELDS = (
+    ("media_free_space", 1, "MediaFreeSpace"),
+    ("media_status", 1, "MediaStatus"),
+    ("battery_state", 1, "BatteryState"),
+    ("frame_buffer_state", 1, "FrameBufferState"),
+    ("battery_kind", 3, "BatteryKind"),
+    ("lens_focal_mm", 1, "CurrentLensFocalLength"),
+    ("lens_wide_mm", 3, "LensWideFocalLength"),
+    ("lens_tele_mm", 3, "LensTeleFocalLength"),
+)
+
+
+def read_status(cam) -> dict[str, Any]:
+    """相機的唯讀狀態：卡片剩餘空間、電池、緩衝區、鏡頭焦段範圍。
+
+    跟 read_settings 分開，因為這些不是設定 —— 寫不進去，也不該出現在
+    設定介面裡。某一組讀失敗不會拖垮其他組。
+    """
+    out: dict[str, Any] = {}
+    cache: dict[int, Any] = {}
+    for name, group, attr in STATUS_FIELDS:
+        if group not in cache:
+            try:
+                cache[group] = getattr(cam, f"get_cam_data_group{group}")()
+            except Exception:
+                cache[group] = None
+        obj = cache[group]
+        value = getattr(obj, attr, None) if obj is not None else None
+        if value is None:
+            out[name] = None
+        elif hasattr(value, "name"):
+            out[name] = value.name
+        else:
+            out[name] = value
+    return out
+
+
 def read_settings(cam, frame_rate: float | None = None) -> dict[str, Any]:
     """讀回全部設定（人看得懂的值）。
 

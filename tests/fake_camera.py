@@ -69,6 +69,8 @@ class FakeCamera:
         self.shutter_fires = 0
         #: 影像格式。DNGAndJPEG 時一次拍攝產生兩個檔案、兩筆資料庫項目。
         self.image_quality = "JPEGFine"
+        #: 記憶卡剩餘空間（實機回報的單位是 MB）
+        self.media_free_space = 19366
         self.files: list = []
         # /api/dump/* 用的原始 IFD payload
         self.info5_raw = _sample_ifd([(658, 3, [5974, 11116])])
@@ -140,7 +142,11 @@ class FakeCamera:
 
     def get_cam_data_group1(self):
         self._tick("datagroup1")
-        g = types.SimpleNamespace(CurrentLensFocalLength=self.focal_length)
+        # 唯讀狀態欄位。實機一直有回報，只是這個專案很久沒去讀。
+        g = types.SimpleNamespace(
+            CurrentLensFocalLength=self.focal_length,
+            MediaFreeSpace=self.media_free_space,
+            MediaStatus=1, BatteryState=1, FrameBufferState=9)
         for k, v in self.groups[1].items():
             setattr(g, k, v)
         return g
@@ -155,7 +161,12 @@ class FakeCamera:
         return self._get_group(2)
 
     def get_cam_data_group3(self):
-        return self._get_group(3)
+        g = self._get_group(3)
+        # 鏡頭焦段範圍與電池種類也是唯讀狀態
+        g.LensWideFocalLength = self.focal_length
+        g.LensTeleFocalLength = self.focal_length
+        g.BatteryKind = "BodyBattery"
+        return g
 
     def get_cam_data_group4(self):
         return self._get_group(4)

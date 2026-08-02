@@ -348,6 +348,26 @@ async def test_frame_rate_comes_from_the_camera_not_the_user():
     print(f"✓ 幀率從相機讀取（{B.state.frame_rate}），不是沿用預設值")
 
 
+async def test_status_reports_card_space_and_battery():
+    """卡片剩餘空間一直都在 DataGroup1 裡，只是沒被讀出來。
+
+    這個專案先前懷疑「拍不成是不是卡滿了」，還記下「主機端查不到」——
+    其實查得到。狀態欄位跟設定分開，因為它們寫不進去。
+    """
+    reset()
+    cam = fake_camera.FakeCamera()
+    B.state.camera = cam
+    async with running_worker():
+        await B.cam_read_settings()
+        resp = await B.handle_status(types.SimpleNamespace(path="/api/status"))
+        body = json.loads(resp.body.decode())
+        status = body.get("camera_status") or {}
+        assert "media_free_space" in status, status
+        assert "battery_state" in status and "lens_wide_mm" in status, status
+        assert status["media_free_space"] == cam.media_free_space, status
+    print(f"✓ /api/status 帶出相機狀態（卡片剩餘 {status['media_free_space']}）")
+
+
 async def test_set_position_coalesces():
     reset()
     async with running_worker():

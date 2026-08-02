@@ -53,6 +53,7 @@ import ptp_probe
 import recording
 from ifd import parse_ifd, to_json
 from camera_settings import (
+    read_status,
     AUTO_OVERRIDE_HINTS,
     SettingError,
     apply_settings,
@@ -164,6 +165,8 @@ class BridgeState:
     released_camera: object | None = None
     #: 影片下載進度 {"done": int, "total": int}，沒在下載時是 None
     movie_progress: dict | None = None
+    #: 相機唯讀狀態（卡片空間、電池、鏡頭焦段），讀設定時一併更新
+    camera_status: dict | None = None
     #: 錄影時快門用速度還是角度（DataGroupMovie tag 6：1 = 速度、2 = 角度）
     shutter_unit: int | None = None
     #: "stills" | "movie" | None —— 機身撥桿位置（推測而來，見 refresh_capabilities）
@@ -693,6 +696,11 @@ def _read_all_settings() -> dict:
     —— 那是在這個 DataGroup 的 tag 還沒解出來時的權宜做法，猜錯就會讓角度
     算錯，而使用者不會發現。
     """
+    try:
+        state.camera_status = read_status(state.camera)
+    except Exception as e:
+        log.debug(f"狀態讀取失敗：{e}")
+
     movie = {}
     try:
         movie = movie_settings.read_settings(state.camera)
@@ -1278,6 +1286,8 @@ async def handle_status(request: web.Request) -> web.Response:
         "capture_step": capture.current_step(),
         # 影片下載的進度。檔案大，沒有進度看起來就像當掉了。
         "movie_progress": getattr(state, "movie_progress", None),
+        # 卡片剩餘空間、電池、鏡頭焦段範圍。一直都在 DataGroup1/3 裡沒被讀。
+        "camera_status": getattr(state, "camera_status", None),
         "released": state.released_by_user,
         "camera_mode": state.camera_mode,
         "recording": state.recording,
