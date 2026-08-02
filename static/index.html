@@ -799,7 +799,10 @@ function renderTapFocus() {
   const b = (focusBounds && focusBounds.point) || {};
   const pt = st.focus_point;
   const show = tapFocus && pt && pt.length === 2 && b.height && b.width;
-  setShown(marker, show);
+  // 不能用 setShown：它顯示時設 display=''，而 marker 的 CSS 是 display:none，
+  // 空字串會退回樣式表那條規則 —— marker 因此永遠畫不出來。
+  const want = show ? 'block' : 'none';
+  if (marker.style.display !== want) marker.style.display = want;
   if (!show) return;
 
   // 對焦座標 → 有效區域內的比例 → 畫面像素
@@ -920,23 +923,16 @@ function renderFocusControls() {
     focusGroup('focus_area', '區域', st.focus_area, focusBounds.focus_areas || [], fa, isMF) +
     '</div></div>');
 
-  // 對焦點：座標系由相機提供，超出有效範圍相機會自己夾
-  const pt = st.focus_point || [];
+  // 對焦點沒有手動輸入 —— 在預覽上點比填座標直觀得多，而且座標系
+  // （682×1024，3:2）跟畫面（16:9）對不上，填數字等於盲填。
+  const pt = st.focus_point;
   const b = focusBounds.point || {};
-  const centre = [Math.round((b.height || 682) / 2), Math.round((b.width || 1024) / 2)];
   rows.push('<div class="opt"><div class="opt-head">' +
     '<span class="opt-name">對焦點</span>' +
-    '<span class="opt-cur">' + (pt.length === 2 ? pt[0] + ', ' + pt[1] : '—') + '</span>' +
-    '<span class="opt-note">相機會吸附到最近的對焦格點 · y 0–' + (b.height || '?') + ' · x 0–' + (b.width || '?') +
-    (b.top !== undefined ? '（有效 y ' + b.top + '–' + b.bottom + ' · x ' + b.left + '–' + b.right + '）' : '') +
-    '</span></div><div class="opts">' +
-    '<span class="grp"><span class="grp-label">y</span>' +
-    '<input type="number" id="fp-y" value="' + (pt[0] !== undefined ? pt[0] : '') + '" style="min-width:78px"></span>' +
-    '<span class="grp"><span class="grp-label">x</span>' +
-    '<input type="number" id="fp-x" value="' + (pt[1] !== undefined ? pt[1] : '') + '" style="min-width:78px"></span>' +
-    '<span class="grp"><button class="o" id="fp-set">移動</button>' +
-    '<button class="o" id="fp-centre">回中央</button></span>' +
-    '</div></div>');
+    '<span class="opt-cur">' + (pt && pt.length === 2 ? pt[0] + ', ' + pt[1] : '—') + '</span>' +
+    '<span class="opt-note">' +
+    (tapFocus ? '點預覽畫面移動（會自動切成單點選擇）' : '開啟上方「點選對焦」後點預覽畫面') +
+    '</span></div></div>');
 
   const html = rows.join('');
   if (box.__last === html) return;
@@ -946,14 +942,6 @@ function renderFocusControls() {
   box.querySelectorAll('[data-focus]').forEach(el => {
     el.onclick = () => focusApply({[el.dataset.focus]: el.dataset.val});
   });
-  const setBtn = box.querySelector('#fp-set');
-  if (setBtn) setBtn.onclick = () => {
-    const y = parseInt($('fp-y').value), x = parseInt($('fp-x').value);
-    if (isNaN(y) || isNaN(x)) { flash('err', '對焦點要填 y 和 x'); return; }
-    focusApply({point: [y, x]});
-  };
-  const centreBtn = box.querySelector('#fp-centre');
-  if (centreBtn) centreBtn.onclick = () => focusApply({point: centre});
 }
 
 function locRow(byName) {

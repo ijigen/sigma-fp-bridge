@@ -1323,6 +1323,11 @@ async def handle_focus_mode(request: web.Request) -> web.Response:
         point = data["point"]
         if not (isinstance(point, (list, tuple)) and len(point) == 2):
             return web.json_response({"error": "point 要是 [y, x]"}, status=400)
+        # 對焦點只在單點選擇下有意義 —— 多點模式相機會把它鎖在正中央
+        # [340, 512]，於是點畫面任何位置都對焦在同一處。實測確認。
+        # 使用者要的是「對這裡」，不是「先去改一個他沒聽過的模式」。
+        if "focus_area" not in data:
+            actions.insert(0, lambda: set_focus_area(state.camera, "OnePointSelection"))
         actions.append(lambda: set_focus_point(state.camera, point[0], point[1]))
     if not actions:
         return web.json_response(

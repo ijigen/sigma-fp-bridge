@@ -438,7 +438,9 @@ def test_focus_panel_exists_and_can_return_to_autofocus():
     assert "/api/focus/bounds" in html, "沒有讀對焦座標範圍"
     for key in ("focus_mode", "face_eye_af", "focus_area", "focus_point"):
         assert key in html, f"面板沒有處理 {key}"
-    assert "fp-centre" in html, "沒有回中央的捷徑"
+    # 對焦點沒有手動輸入 —— 座標系（682×1024，3:2）跟畫面（16:9）對不上，
+    # 填數字等於盲填，在預覽上點直觀得多。
+    assert "fp-centre" not in html and "fp-y" not in html, "還留著手動座標輸入"
     # 實測：MF 下相機忽略對焦區域與臉眼偵測的寫入。按了沒反應比按不下去
     # 更讓人困惑，所以要標成不可用而不是放著。
     assert "MF 下臉眼與區域無效" in html, "MF 下沒有標示區域/臉眼不可用"
@@ -464,6 +466,9 @@ def test_tap_to_focus_is_behind_a_toggle():
     assert "function onLiveviewClick(" in html, "預覽沒有點擊處理"
     assert 'id="lv-marker"' in html, "沒有標示對焦點的 marker"
     assert "getBoundingClientRect" in html, "沒有把點擊換算成畫面比例"
+    # marker 的 CSS 是 display:none，用 setShown 顯示時設 '' 會退回那條規則 ——
+    # 於是永遠畫不出來。要明確設成 block。
+    assert "marker.style.display" in html, "marker 用了會被 CSS 蓋掉的顯示方式"
     # 映射要用相機宣告的有效區域，不是憑空假設
     assert "b.top" in html and "b.left" in html, "沒有用相機宣告的有效區域做映射"
     print("✓ 點選對焦有開關，預設關閉，並標出相機實際位置")

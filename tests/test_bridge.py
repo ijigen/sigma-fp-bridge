@@ -532,6 +532,38 @@ async def test_moving_the_focus_point_triggers_a_refocus():
     print("✓ 移動對焦點會觸發對焦，MF 下不會")
 
 
+async def test_setting_a_point_switches_to_one_point_selection():
+    """對焦點只在單點選擇下有意義。
+
+    實測：多點模式下相機把對焦點鎖在正中央 [340, 512]，送任何座標都讀回
+    那一個 —— 於是點預覽畫面的任何位置，都對焦在同一處。使用者要的是
+    「對這裡」，不是「先去改一個他沒聽過的模式」，所以自動切。
+    """
+    reset()
+    async with running_worker():
+        runner = web.AppRunner(B.make_app())
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        base = f"http://127.0.0.1:{runner.addresses[0][1]}"
+        try:
+            async with aiohttp.ClientSession() as session:
+                await session.post(f"{base}/api/focus/mode",
+                                   json={"focus_area": "MultiAutoFocusPoints"})
+                body = await (await session.post(
+                    f"{base}/api/focus/mode", json={"point": [200, 300]})).json()
+                assert body["focus_area"] == "OnePointSelection", body
+                assert body["focus_point"] == [200, 300], body
+
+                # 明確指定區域時就照他說的做，不要自作主張
+                body = await (await session.post(f"{base}/api/focus/mode", json={
+                    "focus_area": "MultiAutoFocusPoints", "point": [210, 310]})).json()
+                assert body["focus_area"] == "MultiAutoFocusPoints", body
+        finally:
+            await runner.cleanup()
+    print("✓ 設定對焦點會自動切成單點選擇")
+
+
 async def test_set_position_coalesces():
     reset()
     async with running_worker():
