@@ -20,7 +20,7 @@ Not playing? [docs/demo.mp4](docs/demo.mp4)*
 
 ## Run it
 
-**1.** Download `sigma-fp-bridge` from [**Releases**](../../releases).
+**1.** Download `sigma-fp-bridge-macos-arm64` from [**Releases**](../../releases).
 For an **Apple Silicon** Mac. On an Intel Mac, [build it](#from-source).
 
 **2.** Turn the camera on. Connect it to the computer with a USB-C cable.
@@ -31,9 +31,9 @@ For an **Apple Silicon** Mac. On an Intel Mac, [build it](#from-source).
 
 ```bash
 cd ~/Downloads
-chmod +x sigma-fp-bridge
-xattr -d com.apple.quarantine sigma-fp-bridge
-sudo ./sigma-fp-bridge
+chmod +x sigma-fp-bridge-macos-arm64
+xattr -d com.apple.quarantine sigma-fp-bridge-macos-arm64
+sudo ./sigma-fp-bridge-macos-arm64
 ```
 
 It asks for your Mac password. Typing shows nothing — that is normal.
@@ -59,7 +59,7 @@ Next time, only the last line is needed.
 | The camera screen shows no menu | Camera menu: **SYSTEM → USB Mode → Camera Control** |
 | The buttons on the camera do nothing | Normal. Click **Release to Body** in the browser to get them back. |
 | Nothing appears in the browser | Wait a few seconds and reload. The bridge keeps retrying on its own. |
-| Port 1025 is taken | `SIGMA_BRIDGE_PORT=9000 sudo -E ./sigma-fp-bridge`, then open `http://localhost:9000/` |
+| Port 1025 is taken | `SIGMA_BRIDGE_PORT=9000 sudo -E ./sigma-fp-bridge-macos-arm64`, then open `http://localhost:9000/` |
 
 <sub>The binary is ad-hoc signed, not notarised — hence the `xattr` line. If you
 would rather not do that, build it yourself; the source is right here.</sub>
@@ -148,7 +148,8 @@ Build a single file:
 .venv/bin/python -m PyInstaller sigma-fp-bridge.spec
 ```
 
-Output is `dist/sigma-fp-bridge`, one file, arm64, about 7 MB. It is what gets
+Output is `dist/sigma-fp-bridge-<os>-<arch>`, one file, about 7 MB — the suffix
+comes from the machine you build on, not from a constant. It is what gets
 attached to a release; it is not committed, because a binary in the tree is
 downloaded by everyone who clones and wanted by almost none of them.
 
