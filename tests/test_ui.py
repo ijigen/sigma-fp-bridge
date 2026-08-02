@@ -17,6 +17,23 @@ def _script(html: str) -> str:
     return re.search(r"<script>(.*?)</script>", html, re.S).group(1)
 
 
+
+def _run_js(html, fn_pattern, body):
+    """把一個函式從網頁裡挖出來，用 macOS 內建的 JavaScriptCore 跑。
+
+    回傳字串結果；沒有引擎（非 macOS）時回 None 讓呼叫端跳過。
+    """
+    import subprocess
+    m = re.search("^" + fn_pattern, html, re.S | re.M)
+    assert m, f"找不到符合 {fn_pattern} 的函式"
+    try:
+        r = subprocess.run(["osascript", "-l", "JavaScript", "-e", m.group(0) + body],
+                           capture_output=True, text=True, timeout=60)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    assert r.returncode == 0, f"JS 執行失敗：{r.stderr.strip()[:200]}"
+    return r.stdout.strip()
+
 def test_javascript_parses():
     try:
         import esprima
@@ -410,14 +427,15 @@ def test_lens_corrections_share_one_row_and_null_is_not_an_option():
     使用者去選一個不存在的設定。
     """
     html = HTML.read_text()
-    assert "function locRow(" in html, "沒有鏡頭校正的合併列"
+    assert "function comboRow(" in html, "沒有合併列的產生器"
     # 檢查 ORDER 裡的那個中文標題，不是欄位名 —— 欄位名在 LOC_PARTS 裡也有
     for title in ("'畸變校正'", "'色差校正'", "'繞射校正'", "'周邊光量'"):
         assert title not in html, f"{title} 還單獨佔一列"
     for name in ("loc_distortion", "loc_chromatic_aberration",
                  "loc_diffraction", "loc_vignetting"):
         assert name in html, f"{name} 整個不見了"
-    assert "'__loc'" in html and "locRow(byName)" in html, "合併列沒有接進 ORDER"
+    assert re.search(r"'__loc'.*?comboRow\(byName, '鏡頭校正', LOC_PARTS\)", html, re.S), \
+        "合併列沒有接進 ORDER"
 
     assert "function usefulChoices(" in html, "沒有濾掉 Null 的地方"
     assert "let choices = usefulChoices(s)" in html, "一般選項列沒有用它"
@@ -509,6 +527,75 @@ def test_the_protocol_probe_ui_is_gone():
     for gone in ("測試片段", "btn-clip", "clip-secs", "recordClip", "rec-status"):
         assert gone not in html, f"還留著 {gone}"
     print("✓ 協定探測用的 UI 已移除")
+
+
+def test_unsettable_settings_render_disabled():
+    html = HTML.read_text()
+    assert re.search(r"const unavail = s\.writable === false", html), "沒有讀 writable"
+    assert re.search(r"disabled:\s*needsM \|\| unavail", html), "unavail 沒接到 disabled"
+    assert re.search(r"s\.writable === false \? ' disabled data-locked", html), \
+        "鏡頭校正整合列沒吃 writable"
+    print("✓ 相機宣告不可設定的項目在網頁上反灰")
+
+
+def test_crop_and_stabilisation_share_one_row_after_the_format_row():
+    """兩者都在裁切感光範圍，而且會互相影響 —— CinemaDNG 下相機會關掉
+    電子防手震。分開兩列看不出這層關係，放遠了更看不出來。
+    """
+    html = HTML.read_text()
+    order = html[html.index("const ORDER = ["):]
+    order = order[:order.index("];")]
+    rows = re.findall(r"\['(\w+|__\w+)'", order)
+    assert rows.index("__crop") == rows.index("__format") + 1, \
+        f"裁切列沒有緊接在影像規格之後：{rows[:4]}"
+    for name in ("dc_crop_mode", "electronic_stabilization"):
+        assert f"['{name}'" not in order, f"{name} 還單獨佔一列"
+        assert name in html, f"{name} 整個不見了"
+    assert re.search(r"'__crop'.*?comboRow\(byName, title, CROP_PARTS\)", html, re.S), \
+        "裁切列沒有接進 ORDER"
+    print("✓ DC 裁切與電子防手震併成一列，緊接影像規格")
+
+
+def test_tap_focus_clamps_to_the_range_the_camera_really_accepts():
+    """宣告的有效區 613 是**框**能落在哪，座標卻是框的中心 —— 中心的可達
+    範圍要再向內縮半個框。實測三種框大小的四個邊界全部符合這條規則。
+
+    只夾到有效區的話，邊緣的點寫進去會被相機往內拉，看起來就像對焦點全擠
+    在畫面中間、外圈點不到。
+    """
+    html = HTML.read_text()
+    assert re.search(r"const lim = reachable\(b, st\.point_size", html), \
+        "點擊沒有用可達範圍，或沒有依當下的框大小算"
+    assert re.search(r"Math\.max\(lim\.top", html) and \
+           re.search(r"Math\.max\(lim\.left", html), "點擊沒有夾進可達範圍"
+
+    # 真的跑一遍，拿實測值當答案 —— 檢查字串長相的話，把 /2 改成 /4
+    # 也會照樣通過。這四組數字是對著相機一個邊界一個邊界寫進去讀回來的。
+    got = _run_js(html, r"function reachable\(b, sizeIndex\) \{.*?^\}", """
+        var b = {height: 682, width: 1024, top: 85, bottom: 597,
+                 left: 96, right: 928,
+                 point_sizes: [[128, 128], [64, 64], [32, 32]]};
+        var out = [];
+        for (var i = 0; i < 3; i++) {
+            var r = reachable(b, i);
+            out.push([r.top, r.bottom, r.left, r.right].join(','));
+        }
+        out.join(' | ')
+    """)
+    if got is None:
+        print("- 跳過可達範圍的實跑（沒有 JavaScript 引擎）")
+        return
+    assert got == "149,533,160,864 | 117,565,128,896 | 101,581,112,912", \
+        f"可達範圍算錯：{got}"
+    print("✓ 點擊夾進「有效區縮半個框」的實際可達範圍（對相機實測值）")
+
+
+def test_the_af_area_is_drawn_on_the_preview():
+    html = HTML.read_text()
+    assert 'id="lv-afarea"' in html, "沒有 AF 範圍的元素"
+    assert re.search(r"area\.style\.display = 'block'", html), "沒有顯示出來"
+    assert re.search(r"area\.style\.display = 'none'", html), "關掉點對焦時沒有收掉"
+    print("✓ 相機的 AF 範圍畫在預覽上")
 
 
 if __name__ == "__main__":

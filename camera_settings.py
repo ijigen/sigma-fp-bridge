@@ -587,6 +587,26 @@ def check_within_capabilities(name: str, value, capabilities: dict | None) -> No
 #: 形狀不一致」，然後還是把它們當值列表用，結果 DC 裁切的選項變成「關 自動 -1」。
 #:
 #: 判斷依據：目前生效的值必須出現在宣告清單裡。不在，那就不是值列表。
+#: 只用來判斷「現在能不能設」，不看內容。
+#:
+#: 這兩件事的可靠程度不同：清單的**內容**編碼不一致（DCCropMode 給
+#: [1, 0, -1]，LOCVignetting 給 [0, -1] 卻不含目前值），但**空不空**是一致
+#: 的 —— 空就是當下不可設定。實測 EImageStab 在 MOV 下是 [0, 1]，切到
+#: CinemaDNG 就變成 []，而 fp 的電子防手震確實不支援 CinemaDNG。
+INFO5_AVAILABILITY_TAGS = {
+    "drive_mode": 1, "cont_shoot_speed": 2,
+    "interval_timer_frames": 3, "interval_timer_seconds": 4,
+    "image_quality": 11, "dng_quality": 12,
+    "resolution": 20, "aspect_ratio": 21,
+    "exposure_mode": 200, "metering_mode": 250,
+    "white_balance": 301, "color_mode": 320,
+    "fill_light": 340, "hdr": 350,
+    "dc_crop_mode": 500,
+    "loc_distortion": 501, "loc_chromatic_aberration": 502,
+    "loc_diffraction": 503, "loc_vignetting": 504,
+    "electronic_stabilization": 810,
+}
+
 INFO5_CHOICE_TAGS = {
     "drive_mode": 1,
     "image_quality": 11,
@@ -643,6 +663,13 @@ def describe(capabilities: dict | None = None,
             "writable": setting.writable,
             "note": setting.note,
         }
+        # 相機宣告的空清單 = 當下不可設定。只看空不空，不看內容 ——
+        # 內容的編碼不一致，但這個信號是一致的。
+        declared_any = (choice_values or {}).get(setting.name)
+        if declared_any is not None and len(declared_any) == 0:
+            entry["writable"] = False
+            entry["note"] = (setting.note + " " if setting.note else "") + \
+                "（相機在目前的格式／模式下不開放調整）"
         if setting.kind == "enum":
             # 相機宣告的優先，但要先確認那真的是一份值列表。
             #

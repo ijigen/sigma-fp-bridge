@@ -216,17 +216,21 @@ def read_choice_values(cam: SigmaPTPy) -> dict:
     dict，這裡是原始數值的清單。混在一起的後果實測過 —— 消費端對著 list
     呼叫 .get("min")，整個狀態讀取炸掉，而錯誤訊息裡沒有任何線索。
     """
-    from camera_settings import INFO5_CHOICE_TAGS
+    from camera_settings import INFO5_AVAILABILITY_TAGS
 
     out: dict[str, list[int]] = {}
     try:
         ifd = parse_ifd(read_info5_raw(cam))
     except Exception:
         return out
-    for name, tag in INFO5_CHOICE_TAGS.items():
+    for name, tag in INFO5_AVAILABILITY_TAGS.items():
         entry = find_tag(ifd, tag)
-        if entry is not None and entry.values:
-            out[name] = list(entry.values)
+        if entry is None:
+            continue
+        # 空清單也要留著 —— 那代表「當下不可設定」，跟「相機沒提到這個 tag」
+        # 是兩回事。先前把空的濾掉，於是 CinemaDNG 下的電子防手震看起來
+        # 跟平常一樣可以按。
+        out[name] = list(entry.values or [])
     return out
 
 
@@ -695,6 +699,13 @@ def read_focus_area_bounds(cam: SigmaPTPy) -> dict:
 
     # 對焦框大小：615 是一串 (高, 寬)，數量由 614 給。616 是移動步進 ——
     # 那就是對焦點會「吸附」的原因，不是寫入失敗。
+    #
+    # 注意 613 是**框**能落在哪，而 DMFPos 是框的中心，所以中心的可達範圍
+    # 是 613 各邊向內縮半個框。實測（寫入四個角再讀回）：
+    #   框 128x128 → y[149,533] x[160,864]
+    #   框  64x64  → y[117,565] x[128,896]
+    #   框  32x32  → y[101,581] x[112,912]
+    # 三組都等於 613 縮半個框。消費端要自己縮 —— 這裡回報相機宣告的原值。
     try:
         ifd2 = parse_ifd(read_info5_raw(cam))
         sizes = find_tag(ifd2, 615)

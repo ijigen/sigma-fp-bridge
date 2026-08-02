@@ -494,6 +494,26 @@ def test_choices_follow_what_the_camera_declares():
     print(f"✓ 選項跟著相機走（{len(choices)} 個，其中 4 個 enum 不認得）")
 
 
+def test_an_empty_capability_list_marks_the_setting_unsettable():
+    # 相機在 CinemaDNG 下把 EImageStab（tag 810）的清單清空 —— fp 的電子
+    # 防手震不支援 CinemaDNG。清單的內容編碼不可信，但空不空是可信的。
+    by = {d["name"]: d for d in CS.describe(
+        choice_values={"electronic_stabilization": [], "dc_crop_mode": [1, 0, -1]})}
+    assert by["electronic_stabilization"]["writable"] is False
+    assert "不開放" in by["electronic_stabilization"]["note"]
+    # 有內容的照舊可設 —— 否則「全部反灰」的實作也會讓這個測試過。
+    assert by["dc_crop_mode"]["writable"] is True
+    print("✓ 空的能力清單 = 相機宣告當下不可設定")
+
+
+def test_a_missing_capability_entry_leaves_the_setting_settable():
+    # 「相機沒提到這個 tag」跟「提到但是空的」是兩回事。混為一談的話，
+    # CanSetInfo5 讀不到時整個面板都會變成唯讀。
+    by = {d["name"]: d for d in CS.describe(choice_values={})}
+    assert by["electronic_stabilization"]["writable"] is True
+    print("✓ 沒宣告 ≠ 不可設定")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

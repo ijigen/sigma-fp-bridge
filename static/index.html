@@ -124,6 +124,10 @@
     border:2px solid #4da3ff; border-radius:3px; pointer-events:none; display:none;
     box-shadow:0 0 0 1px rgba(0,0,0,.6), inset 0 0 0 1px rgba(0,0,0,.6) }
   #lv-marker.snap { border-color:#7ee787 }
+  /* 相機能對焦的範圍只有畫面的一部分，外圈那一圈點了也沒用。畫出來，
+     使用者才知道那不是壞掉。 */
+  #lv-afarea { position:absolute; border:1px dashed rgba(255,255,255,.35);
+    pointer-events:none; display:none }
   #liveview.tap { cursor: crosshair }
   .grp { display: flex; align-items: center; gap: 5px; }
   .grp + .grp { margin-left: 4px; padding-left: 10px; border-left: 1px solid #333; }
@@ -142,6 +146,7 @@
       <div class="panel flush">
         <div id="lv-wrap" style="position:relative; line-height:0">
           <img id="liveview" class="liveview" alt="">
+          <div id="lv-afarea"></div>
           <div id="lv-marker"></div>
         </div>
         <div id="liveview-off" class="liveview-off"></div>
@@ -412,6 +417,9 @@ function onSliderCommit() {
 // 每一列的選項都來自相機當下回報的合法值，所以上層一改，下層自動跟著變。
 const ORDER = [
   ['__format',              '影像規格'],
+  // DC 裁切和電子防手震都是在裁切感光範圍，而且會互相影響（CinemaDNG 下
+  // 相機直接關掉電子防手震），所以緊接在影像規格後面、併成一列。
+  ['__crop',                '裁切與防手震'],
   ['__exposure',            '曝光'],
   // mov_image_quality 不列在 UI：實測相機在所有格式 / 大小 / 幀率組合下
   // 都不開放調整它，值 1 / 2 的意義也沒有證據。顯示一個按不動又看不懂的
@@ -426,8 +434,6 @@ const ORDER = [
   ['drive_mode',            '驅動模式'],
 
   // ── 一直在 DataGroup4/5 裡但沒接出來的 ──────────────────────────
-  ['electronic_stabilization', '電子防手震'],
-  ['dc_crop_mode',          'DC 裁切'],
   ['high_iso_ext',          '高感光擴展'],
   ['cont_shoot_speed',      '連拍速度'],
   ['hdr',                   'HDR'],
@@ -731,6 +737,11 @@ const LOC_PARTS = [
   ['loc_vignetting',           '暗角'],
 ];
 
+const CROP_PARTS = [
+  ['dc_crop_mode',             'DC 裁切'],
+  ['electronic_stabilization', '電子防手震'],
+];
+
 // ── 在預覽畫面上點選對焦點 ─────────────────────────────────────────
 //
 // 座標映射有個已知的不確定性：對焦座標系是 682×1024（3:2，全片幅比例），
@@ -749,12 +760,13 @@ function toggleTapFocus() {
 
 function renderTapFocus() {
   const btn = $('btn-tapfocus'), img = $('liveview'), marker = $('lv-marker');
+  const area = $('lv-afarea');
   if (!btn) return;
   setText(btn, '點選對焦：' + (tapFocus ? '開' : '關'));
   btn.classList.toggle('primary', tapFocus);
   if (img) img.classList.toggle('tap', tapFocus);
   setText($('tapfocus-hint'), tapFocus
-    ? '點畫面移動對焦點（相機會吸附到最近的格點）' : '');
+    ? '點虛線框內移動對焦點（相機會吸附到最近的格點）' : '');
   if (!marker) return;
 
   const b = (focusBounds && focusBounds.point) || {};
@@ -764,7 +776,7 @@ function renderTapFocus() {
   // 空字串會退回樣式表那條規則 —— marker 因此永遠畫不出來。
   const want = show ? 'block' : 'none';
   if (marker.style.display !== want) marker.style.display = want;
-  if (!show) return;
+  if (!show) { if (area) area.style.display = 'none'; return; }
 
   // 座標系是 682×1024（3:2，全片幅比例），但預覽畫面是 16:9 —— 它只顯示
   // 感光元件中間的一條。所以垂直方向要用「畫面實際看得到的高度」換算，
@@ -776,6 +788,19 @@ function renderTapFocus() {
   const fx = pt[1] / Math.max(1, b.width);
   marker.style.top = (fy * 100) + '%';
   marker.style.left = (fx * 100) + '%';
+
+  // 相機的 AF 範圍（宣告的有效區）。外圈點了相機也會把點拉回來 ——
+  // 畫出來才不會被當成 bridge 壞掉。
+  if (area) {
+    const t = (b.top !== undefined ? b.top : 0);
+    const bo = (b.bottom !== undefined ? b.bottom : b.height);
+    area.style.display = 'block';
+    area.style.top = ((t - view.top) / Math.max(1, view.height) * 100) + '%';
+    area.style.height = ((bo - t) / Math.max(1, view.height) * 100) + '%';
+    area.style.left = ((b.left || 0) / Math.max(1, b.width) * 100) + '%';
+    area.style.width = (((b.right || b.width) - (b.left || 0))
+                        / Math.max(1, b.width) * 100) + '%';
+  }
 
   const sizes = b.point_sizes || [];
   const size = sizes[st.point_size || 0];
@@ -790,6 +815,26 @@ function renderTapFocus() {
 
 // 預覽畫面對應到座標系的哪一段。座標系是 3:2，畫面通常是 16:9 —— 上下
 // 各被裁掉一塊，只有中間那條看得見。
+// 相機接受的對焦點範圍。
+//
+// 宣告的有效區 613 是**對焦框**能落在哪，而座標指的是框的中心 —— 所以中心
+// 的可達範圍要向內縮半個框。實測三種框大小的四個邊界全部符合：
+//   框 128 → y[149,533] x[160,864]   框 64 → y[117,565] x[128,896]
+//   框 32  → y[101,581] x[112,912]
+// 先前只夾到有效區，邊緣的點寫進去會再被相機往內拉，看起來就像對焦點
+// 全擠在中間。
+function reachable(b, sizeIndex) {
+  const H = b.height || 682, W = b.width || 1024;
+  const size = (b.point_sizes || [])[sizeIndex || 0] || [0, 0];
+  const hy = Math.floor(size[0] / 2), hx = Math.floor(size[1] / 2);
+  const top = (b.top !== undefined ? b.top : 0) + hy;
+  const bottom = (b.bottom !== undefined ? b.bottom : H) - hy;
+  const left = (b.left !== undefined ? b.left : 0) + hx;
+  const right = (b.right !== undefined ? b.right : W) - hx;
+  return {top: top, bottom: Math.max(top, bottom),
+          left: left, right: Math.max(left, right)};
+}
+
 function visibleSpan(b) {
   const H = b.height || 682, W = b.width || 1024;
   const img = $('liveview');
@@ -812,13 +857,11 @@ function onLiveviewClick(ev) {
   const b = focusBounds.point || {};
   const W = b.width || 1024;
   const view = visibleSpan(b);
-  const top = b.top !== undefined ? b.top : 0;
-  const bottom = b.bottom !== undefined ? b.bottom : (b.height || 682);
-  const left = b.left !== undefined ? b.left : 0;
-  const right = b.right !== undefined ? b.right : W;
-  // 垂直方向只映射畫面看得到的那一段，再夾進有效區域
-  const y = Math.min(bottom, Math.max(top, Math.round(view.top + fy * view.height)));
-  const x = Math.min(right, Math.max(left, Math.round(fx * W)));
+  const lim = reachable(b, st.point_size || 0);
+  // 垂直方向只映射畫面看得到的那一段，再夾進可達範圍
+  const y = Math.min(lim.bottom, Math.max(lim.top,
+    Math.round(view.top + fy * view.height)));
+  const x = Math.min(lim.right, Math.max(lim.left, Math.round(fx * W)));
   focusApply({point: [y, x]});
 }
 
@@ -956,23 +999,26 @@ function renderFocusControls() {
   });
 }
 
-function locRow(byName) {
-  const present = LOC_PARTS.filter(([name]) => byName[name]);
+function comboRow(byName, title, parts) {
+  const present = parts.filter(([name]) => byName[name]);
   if (!present.length) return '';
 
-  const parts = [], body = [];
+  const summary = [], body = [];
   for (const [name, short] of present) {
     const s = byName[name];
     const cur = values[name];
     if (cur !== null && cur !== undefined && cur !== 'Null')
-      parts.push(short + ' ' + labelFor(s, cur));
+      summary.push(short + ' ' + labelFor(s, cur));
+    // 相機宣告這一項現在不能設（能力清單是空的）—— 例如 CinemaDNG 下的
+    // 電子防手震。照樣畫成可選的話，選了只會被機身默默忽略。
+    const dis = s.writable === false ? ' disabled data-locked="1"' : '';
     body.push('<span class="grp"><span class="grp-label">' + short + '</span>' +
-      '<select data-set="' + name + '">' +
+      '<select data-set="' + name + '"' + dis + '>' +
       optionsFor(usefulChoices(s), cur, c => labelFor(s, c)) + '</select></span>');
   }
   return '<div class="opt"><div class="opt-head">' +
-    '<span class="opt-name">鏡頭校正</span>' +
-    '<span class="opt-cur">' + escapeHTML(parts.join(' · ') || '—') + '</span>' +
+    '<span class="opt-name">' + escapeHTML(title) + '</span>' +
+    '<span class="opt-cur">' + escapeHTML(summary.join(' · ') || '—') + '</span>' +
     '</div><div class="opts">' + body.join('') + '</div></div>';
 }
 
@@ -1088,7 +1134,12 @@ function settingsHTML() {
     if (name === '__format') { const r = formatRow(byName); if (r) rows.push(r); continue; }
     if (name === '__exposure') { const r = exposureRow(byName); if (r) rows.push(r); continue; }
     if (name === '__wb') { const r = wbRow(byName); if (r) rows.push(r); continue; }
-    if (name === '__loc') { const r = locRow(byName); if (r) rows.push(r); continue; }
+    if (name === '__loc') {
+      const r = comboRow(byName, '鏡頭校正', LOC_PARTS); if (r) rows.push(r); continue;
+    }
+    if (name === '__crop') {
+      const r = comboRow(byName, title, CROP_PARTS); if (r) rows.push(r); continue;
+    }
     const s = byName[name];
     if (!s) continue;
     const cur = values[name];
@@ -1101,6 +1152,10 @@ function settingsHTML() {
         if (w.length) choices = w;
       }
       const needsM = NEEDS_MANUAL[name] && !manual;
+      // 相機宣告這一項現在不能設（能力清單是空的）。例如 CinemaDNG 下的
+      // 電子防手震 —— fp 的電子防手震不支援 CinemaDNG，相機會把 810 的
+      // 清單清空。照樣畫成可按的話，按下去只會被機身默默忽略。
+      const unavail = s.writable === false;
       // 沒有單位也沒有標籤的整數選項 —— 我們知道相機接受這些值，
       // 但不知道它們代表什麼。與其讓使用者對著 1 / 2 猜，不如直說。
       const opaque = s.kind === 'int' && !s.unit && !s.labels &&
@@ -1108,8 +1163,9 @@ function settingsHTML() {
       rows.push(optRow(name, title, {
         current: cur,
         currentLabel: cur === null || cur === undefined ? '—' : labelFor(s, cur),
-        disabled: needsM,
-        note: needsM ? '需切換成 M 模式'
+        disabled: needsM || unavail,
+        note: unavail ? '目前的格式／模式下相機不開放'
+              : needsM ? '需切換成 M 模式'
               : opaque ? '數值意義尚未確認'
               : (s.inferred_labels ? '? = 推測未確認' : ''),
         choices: choices.map(v => ({value: v, label: labelFor(s, v)})),
