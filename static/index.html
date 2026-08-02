@@ -171,9 +171,6 @@
           <div id="lv-marker"></div>
         </div>
         <div id="liveview-off" class="liveview-off"></div>
-        <div class="btnrow" id="lv-tools" style="padding:8px 10px; line-height:normal">
-          <span class="hint" id="tapfocus-hint"></span>
-        </div>
       </div>
 
       <div class="panel">
@@ -812,9 +809,8 @@ function tapFocusOn() {
 function renderTapFocus() {
   const img = $('liveview'), marker = $('lv-marker'), area = $('lv-afarea');
   const tapFocus = tapFocusOn();
+  // 提示不必留 —— 虛線框和游標已經說明了可以點，而且它每次都在講同一句話。
   if (img) img.classList.toggle('tap', tapFocus);
-  setText($('tapfocus-hint'), tapFocus
-    ? 'tap inside the dashed frame to move the AF point (the camera snaps to its grid)' : '');
   if (!marker) return;
 
   const b = (focusBounds && focusBounds.point) || {};

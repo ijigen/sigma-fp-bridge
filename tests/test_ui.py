@@ -719,6 +719,13 @@ def test_the_focus_range_sits_after_the_title():
     assert "f-range-hint" in head, "範圍沒有接在 Focus 標題後面"
 
 
+def test_the_tap_to_focus_hint_is_gone():
+    """虛線框和 crosshair 游標已經說明了可以點，那行提示每次都在講同一句話。"""
+    html = HTML.read_text()
+    for gone in ("tapfocus-hint", "lv-tools", "the camera snaps to its grid"):
+        assert gone not in html, f"還留著 {gone}"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):
