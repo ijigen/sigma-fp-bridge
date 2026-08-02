@@ -3,17 +3,14 @@
 Control a **Sigma fp** over USB — focus, exposure, movie settings, recording,
 tethered stills — from a browser, a script, or anything that speaks HTTP.
 
-<!-- The <video> tag plays on renderers that allow it. GitHub strips it, so the
-     poster below stays as a fallback: there it is a clickable thumbnail.
-     To get a real player on GitHub the file has to be hosted by GitHub --
-     drag demo.mp4 into an issue or a release, then paste the resulting
-     user-attachments URL here on its own line. -->
+<!-- No inline player: GitHub strips <video>, and Forgejo does not rewrite a
+     relative src in raw HTML, so the tag is dead on both. Inline playback needs
+     a URL the host serves itself -- on GitHub, drag docs/demo.mp4 into an issue
+     or a release and paste the user-attachments URL here on its own line. -->
 
-<video src="docs/demo.mp4" poster="docs/demo.png" controls muted width="100%"></video>
+[![Watch the walkthrough](docs/demo.png)](docs/demo.mp4)
 
-[![The bridge driving a Sigma fp over USB](docs/demo.png)](docs/demo.mp4)
-
-*[▶ Walkthrough](docs/demo.mp4) — 1:49*
+*▶ [Walkthrough](docs/demo.mp4) — 1:49*
 
 > Built with [Claude Code](https://claude.com/claude-code). The protocol
 > reverse-engineering, the library patches and most of the code came out of
