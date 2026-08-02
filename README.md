@@ -1093,6 +1093,15 @@ Recovery is by power cycle, and nothing else found so far: switching to STILL an
 back, re-recording, release/acquire and restarting the bridge were each tried and
 none worked.
 
+**Plan on one downloadable take per power cycle.** In a controlled run a take
+recorded and downloaded cleanly, then a bare `release` + `acquire` — nothing else
+changed, no tag written — left the next take unservable. An earlier confounded
+version of that test wrote a tag in the same round and could not have separated
+the two. It is still only one data point, and there is one pointing the other
+way: the 224 MB download above began with `release` + `acquire` and worked. So
+the association is strong, the cause is not established, and the working
+assumption is the pessimistic one.
+
 This was written twice as "it clears on its own" before landing here, both times
 for the same reason. Transfers started working again, and the cause was picked
 from whatever had just been done in this session — when in fact the camera had
@@ -1109,9 +1118,24 @@ sensitive enough. Five takes with nothing changed at all span 31,224,912 to
 measured across tag values fell inside that, the largest at 6.9%. Without the
 control it would have read as four separate findings.
 
-That leaves downloading the take and reading its internals — audio track,
-sample rate, real bitrate — which needs the transfer working, so it costs one
-power cycle per data point unless release/acquire turns out to be safe.
+That leaves downloading the take and reading its internals — audio track, sample
+rate, real bitrate — which needs the transfer working. Since `release` + `acquire`
+is what makes a second take downloadable, and is also what appears to cost the
+transfer, that is one power cycle per data point.
+
+The reference a take is compared against:
+
+```
+30,421,056 b   4.004 s   60.5 Mbps   timescale 24000
+  vide/avc1 [1920x1080] @24000, 96 samples
+  soun/sowt [2ch/16bit] @48000, 192192 samples
+  tmcd/tmcd             @24000
+```
+
+Reading that took fixing the inspector twice — a hand-rolled atom walker missed
+the 64-bit size form and called a good file truncated, and QuickTime keeps a
+second `hdlr` inside `minf` with subtype `alis`, which overwrote every track's
+type until only the first one per track was taken.
 
 That mapping is worth keeping: **`CanSetInfo5` tag = `DataGroupMovie` tag + 100**,
 confirmed on every setting already identified — 150/50 record format, 151/51
