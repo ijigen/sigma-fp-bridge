@@ -35,20 +35,32 @@ def known_opcodes() -> dict[str, int]:
     return out
 
 
-def recv_raw(cam, opcode: str, params: list[int] | None = None) -> bytes:
+def recv_raw(cam, opcode, params: list[int] | None = None) -> bytes:
     """發一個 data-in 的 PTP 指令，回傳未經解析的 payload。
 
     Args:
-        opcode: sigma-ptpy 的 OperationCode 名稱，例如 "SigmaGetMovieFileInfo"。
+        opcode: sigma-ptpy 的 OperationCode 名稱（例如 "SigmaGetMovieFileInfo"），
+            或直接給數值（例如 0x9010）來探未文件化的指令。ptpy 的
+            OperationCode 是 construct 的 Enum 且 default=Pass，未知數值會原樣
+            通過，所以數字送得出去。
         params: 指令參數。空的話送不帶參數的版本 —— 有些指令的差別就在這裡。
 
+    ⚠️ 用數值探未知 opcode 是有風險的：沒辦法知道那是讀取還是寫入指令，而這台
+    相機對不該收的指令的反應包括「USB 逾時後掉線」，只能靠斷電復原。
+
     Raises:
-        ProbeError: opcode 不認得，或相機拒絕。
+        ProbeError: opcode 名稱不認得，或相機拒絕。
     """
     from construct import Container
 
-    if opcode not in known_opcodes():
-        raise ProbeError(f"不認得的 opcode：{opcode}")
+    if isinstance(opcode, str):
+        if opcode not in known_opcodes():
+            raise ProbeError(f"不認得的 opcode：{opcode}")
+    elif isinstance(opcode, int):
+        if not 0x1000 <= opcode <= 0xFFFF:
+            raise ProbeError(f"opcode 超出範圍：0x{opcode:04x}")
+    else:
+        raise ProbeError("opcode 必須是名稱字串或數值")
     ptp = Container(
         OperationCode=opcode,
         SessionID=cam._session,

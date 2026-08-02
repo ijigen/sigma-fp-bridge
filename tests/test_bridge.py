@@ -368,6 +368,40 @@ async def test_status_reports_card_space_and_battery():
     print(f"✓ /api/status 帶出相機狀態（卡片剩餘 {status['media_free_space']}）")
 
 
+async def test_probe_accepts_numeric_opcodes_for_undocumented_commands():
+    """探未文件化指令要能直接給數值。
+
+    sigma-ptpy 只認得 28 個 Sigma opcode，0x9010~0x9037 之間還有十幾個空號。
+    ptpy 的 OperationCode 是 construct 的 Enum 且 default=Pass，所以未知數值
+    原樣送得出去。範圍檢查留著 —— 打錯字送出一個荒謬的值沒有意義。
+    """
+    reset()
+    cam = fake_camera.FakeCamera()
+    seen = []
+    cam.recv = lambda ptp: (seen.append(ptp.OperationCode),
+                            types.SimpleNamespace(Data=b"\x01\x02"))[1]
+    B.state.camera = cam
+    async with running_worker():
+        class Req:
+            method = "POST"
+
+            def __init__(self, body):
+                self._body = body
+
+            async def json(self):
+                return self._body
+
+        r = json.loads((await B.handle_ptp_probe(Req({"opcode": "0x9010"}))).body.decode())
+        assert seen == [0x9010], seen
+        assert r["opcode"] == "0x9010", r
+        assert r["bytes"] == 2, r
+
+        bad = await B.handle_ptp_probe(Req({"opcode": "0x0001"}))
+        assert bad.status == 502, bad.status
+        assert "超出範圍" in json.loads(bad.body.decode())["error"]
+    print("✓ 探測端點收得下數值 opcode（用來探未文件化指令）")
+
+
 async def test_set_position_coalesces():
     reset()
     async with running_worker():

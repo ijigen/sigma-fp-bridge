@@ -1714,8 +1714,13 @@ async def handle_ptp_probe(request: web.Request) -> web.Response:
         return web.json_response({"error": "需要 JSON body"}, status=400)
 
     opcode = body.get("opcode")
-    if not isinstance(opcode, str):
-        return web.json_response({"error": "opcode 必須是字串"}, status=400)
+    if isinstance(opcode, str) and opcode.startswith("0x"):
+        try:
+            opcode = int(opcode, 16)          # 探未文件化指令用
+        except ValueError:
+            return web.json_response({"error": "opcode 十六進位格式不正確"}, status=400)
+    if not isinstance(opcode, (str, int)):
+        return web.json_response({"error": "opcode 必須是名稱或數值"}, status=400)
     params = body.get("params") or []
     if not isinstance(params, list) or not all(isinstance(x, int) for x in params):
         return web.json_response({"error": "params 必須是整數陣列"}, status=400)
@@ -1724,7 +1729,7 @@ async def handle_ptp_probe(request: web.Request) -> web.Response:
     if cam is None:
         return web.json_response({"error": "not connected"}, status=503)
 
-    if state.recording and opcode == "SigmaGetPartialMovieFile":
+    if state.recording and opcode in ("SigmaGetPartialMovieFile", 0x9037):
         # 實測兩次都出事：一次讓相機不再服務影片傳輸，一次直接 USBTimeoutError
         # 之後從 USB 上掉線。這是研究端點，但這個組合會弄壞硬體狀態，擋掉。
         return web.json_response(
@@ -1742,7 +1747,7 @@ async def handle_ptp_probe(request: web.Request) -> web.Response:
         return web.json_response({"error": f"{type(e).__name__}: {e}"}, status=502)
 
     out = ptp_probe.describe(raw)
-    out["opcode"] = opcode
+    out["opcode"] = opcode if isinstance(opcode, str) else f"0x{opcode:04x}"
     out["params"] = params
     return web.json_response(out)
 
