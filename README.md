@@ -1,7 +1,14 @@
-# sigma-fp-focus-bridge
+# sigma-fp-bridge
 
-USB-driven focus control for **Sigma fp** via the camera's official PTP protocol.
-Drives the lens's internal motor directly — no external follow-focus rig.
+Camera control for **Sigma fp** over USB, via the vendor's PTP protocol. Focus,
+exposure, movie settings, recording, tethered capture and pulling footage back —
+exposed over HTTP and WebSocket so anything can drive the camera.
+
+Started as focus control alone, which is where the lens motor part comes from:
+it drives the lens's internal motor directly, with no external follow-focus rig.
+The name changed when the rest outgrew it; the git history still says
+`sigma-fp-focus-bridge` and that is deliberate — the record of what was tried,
+got wrong and corrected is a large part of what this repo is worth.
 
 ![demo](docs/demo.gif) <!-- 影片連結之後補 -->
 
@@ -15,11 +22,14 @@ Drives the lens's internal motor directly — no external follow-focus rig.
 A Python bridge server that talks to Sigma fp over USB PTP and exposes:
 
 - **WebSocket API** for real-time focus control (`set_position`, `get_state`, calibration)
-- **REST API** for one-shot HTTP commands
+- **REST API** for one-shot HTTP commands — settings, recording, capture, download
 - **MJPEG live view stream** browsers / OpenCV / OBS can consume
 - **Bonjour / mDNS broadcast** so iOS clients can auto-discover the bridge
 - **Browser UI** with live preview, focus control, exposure and movie settings,
   recording, and distance calibration
+- **Tethered capture** — JPEG, DNG or both, straight to disk
+- **Movie download** over USB at around 56 MB/s
+- **A raw PTP probe** for carrying on the reverse engineering
 
 You point your camera at something, slide a number on the screen, and the lens motor moves to that position.
 
@@ -82,8 +92,8 @@ found. `brew install libusb` still works if you prefer a system one.
 ### 2. Clone + setup
 
 ```bash
-git clone https://github.com/<you>/sigma-fp-focus-bridge.git
-cd sigma-fp-focus-bridge
+git clone https://github.com/<you>/sigma-fp-bridge.git
+cd sigma-fp-bridge
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
