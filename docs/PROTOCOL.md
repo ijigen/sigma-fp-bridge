@@ -75,8 +75,35 @@ around release/acquire.
 
 ## How data is encoded
 
-Almost every vendor operation moves an **IFD** — the same shape as a TIFF
-directory, little-endian throughout.
+**There are two encodings, and which one you get depends on the operation.**
+Assuming one shape for everything is the first thing that will break your
+implementation.
+
+| Encoding | Used by |
+|---|---|
+| Bitmask struct | DataGroup 1, 2, 3, 4, 5 |
+| IFD | ApiConfig, DataGroupFocus, DataGroupMovie, CanSetInfo5 |
+
+### Bitmask struct — DataGroup 1 to 5
+
+```
+offset  size  field
+0       1     header        arbitrary, used for parity
+1       2     FieldPresent  big-endian bitmask
+3       ...   the present fields, in the schema's fixed order
+last    1     parity
+```
+
+`FieldPresent` says which fields follow. **The fields are not tagged** — they
+appear in a fixed order and you work out which is which by walking the bitmask.
+Set a bit to include that field in a write; leave it clear and the camera keeps
+its current value.
+
+Note `FieldPresent` is **big-endian** while the values inside are little-endian.
+
+### IFD — everything else
+
+The same shape as a TIFF directory, little-endian throughout.
 
 ```
 offset  size  field
@@ -155,20 +182,88 @@ unknown. The rest are silent or drop the device off the bus.
 
 ## Settings: the data groups
 
-Settings live in six groups. Reading a group gives you an IFD; writing takes
-one. **One write touches one group**, so batching changes means sorting them by
-group first.
+Settings live in six groups. **One write touches one group**, so batching
+changes means sorting them by group first.
 
-`camera_settings.py` has the full table. Summary:
+Groups 1 to 5 use the bitmask struct; Movie uses an IFD. The bit values below
+are the `FieldPresent` mask — set the bit and the field is included.
 
-| Group | Holds |
-|---|---|
-| 1 | aperture, shutter, ISO, ISO auto, exposure compensation |
-| 2 | exposure mode, metering, white balance, image quality, resolution, drive mode |
-| 3 | colour mode, colour space, destination to save |
-| 4 | DNG quality, lens corrections, stabilisation, DC crop, HDR, fill light |
-| 5 | colour temperature, aspect ratio, tone, interval timer |
-| Movie | capture mode, shutter angle, record format, resolution, frame rate, audio |
+### DataGroup1 — `0x9012` / `0x9016`
+
+| Bit | Field | Type |
+|---|---|---|
+| `0x8000` | ABSetting | enum |
+| `0x4000` | ABValue | uint8 |
+| `0x2000` | ExpComp | uint8, APEX |
+| `0x1000` | ISOSpeed | uint8, APEX |
+| `0x0800` | ISOAuto | enum |
+| `0x0400` | ProgramShift | enum |
+| `0x0200` | Aperture | uint8, APEX |
+| `0x0100` | ShutterSpeed | uint8, APEX |
+| `0x0040` | ExpCompExcludeAB | uint8 |
+| `0x0020` | ABShotRemainNumber | uint8 |
+| `0x0010` | BatteryState | uint8, read-only |
+| `0x0008` | CurrentLensFocalLength | fixed-point uint16, read-only |
+| `0x0004` | MediaStatus | uint8, read-only |
+| `0x0002` | MediaFreeSpace | uint16, read-only |
+| `0x0001` | FrameBufferState | uint8, read-only |
+
+### DataGroup2 — `0x9013` / `0x9017`
+
+| Bit | Field | Type |
+|---|---|---|
+| `0x0800` | AEMeteringMode | enum |
+| `0x0400` | ExposureMode | enum |
+| `0x0200` | SpecialMode | enum |
+| `0x0100` | DriveMode | enum |
+| `0x0080` | ImageQuality | enum |
+| `0x0040` | Resolution | enum |
+| `0x0020` | WhiteBalance | enum |
+| `0x0008` | FlashSetting | enum |
+| `0x0004` | FlashMode | enum |
+| `0x0001` | FlashType | enum |
+
+### DataGroup3 — `0x9014` / `0x9018`
+
+| Bit | Field | Type |
+|---|---|---|
+| `0x8000` | LensTeleFocalLength | fixed-point uint16, read-only |
+| `0x4000` | LensWideFocalLength | fixed-point uint16, read-only |
+| `0x2000` | BatteryKind | enum, read-only |
+| `0x1000` | ColorMode | enum |
+| `0x0800` | ColorSpace | enum |
+| `0x0080` | DestToSave | enum |
+| `0x0020` | TimerSound | uint8 |
+| `0x0002` | AFBeep | uint8 |
+| `0x0001` | AFAuxLight | enum |
+
+### DataGroup4 — `0x9023` / `0x9024`
+
+| Bit | Field | Type |
+|---|---|---|
+| `0x8000` | ContShootSpeed | enum |
+| `0x4000` | HighISOExt | enum |
+| `0x2000` | LVMagnifyRatio | enum |
+| `0x1000` | DCCropMode | enum |
+| `0x0020` | ShutterSound | uint8 |
+| `0x0010` | EImageStab | enum |
+| `0x0008` | LOC | struct — the four lens corrections together |
+| `0x0004` | FillLight | int8 |
+| `0x0002` | DNGQuality | enum |
+| `0x0001` | HDR | enum |
+
+`LOC` is one bit covering distortion, chromatic aberration, diffraction and
+vignetting; they cannot be written separately.
+
+### DataGroup5 — `0x9027` / `0x9028`
+
+| Bit | Field | Type |
+|---|---|---|
+| `0x2000` | ToneEffect | enum |
+| `0x0800` | AspectRatio | enum |
+| `0x0200` | ColorTemp | uint16, kelvin |
+| `0x0100` | IntervalTimer | struct — seconds and frame count |
+| `0x0080` | AFAuxLightEF | enum |
 
 Exposure values are **APEX-encoded**, not raw. f/2.0 is `24`, not `2`.
 sigma-ptpy ships the conversion tables and one of its aperture codes is wrong
