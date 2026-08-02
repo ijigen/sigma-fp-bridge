@@ -1111,7 +1111,20 @@ inputs are not all observable, "it works now" does not identify what fixed it.
 Note also that *writing* to tag 10 may be the trigger, not the value: one break
 followed a write of 1, the value it already held.
 
-Tags 11, 12 and 13 are still unidentified, and one line of attack is closed:
+Tags 11, 12, 13 and 62 accept writes and read back changed, and affect nothing
+observable from the host. A take recorded with `tag 11 = 2` is structurally
+identical to the reference — 4.004 s, timescale 24000, `avc1` 1920×1080 with 96
+samples, `sowt` 2ch/16bit 48 kHz with 192192 samples, `tmcd` — differing only in
+byte count, by 0.7%, well inside the noise. Live view is unmoved too: every value
+of all four tags returns a 1620×911 frame within 1% of the others.
+
+Two independent views of the imaging pipeline, and neither responds. Whatever
+these configure is outside both — HDMI output, a body-side display option, or a
+feature this body does not have. Identifying them needs an observable this
+project does not have: an HDMI monitor or recorder to watch while toggling, or
+the SDK's own DataGroupMovie tag table.
+
+One earlier line of attack is closed:
 comparing the file size the camera reports after a fixed-length take is not
 sensitive enough. Five takes with nothing changed at all span 31,224,912 to
 33,199,960 bytes — 6.1% — because H.264 tracks the scene. Every difference
