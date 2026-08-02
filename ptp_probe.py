@@ -61,6 +61,37 @@ def recv_raw(cam, opcode: str, params: list[int] | None = None) -> bytes:
         raise ProbeError(f"{type(e).__name__}: {e}") from e
 
 
+def drain_events(cam, seconds: float = 2.0, interval: float = 0.05) -> list[dict]:
+    """把相機發出的 PTP 事件收集一段時間。
+
+    ptpy 有一條背景執行緒在輪詢事件端點並丟進佇列，這裡只是把佇列讀乾淨 ——
+    **不對相機發任何指令**，所以錄影期間呼叫是安全的，也不會佔住 worker。
+
+    用途：錄影當下相機有沒有主動說些什麼？影片檔案要到錄完才登錄，所以如果
+    真有「邊錄邊取」的機制，事件是唯一還沒排除的入口。
+    """
+    import time
+
+    out: list[dict] = []
+    deadline = time.monotonic() + max(0.0, seconds)
+    while time.monotonic() < deadline:
+        try:
+            evt = cam.event(wait=False)
+        except Exception as e:
+            out.append({"error": f"{type(e).__name__}: {e}"})
+            break
+        if evt is None:
+            time.sleep(interval)
+            continue
+        out.append({
+            "code": str(getattr(evt, "EventCode", None)),
+            "session": getattr(evt, "SessionID", None),
+            "transaction": getattr(evt, "TransactionID", None),
+            "params": [int(x) for x in (getattr(evt, "Parameter", None) or [])],
+        })
+    return out
+
+
 def describe(raw: bytes) -> dict[str, Any]:
     """把 payload 攤成方便肉眼比對的幾種視角。"""
     words = [int.from_bytes(raw[i:i + 4], "little")

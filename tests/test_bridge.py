@@ -262,6 +262,40 @@ async def test_download_is_refused_while_recording():
     print("✓ 錄影中拒絕下載，並說明後果")
 
 
+async def test_event_probe_drains_without_touching_the_camera():
+    """事件探測不能對相機發任何指令 —— 錄影期間也要能安全呼叫。
+
+    ptpy 已經有背景執行緒在輪詢事件並丟進佇列，這裡只讀佇列。錄影中對相機
+    發指令是這個專案代價最高的錯誤（要一個還沒登錄的檔案會讓相機掉線）。
+    """
+    reset()
+    cam = fake_camera.FakeCamera()
+    queued = [
+        types.SimpleNamespace(EventCode="ObjectAdded", SessionID=1,
+                              TransactionID=7, Parameter=[42]),
+        None,
+    ]
+    calls = []
+
+    def fake_event(wait=False):
+        calls.append(wait)
+        return queued.pop(0) if queued else None
+
+    cam.event = fake_event
+    B.state.camera = cam
+    async with running_worker():
+        before = len(cam.calls)
+        request = types.SimpleNamespace(query={"seconds": "0.3"})
+        resp = await B.handle_event_probe(request)
+        body = json.loads(resp.body.decode())
+        assert body["count"] == 1, body
+        assert body["events"][0]["code"] == "ObjectAdded", body
+        assert body["events"][0]["params"] == [42], body
+        assert calls and all(w is False for w in calls), "不能用阻塞式等待"
+        assert len(cam.calls) == before, f"對相機發了指令：{cam.calls[before:]}"
+    print(f"✓ 事件探測只讀佇列，沒有對相機發指令（收到 {body['count']} 個事件）")
+
+
 async def test_set_position_coalesces():
     reset()
     async with running_worker():

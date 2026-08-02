@@ -1709,6 +1709,27 @@ async def handle_ptp_probe(request: web.Request) -> web.Response:
     return web.json_response(out)
 
 
+async def handle_event_probe(request: web.Request) -> web.Response:
+    """研究用：收集相機主動發出的 PTP 事件。
+
+    不對相機發任何指令 —— ptpy 已經有背景執行緒在輪詢事件，這裡只是把佇列
+    讀乾淨。所以錄影期間也可以安全呼叫，而且不需要排進相機工作佇列。
+    """
+    cam = state.camera or state.released_camera
+    if cam is None:
+        return web.json_response({"error": "not connected"}, status=503)
+    try:
+        seconds = min(10.0, max(0.1, float(request.query.get("seconds", 2))))
+    except ValueError:
+        return web.json_response({"error": "seconds 必須是數字"}, status=400)
+
+    loop = asyncio.get_running_loop()
+    events = await loop.run_in_executor(
+        None, lambda: ptp_probe.drain_events(cam, seconds))
+    return web.json_response({"seconds": seconds, "count": len(events),
+                              "events": events})
+
+
 async def handle_dump(request: web.Request) -> web.Response:
     """把 CanSetInfo5 / DataGroupMovie 的原始 IFD 以 JSON 吐出來。
 
@@ -1938,6 +1959,7 @@ def make_app() -> web.Application:
     app.router.add_get("/ws", handle_ws)
     app.router.add_get("/api/status", handle_status)
     app.router.add_get("/api/probe/ptp", handle_ptp_probe)
+    app.router.add_get("/api/probe/events", handle_event_probe)
     app.router.add_post("/api/probe/ptp", handle_ptp_probe)
     app.router.add_get("/api/focus", handle_focus_get)
     app.router.add_post("/api/focus", handle_focus_post)
