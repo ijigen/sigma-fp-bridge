@@ -1076,6 +1076,17 @@ inputs are not all observable, "it works now" does not identify what fixed it.
 Note also that *writing* to tag 10 may be the trigger, not the value: one break
 followed a write of 1, the value it already held.
 
+Tags 11, 12 and 13 are still unidentified, and one line of attack is closed:
+comparing the file size the camera reports after a fixed-length take is not
+sensitive enough. Five takes with nothing changed at all span 31,224,912 to
+33,199,960 bytes — 6.1% — because H.264 tracks the scene. Every difference
+measured across tag values fell inside that, the largest at 6.9%. Without the
+control it would have read as four separate findings.
+
+That leaves downloading the take and reading its internals — audio track,
+sample rate, real bitrate — which needs the transfer working, so it costs one
+power cycle per data point unless release/acquire turns out to be safe.
+
 That mapping is worth keeping: **`CanSetInfo5` tag = `DataGroupMovie` tag + 100**,
 confirmed on every setting already identified — 150/50 record format, 151/51
 CinemaDNG quality, 152/52 MOV quality, 160/60 resolution, 161/61 frame rate. It
