@@ -857,6 +857,13 @@ async def acquire_camera(restore: bool = True) -> bool:
     """
     state.released_by_user = False
 
+    # 已經連著就什麼都不要做。try_connect_camera() 會先 close_camera(old)
+    # 再重開，而 close_camera 會釋放 USB interface —— 那個空檔 macOS 會把
+    # 相機搶回去（Gotcha 5）。對一個本來就正常的連線做這件事，等於拿它去賭。
+    if state.camera_connected and state.camera is not None:
+        log.info("已經連著相機，acquire 不做任何事")
+        return True
+
     # 交還時保留下來的連線可以直接重新進入 API 模式，省掉一次 USB 爭奪
     cam = state.released_camera
     state.released_camera = None

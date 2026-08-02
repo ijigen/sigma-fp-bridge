@@ -469,6 +469,26 @@ async def test_focus_point_face_eye_and_area_round_trip():
     print("✓ 對焦點 / 臉眼偵測 / 對焦區域可讀可寫，不合法的值被擋下")
 
 
+async def test_acquire_does_nothing_when_already_connected():
+    """已經連著就不要重連。
+
+    try_connect_camera 會先 close_camera(old) 再重開，而 close_camera 會釋放
+    USB interface —— 那個空檔 macOS 會把相機搶回去。對一個正常運作的連線做
+    這件事，等於拿它去賭，而且輸了就是斷線。
+    """
+    reset()
+    B.state.camera = CAM
+    B.state.camera_connected = True
+    async with running_worker():
+        before = CAM.count("close_application") + CAM.count("shutdown")
+        ok = await B.acquire_camera(restore=False)
+        assert ok is True
+        assert B.state.camera is CAM, "相機物件被換掉了"
+        after = CAM.count("close_application") + CAM.count("shutdown")
+        assert after == before, f"acquire 動了 USB：{after - before} 次關閉"
+    print("✓ 已連線時 acquire 不碰 USB")
+
+
 async def test_set_position_coalesces():
     reset()
     async with running_worker():
