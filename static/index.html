@@ -161,6 +161,13 @@
       </div>
 
       <div class="panel">
+        <h2>錄影</h2>
+        <div class="btnrow">
+          <button id="btn-rec" class="danger" onclick="toggleRec()">● 開始錄影</button>
+          <span class="hint" id="rec-elapsed"></span>
+        </div>
+      </div>
+      <div class="panel">
         <h2>對焦</h2>
         <div class="row">
           <span class="label">位置</span>
@@ -172,13 +179,6 @@
         <div id="focus-controls" style="margin-top:12px; padding-top:12px; border-top:1px solid #2a2a2a"></div>
       </div>
 
-      <div class="panel">
-        <h2>錄影</h2>
-        <div class="btnrow">
-          <button id="btn-rec" class="danger" onclick="toggleRec()">● 開始錄影</button>
-          <span class="hint" id="rec-elapsed"></span>
-        </div>
-      </div>
     </div>
 
     <div>
@@ -466,6 +466,14 @@ const FRIENDLY = {
   cont_shoot_speed: {Auto:'自動', High:'高', Medium:'中', Low:'低'},
   hdr: {Off:'關', Auto:'自動', Null:'—',
         PlusMinus1:'±1', PlusMinus2:'±2', PlusMinus3:'±3'},
+  // fp 選單上的名字。1 和 13–16 是實測定出來的（見 camera_settings.FpColorMode）
+  color_mode: {
+    Standard:'標準', Vivid:'鮮豔', Neutral:'自然', Portrait:'人像', Landscape:'風景',
+    Cinema:'電影', WarmGold:'暖金', TealAndOrange:'青橘', SunsetRed:'夕陽紅',
+    ForestGreen:'森林綠', PowderBlue:'粉藍', FovClassicBlue:'FOV 經典藍',
+    FovClassicYellow:'FOV 經典黃', Monochrome:'黑白', Off:'關（供調色）',
+    Duotone:'雙色調',
+  },
   focus_mode: {MF:'手動 MF', AF:'自動 AF', AF_S:'單次 AF-S', AF_C:'連續 AF-C'},
   face_eye_af: {Off:'關', FaceOnly:'僅臉部', FaceEyeAuto:'臉部+眼睛'},
   focus_area: {MultiAutoFocusPoints:'多點', OnePointSelection:'單點', Tracking:'追蹤'},

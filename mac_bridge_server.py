@@ -744,7 +744,7 @@ def _apply_and_verify(changes: dict) -> dict:
     rejected = {}
     for name, wanted in applied.items():
         got = actual.get(name)
-        if got is None or _roughly_equal_setting(got, wanted):
+        if got is None or _roughly_equal_setting(name, got, wanted):
             continue
         # 錄影快門跟靜態快門一樣會被自動曝光搶走 —— 實測：ProgramAuto 下
         # 寫 shutter_angle 沒作用，切到 Manual 就成功。給出同樣的提示。
@@ -761,9 +761,9 @@ def _apply_and_verify(changes: dict) -> dict:
     return {"applied": applied, "rejected": rejected}
 
 
-def _roughly_equal_setting(a, b) -> bool:
-    from camera_settings import _roughly_equal
-    return _roughly_equal(a, b)
+def _roughly_equal_setting(name: str, got, wanted) -> bool:
+    from camera_settings import _roughly_equal, canonical_value
+    return _roughly_equal(got, canonical_value(name, wanted))
 
 
 async def cam_apply_settings(changes: dict) -> dict:

@@ -469,29 +469,35 @@ def test_unknown_but_declared_values_can_be_written():
 def test_choices_follow_what_the_camera_declares():
     """選項要以相機宣告的為準，enum 只負責提供名稱。
 
-    使用者回報色彩模式少了一個 Off。查下去是這台相機宣告 16 個色彩模式
-    （13/14/15/16 在內），而 sigma-ptpy 的 enum 只認得 12 個 —— UI 的選項
-    全部來自 enum，所以那四個看不到也選不了。函式庫跟不上韌體是常態，
-    以相機說的為準才不會漏。
+    使用者回報色彩模式少了一個 Off。查下去是這台相機宣告 16 個色彩模式，
+    而 sigma-ptpy 的 enum 只認得 12 個 —— UI 的選項全部來自 enum，所以那四
+    個看不到也選不了。函式庫跟不上韌體是常態，以相機說的為準才不會漏。
+
+    那 4 個值後來實測認出來了（見 FpColorMode），但這條規則不能因此鬆掉：
+    下一次韌體再加一個，一樣要以相機宣告的為準。
     """
-    import sigma_ptpy.enum as E
     declared = [15, 14, 13, 12, 8, 7, 6, 10, 9, 5, 4, 3, 2, 1, 11, 16]
     entries = {e["name"]: e for e in
                CS.describe(choice_values={"color_mode": declared},
                            current_values={"color_mode": "Standard"})}
     choices = entries["color_mode"]["choices"]
     assert len(choices) == len(declared), f"{len(choices)} 個選項，相機說有 {len(declared)}"
-    # enum 認得的用名稱，不認得的用數字 —— 不認得不代表不能用
-    assert "Cinema" in choices, choices
-    for unknown in ("13", "14", "15", "16"):
-        assert unknown in choices, f"相機宣告的 {unknown} 沒有出現在選項裡"
+    assert "Cinema" in choices and "TealAndOrange" in choices, choices
+
+    # 相機宣告一個連自訂 enum 也不認得的值時，仍要顯示成數字讓人選得到 ——
+    # 不認得不代表不能用。
+    plus = {e["name"]: e for e in
+            CS.describe(choice_values={"color_mode": declared + [17]},
+                        current_values={"color_mode": "Standard"})}["color_mode"]["choices"]
+    assert "17" in plus, f"未知的 17 沒出現在選項裡：{plus}"
+
     # 沒有相機資料、或驗證不了目前值時退回 enum，不能整個變空
     fallback = {e["name"]: e for e in CS.describe()}["color_mode"]["choices"]
-    assert fallback == [m.name for m in E.ColorMode], fallback
+    assert fallback == [m.name for m in CS.FpColorMode], fallback
     unverifiable = {e["name"]: e for e in
                     CS.describe(choice_values={"color_mode": declared})}["color_mode"]["choices"]
-    assert unverifiable == [m.name for m in E.ColorMode], "驗不了目前值卻照用了"
-    print(f"✓ 選項跟著相機走（{len(choices)} 個，其中 4 個 enum 不認得）")
+    assert unverifiable == [m.name for m in CS.FpColorMode], "驗不了目前值卻照用了"
+    print(f"✓ 選項跟著相機走（{len(choices)} 個，未知值顯示成數字）")
 
 
 def test_an_empty_capability_list_marks_the_setting_unsettable():
@@ -512,6 +518,50 @@ def test_a_missing_capability_entry_leaves_the_setting_settable():
     by = {d["name"]: d for d in CS.describe(choice_values={})}
     assert by["electronic_stabilization"]["writable"] is True
     print("✓ 沒宣告 ≠ 不可設定")
+
+
+def test_fp_colour_modes_do_not_come_from_the_sd_quattro_table():
+    """sigma-ptpy 的 ColorMode 是 SD Quattro 時代的表：12 個值，第一個叫
+    Sepia。fp 沒有 Sepia 模式（那是 Monochrome 底下的色調），官方清單是
+    16 個，跟相機宣告的 16 個值數量相符。
+
+    值 1 和 13–16 是實測定的：每個值寫進去、抓一張即時預覽影格回來看。
+    """
+    import sigma_ptpy.enum as E
+    assert len(CS.FpColorMode) == 16, "fp 有 16 個色彩模式"
+    assert CS.FpColorMode(1).name == "WarmGold", "值 1 在 fp 上不是 Sepia"
+    assert not hasattr(CS.FpColorMode, "Sepia"), "fp 沒有 Sepia 模式"
+    for name in ("TealAndOrange", "Off", "PowderBlue", "Duotone"):
+        assert hasattr(CS.FpColorMode, name), f"少了 {name}"
+    assert CS.BY_NAME["color_mode"].enum_cls is CS.FpColorMode, \
+        "色彩模式又接回 sigma-ptpy 的表了"
+
+    # 解碼要以我們的表為準。sigma-ptpy 解出來的 member 會帶著它自己的名字，
+    # 先看 raw.name 的話值 1 會顯示成 Sepia。
+    got = CS.decode_value(CS.BY_NAME["color_mode"], E.ColorMode(1))
+    assert got == "WarmGold", f"解碼被 sigma-ptpy 的名字蓋掉了：{got}"
+    print("✓ 色彩模式用 fp 自己的 16 個值，不是 SD Quattro 的表")
+
+
+def test_a_setting_written_as_a_number_is_not_reported_as_rejected():
+    """回讀的是名稱，寫進去的是數字 —— 不換算成同一種表示法就永遠不相等。
+
+    實測：16 個色彩模式全部誤報成「相機沒有接受」，但相機其實吃了，畫面
+    上的效果也變了。使用者看到的就是「顏色明明變了，log 卻說沒接受」。
+    """
+    cam = fake_camera.FakeCamera()
+    cam.groups[3]["ColorMode"] = 13          # 相機現在就是這個值
+    rejected = CS.verify_applied(cam, {"color_mode": 13})
+    assert "color_mode" not in rejected, f"寫成功卻被報成拒絕：{rejected}"
+
+    # 名稱寫入一樣不能誤報
+    assert "color_mode" not in CS.verify_applied(cam, {"color_mode": "TealAndOrange"})
+
+    # 真的沒吃還是要報出來 —— 否則「全部都算相符」也會通過這條測試
+    cam.groups[3]["ColorMode"] = 3
+    assert "color_mode" in CS.verify_applied(cam, {"color_mode": 13}), \
+        "相機沒吃卻沒報出來"
+    print("✓ 數字寫入 / 名稱回讀會換算後再比對")
 
 
 if __name__ == "__main__":

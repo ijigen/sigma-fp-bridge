@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import IntEnum
 from typing import Any
 
 from sigma_ptpy import enum as E
@@ -67,6 +68,41 @@ class Setting:
     applies_to: str = "both"
 
 
+class FpColorMode(IntEnum):
+    """fp 機身選單上的 16 個色彩模式。
+
+    不用 sigma-ptpy 的 ColorMode —— 那份表是 SD Quattro 時代的，只有 12 個
+    值，而且第一個叫 Sepia。fp 沒有 Sepia 模式（fp 的 Sepia 是 Monochrome
+    底下的色調子選項），官方的色彩模式清單正好是 16 個，跟相機用
+    CanSetInfo5 tag 320 宣告的 16 個值數量相符。
+
+    1 和 13–16 是實測定出來的：每個值寫進去、抓一張即時預覽影格回來看。
+      1  單一暖金色調、畫面沒有其他顏色 → Warm Gold
+      13 衣服圖案的青與橘被推開，牆面維持中性 → Teal and Orange
+      14 極平、低對比、幾乎無彩 → Off（給調色用的最小處理）
+      15 明亮通透的淡青 → Powder Blue
+      16 洋紅與橘的雙色漸層 → Duotone
+    9 / 10 / 12 沿用 sigma-ptpy 的位置但改成 fp 選單上的全名。
+    """
+
+    WarmGold = 1
+    Monochrome = 2
+    Standard = 3
+    Vivid = 4
+    Neutral = 5
+    Portrait = 6
+    Landscape = 7
+    FovClassicBlue = 8
+    SunsetRed = 9
+    ForestGreen = 10
+    Cinema = 11
+    FovClassicYellow = 12
+    TealAndOrange = 13
+    Off = 14
+    PowderBlue = 15
+    Duotone = 16
+
+
 SETTINGS: tuple[Setting, ...] = (
     # ── 曝光三要素 ───────────────────────────────────────────────────
     Setting("exposure_mode", 2, "ExposureMode", "enum", enum_cls=E.ExposureMode,
@@ -101,7 +137,7 @@ SETTINGS: tuple[Setting, ...] = (
             note="實測錄影模式下寫入無效（相機收下後不改變）。"),
 
     # ── 影像風格 ─────────────────────────────────────────────────────
-    Setting("color_mode", 3, "ColorMode", "enum", enum_cls=E.ColorMode),
+    Setting("color_mode", 3, "ColorMode", "enum", enum_cls=FpColorMode),
     Setting("color_space", 3, "ColorSpace", "enum", enum_cls=E.ColorSpace,
             applies_to="stills",
             note="實測錄影模式下寫入無效。"),
@@ -232,13 +268,26 @@ def decode_value(setting: Setting, raw) -> Any:
     if raw is None:
         return None
     if setting.kind == "enum":
-        # sigma-ptpy 多半已經回傳 enum member 了，但保險起見兩種都接
+        # 先用數值查我們自己的表，再退回 sigma-ptpy 給的名字。順序不能反 ——
+        # 色彩模式用的是自訂 enum，而 sigma-ptpy 解出來的 member 會帶著它
+        # 自己的名字（值 1 它叫 Sepia，fp 上其實是 Warm Gold）。
+        try:
+            return setting.enum_cls(int(raw)).name
+        except (ValueError, TypeError):
+            pass
         if hasattr(raw, "name"):
             return raw.name
         try:
             return setting.enum_cls(raw).name
         except (ValueError, TypeError):
-            return None
+            # enum 不認得就回原始數字，不要回 None。相機宣告的可用值可能
+            # 超出 sigma-ptpy 的 enum（實測色彩模式有 16 個，enum 只認得
+            # 12 個），回 None 會讓那些值看起來像「讀不到」，比對時也永遠
+            # 不相等 —— 明明設進去了卻報成相機拒絕。
+            try:
+                return int(raw)
+            except (ValueError, TypeError):
+                return None
     if setting.kind == "apex":
         return setting.converter.decode_uint8(int(raw))
     return int(raw)
@@ -513,6 +562,22 @@ def _roughly_equal(a, b) -> bool:
     return str(a) == str(b)
 
 
+def canonical_value(name: str, value):
+    """把使用者給的值換成 read_settings() 用的那種表示法。
+
+    不換的話沒辦法比對：色彩模式用數字 12 寫進去，回讀是
+    'FovClassicYellow' —— 直接比就是不相等，於是每一次成功的寫入都會被
+    報成「相機沒有接受」。實測 16 個色彩模式全部誤報。
+    """
+    setting = BY_NAME.get(name)
+    if setting is None or setting.kind != "enum":
+        return value
+    try:
+        return decode_value(setting, encode_value(setting, value))
+    except Exception:
+        return value
+
+
 def verify_applied(cam, requested: dict[str, Any],
                    frame_rate: float | None = None) -> dict[str, Any]:
     """寫入後回讀，找出相機實際上沒有接受的設定。
@@ -531,7 +596,7 @@ def verify_applied(cam, requested: dict[str, Any],
         if name not in actual:
             continue
         got = actual[name]
-        if _roughly_equal(got, wanted):
+        if _roughly_equal(got, canonical_value(name, wanted)):
             continue
         hint = None
         modes = AUTO_OVERRIDE_HINTS.get(name)
