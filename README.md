@@ -1025,6 +1025,17 @@ record one take                             # it lands on entry 0
 GET  /api/record/download                   # only entry 0 is servable
 ```
 
+**There is no way to read a take while it is recording**, and the reason turns
+out to be mundane: the file is not registered until the take ends. During a take
+the entry reads `ImageGenInProgress` and `GetMovieFileInfo` returns the 16-byte
+empty reply; the filename and size appear only at `MovieGenCompleted`. So asking
+0x9037 mid-take is asking the camera to serve a file it has not registered — the
+same condition as asking with no entry at all, which is why it hangs rather than
+refusing. Everything else safe to call during a take was tried —
+`GetMovieFileInfo`, `GetPictFileInfo2`, `GetLastCommandData`,
+`GetCamDataGroupMovie`, standard PTP object enumeration — and none of them
+exposes data. PTP events are the one mechanism not yet ruled out.
+
 ⚠️ **Asking for a transfer when the camera has no movie entry hangs the camera.**
 It stops answering, `USBTimeoutError`, and drops off USB; only power restores it.
 Reproduced twice — once by reading during a `dest_to_save=InComputer` take, which
