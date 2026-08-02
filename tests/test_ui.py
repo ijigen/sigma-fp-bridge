@@ -441,8 +441,11 @@ def test_focus_panel_exists_and_can_return_to_autofocus():
     assert "fp-centre" in html, "沒有回中央的捷徑"
     # 實測：MF 下相機忽略對焦區域與臉眼偵測的寫入。按了沒反應比按不下去
     # 更讓人困惑，所以要標成不可用而不是放著。
-    assert "需切換成 AF 模式" in html, "MF 下沒有標示區域/臉眼不可用"
+    assert "MF 下臉眼與區域無效" in html, "MF 下沒有標示區域/臉眼不可用"
     assert "st.focus_mode === 'MF'" in html, "沒有依對焦模式判斷"
+    # 三項併成一列 —— 各佔一列會把對焦面板撐得比 live view 還高
+    assert "function focusGroup(" in html, "對焦三項沒有併成一列"
+    assert "function focusOptRow(" not in html, "還留著逐項一列的舊實作"
     # 舊的唯讀顯示要拿掉，不然模式會同時出現在兩個地方
     assert "$('f-mode')" not in html, "還留著唯讀的對焦模式顯示"
     print("✓ 對焦面板可切換模式 / 臉眼偵測 / 區域 / 對焦點")

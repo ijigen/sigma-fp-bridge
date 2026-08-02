@@ -863,18 +863,15 @@ function focusApply(body) {
   }).catch(e => log('對焦設定請求失敗：' + e, 'err'));
 }
 
-function focusOptRow(name, title, current, choices, labels, note) {
-  const cur = current === null || current === undefined ? '—' : (labels[current] || current);
-  const locked = !!note;
+// 三項對焦設定併成一列。它們是同一件事的三個面向，而且選項都短 ——
+// 各佔一列會把對焦面板撐得比 live view 還高。
+function focusGroup(name, label, current, choices, labels, locked) {
   const opts = choices.map(c =>
     '<button class="o' + (c === current ? ' on' : '') + '" data-focus="' + name +
     '" data-val="' + escapeHTML(c) + '"' + (locked ? ' disabled data-locked="1"' : '') +
     '>' + escapeHTML(labels[c] || c) + '</button>').join('');
-  return '<div class="opt"><div class="opt-head">' +
-    '<span class="opt-name">' + escapeHTML(title) + '</span>' +
-    '<span class="opt-cur">' + escapeHTML(cur) + '</span>' +
-    (note ? '<span class="opt-note">' + escapeHTML(note) + '</span>' : '') +
-    '</div><div class="opts">' + opts + '</div></div>';
+  return '<span class="grp"><span class="grp-label">' + escapeHTML(label) + '</span>' +
+    opts + '</span>';
 }
 
 function renderFocusControls() {
@@ -888,14 +885,28 @@ function renderFocusControls() {
   const isMF = st.focus_mode === 'MF';
   const needAF = isMF ? '需切換成 AF 模式' : '';
 
+  const fm = FRIENDLY.focus_mode || {}, fe = FRIENDLY.face_eye_af || {},
+        fa = FRIENDLY.focus_area || {};
+  const cur = [
+    fm[st.focus_mode] || st.focus_mode,
+    st.face_eye_af && st.face_eye_af !== 'Off' ? (fe[st.face_eye_af] || st.face_eye_af) : null,
+    fa[st.focus_area] || st.focus_area,
+  ].filter(Boolean).join(' · ');
+
+  const notes = [];
+  if (needAF) notes.push('MF 下臉眼與區域無效');
+  if (st.camera_mode === 'movie') notes.push('CINE 下 AF-C 會變成 AF-S');
+
   const rows = [];
-  rows.push(focusOptRow('mode', '對焦模式', st.focus_mode,
-    focusBounds.focus_modes || [], FRIENDLY.focus_mode || {},
-    st.camera_mode === 'movie' ? 'CINE 下選 AF-C 會變成 AF-S（實測）' : ''));
-  rows.push(focusOptRow('face_eye_af', '臉部・眼睛', st.face_eye_af,
-    focusBounds.face_eye_options || [], FRIENDLY.face_eye_af || {}, needAF));
-  rows.push(focusOptRow('focus_area', '對焦區域', st.focus_area,
-    focusBounds.focus_areas || [], FRIENDLY.focus_area || {}, needAF));
+  rows.push('<div class="opt"><div class="opt-head">' +
+    '<span class="opt-name">對焦</span>' +
+    '<span class="opt-cur">' + escapeHTML(cur || '—') + '</span>' +
+    (notes.length ? '<span class="opt-note">' + escapeHTML(notes.join(' · ')) + '</span>' : '') +
+    '</div><div class="opts">' +
+    focusGroup('mode', '模式', st.focus_mode, focusBounds.focus_modes || [], fm, false) +
+    focusGroup('face_eye_af', '臉眼', st.face_eye_af, focusBounds.face_eye_options || [], fe, isMF) +
+    focusGroup('focus_area', '區域', st.focus_area, focusBounds.focus_areas || [], fa, isMF) +
+    '</div></div>');
 
   // 對焦點：座標系由相機提供，超出有效範圍相機會自己夾
   const pt = st.focus_point || [];
