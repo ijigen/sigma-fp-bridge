@@ -296,6 +296,40 @@ async def test_event_probe_drains_without_touching_the_camera():
     print(f"✓ 事件探測只讀佇列，沒有對相機發指令（收到 {body['count']} 個事件）")
 
 
+async def test_clear_can_release_a_single_entry():
+    """逐筆釋放：下載完一段就放掉，讓下一段遞補。
+
+    0x9037 只服務一個位置。如果它服務的是 head 而不是固定的索引 0，逐筆釋放
+    就能連續下載多段，不必每次都 release + acquire —— 而 release + acquire
+    正是目前懷疑會弄壞傳輸的動作。
+    """
+    reset()
+    cam = fake_camera.FakeCamera()
+    cam.entries = {0: "a", 1: "b", 2: "c"}
+    cam.db_head, cam.db_tail = 0, 3
+    B.state.camera = cam
+    async with running_worker():
+        runner = web.AppRunner(B.make_app())
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        base = f"http://127.0.0.1:{runner.addresses[0][1]}"
+        try:
+            async with aiohttp.ClientSession() as session:
+                resp = await session.post(f"{base}/api/record/clear?image_id=0")
+                assert resp.status == 200, resp.status
+                body = await resp.json()
+                assert body["cleared"] == 0, body
+                assert cam.db_head == 1, f"head 沒有前進：{cam.db_head}"
+                assert 1 in cam.entries and 2 in cam.entries, "清掉了不該清的"
+
+                bad = await session.post(f"{base}/api/record/clear?image_id=x")
+                assert bad.status == 400, bad.status
+        finally:
+            await runner.cleanup()
+    print("✓ 可以只釋放一筆項目，其餘保留")
+
+
 async def test_set_position_coalesces():
     reset()
     async with running_worker():

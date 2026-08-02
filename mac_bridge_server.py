@@ -1442,6 +1442,23 @@ async def _do_record(action: str, request: web.Request) -> web.Response:
         })
 
     if action == "clear":
+        # image_id 給了就只清那一筆。用途是「下載完一段就釋放，讓下一段遞補」——
+        # 0x9037 只服務一個位置，逐筆釋放是唯一不必 release+acquire 就能換
+        # 下一段的方法（前提是它服務的是 head 而不是固定的 0，尚未確認）。
+        single = request.query.get("image_id")
+        if single is not None:
+            try:
+                image_id = int(single)
+            except ValueError:
+                return web.json_response({"error": "image_id 必須是整數"}, status=400)
+
+            def clear_one():
+                capture.clear_slot(state.camera, image_id)
+                return recording.capture_status(state.camera)
+
+            after = await worker.call(clear_one, priority=Priority.CONTROL)
+            return web.json_response({"ok": True, "cleared": image_id, "status": after})
+
         # 復原用：資料庫項目沒被釋放會累積，塞滿之後相機就拍不成了。
         # 實際發生過 —— tail 累積到 6、slot 0 卡在 ImageGenFailed。
         def clear_all():
