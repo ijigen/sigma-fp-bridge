@@ -443,7 +443,12 @@ def test_focus_panel_exists_and_can_return_to_autofocus():
     assert "fp-centre" not in html and "fp-y" not in html, "還留著手動座標輸入"
     # 實測：MF 下相機忽略對焦區域與臉眼偵測的寫入。按了沒反應比按不下去
     # 更讓人困惑，所以要標成不可用而不是放著。
-    assert "MF 下臉眼與區域無效" in html, "MF 下沒有標示區域/臉眼不可用"
+    assert "MF 下對焦對象無效" in html, "MF 下沒有標示對焦對象不可用"
+    # 單點與臉眼互斥，合併成一個控制項；多點會把對焦點鎖在正中央，不列
+    import re
+    assert re.search(r"\bconst TARGETS\s*=", html), "單點與臉眼沒有合併"
+    assert "MultiAutoFocusPoints" not in html.split("const TARGETS")[1][:600], \
+        "合併後的控制項還列出多點"
     assert "st.focus_mode === 'MF'" in html, "沒有依對焦模式判斷"
     # 三項併成一列 —— 各佔一列會把對焦面板撐得比 live view 還高
     assert "function focusGroup(" in html, "對焦三項沒有併成一列"
@@ -469,6 +474,13 @@ def test_tap_to_focus_is_behind_a_toggle():
     # marker 的 CSS 是 display:none，用 setShown 顯示時設 '' 會退回那條規則 ——
     # 於是永遠畫不出來。要明確設成 block。
     assert "marker.style.display" in html, "marker 用了會被 CSS 蓋掉的顯示方式"
+    # 框要照相機給的實際尺寸畫。選了「小框」卻看到一樣大的方塊，
+    # 那個控制項就等於沒有意義。
+    assert "point_sizes" in html, "沒有用相機給的對焦框尺寸"
+    # 要依比例算，不是固定像素 —— 用子字串比對「有沒有 marker.style.width」
+    # 抓不到「改成 34px」這種變異，實測過。
+    assert re.search(r"marker\.style\.width\s*=\s*w\s*\+", html), \
+        "marker 沒有依實際框大小按比例繪製"
     # 映射要用相機宣告的有效區域，不是憑空假設
     assert "b.top" in html and "b.left" in html, "沒有用相機宣告的有效區域做映射"
     print("✓ 點選對焦有開關，預設關閉，並標出相機實際位置")

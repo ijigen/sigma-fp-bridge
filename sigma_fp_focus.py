@@ -692,6 +692,20 @@ def read_focus_area_bounds(cam: SigmaPTPy) -> dict:
     if valid and len(valid) >= 4:
         out.update({"top": valid[0], "bottom": valid[1],
                     "left": valid[2], "right": valid[3]})
+
+    # 對焦框大小：615 是一串 (高, 寬)，數量由 614 給。616 是移動步進 ——
+    # 那就是對焦點會「吸附」的原因，不是寫入失敗。
+    try:
+        ifd2 = parse_ifd(read_info5_raw(cam))
+        sizes = find_tag(ifd2, 615)
+        if sizes is not None and sizes.values:
+            v = list(sizes.values)
+            out["point_sizes"] = [[v[i], v[i + 1]] for i in range(0, len(v) - 1, 2)]
+        step = find_tag(ifd2, 616)
+        if step is not None and step.values:
+            out["point_step"] = list(step.values)
+    except Exception:
+        pass
     return out
 
 
@@ -773,6 +787,11 @@ def trigger_af(cam: SigmaPTPy) -> None:
 
     cam.snap_command(SnapCommand(CaptureMode=CaptureMode.AFDriveOnly,
                                  CaptureAmount=1))
+
+
+def set_focus_point_size(cam: SigmaPTPy, index: int) -> None:
+    """對焦框大小。索引對應 read_focus_area_bounds() 回的 point_sizes。"""
+    cam.set_cam_data_group_focus(CamDataGroupFocusExt(DMFSize=int(index)))
 
 
 def set_focus_point(cam: SigmaPTPy, y: int, x: int) -> None:

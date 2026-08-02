@@ -814,6 +814,18 @@ function renderTapFocus() {
   const fx = (pt[1] - left) / Math.max(1, right - left);
   marker.style.top = (fy * 100) + '%';
   marker.style.left = (fx * 100) + '%';
+
+  // 框的大小照相機給的實際尺寸畫，不要用固定像素 —— 使用者選了「小框」
+  // 卻看到一樣大的方塊，那個控制項就等於沒有意義。
+  const sizes = b.point_sizes || [];
+  const size = sizes[st.point_size || 0];
+  if (size) {
+    const w = (size[1] / Math.max(1, right - left)) * 100;
+    const h = (size[0] / Math.max(1, bottom - top)) * 100;
+    marker.style.width = w + '%';
+    marker.style.height = h + '%';
+    marker.style.margin = '-' + (h / 2) + '% 0 0 -' + (w / 2) + '%';
+  }
 }
 
 function onLiveviewClick(ev) {
@@ -900,16 +912,21 @@ function renderFocusControls() {
   const isMF = st.focus_mode === 'MF';
   const needAF = isMF ? '需切換成 AF 模式' : '';
 
-  const fm = FRIENDLY.focus_mode || {}, fe = FRIENDLY.face_eye_af || {},
-        fa = FRIENDLY.focus_area || {};
-  const cur = [
-    fm[st.focus_mode] || st.focus_mode,
-    st.face_eye_af && st.face_eye_af !== 'Off' ? (fe[st.face_eye_af] || st.face_eye_af) : null,
-    fa[st.focus_area] || st.focus_area,
-  ].filter(Boolean).join(' · ');
+  // 單點與臉眼本來就互斥：要嘛你指定位置，要嘛交給相機找臉。合併成一個
+  // 控制項，多點不列 —— 它會把對焦點鎖在正中央，跟「點哪對哪」直接衝突，
+  // 而這個 bridge 的對焦點就是靠單點運作的。
+  const fm = FRIENDLY.focus_mode || {};
+  const TARGETS = [
+    {id: 'point', label: '單點', body: {face_eye_af: 'Off', focus_area: 'OnePointSelection'}},
+    {id: 'FaceOnly', label: '僅臉部', body: {face_eye_af: 'FaceOnly'}},
+    {id: 'FaceEyeAuto', label: '臉部+眼睛', body: {face_eye_af: 'FaceEyeAuto'}},
+  ];
+  const activeTarget = (st.face_eye_af && st.face_eye_af !== 'Off') ? st.face_eye_af : 'point';
+  const targetLabel = (TARGETS.find(t => t.id === activeTarget) || {}).label || '—';
+  const cur = [fm[st.focus_mode] || st.focus_mode, targetLabel].filter(Boolean).join(' · ');
 
   const notes = [];
-  if (needAF) notes.push('MF 下臉眼與區域無效');
+  if (needAF) notes.push('MF 下對焦對象無效');
   if (st.camera_mode === 'movie') notes.push('CINE 下 AF-C 會變成 AF-S');
 
   const rows = [];
@@ -919,28 +936,47 @@ function renderFocusControls() {
     (notes.length ? '<span class="opt-note">' + escapeHTML(notes.join(' · ')) + '</span>' : '') +
     '</div><div class="opts">' +
     focusGroup('mode', '模式', st.focus_mode, focusBounds.focus_modes || [], fm, false) +
-    focusGroup('face_eye_af', '臉眼', st.face_eye_af, focusBounds.face_eye_options || [], fe, isMF) +
-    focusGroup('focus_area', '區域', st.focus_area, focusBounds.focus_areas || [], fa, isMF) +
+    '<span class="grp"><span class="grp-label">對焦對象</span>' +
+    TARGETS.map(t => '<button class="o' + (t.id === activeTarget ? ' on' : '') +
+      '" data-target="' + t.id + '"' + (isMF ? ' disabled data-locked="1"' : '') +
+      '>' + t.label + '</button>').join('') + '</span>' +
     '</div></div>');
 
   // 對焦點沒有手動輸入 —— 在預覽上點比填座標直觀得多，而且座標系
   // （682×1024，3:2）跟畫面（16:9）對不上，填數字等於盲填。
   const pt = st.focus_point;
   const b = focusBounds.point || {};
+  const sizes = b.point_sizes || [];
+  const sizeOpts = sizes.map((sz, i) =>
+    '<button class="o' + (i === (st.point_size || 0) ? ' on' : '') +
+    '" data-focus="point_size" data-val="' + i + '">' + sz[1] + '×' + sz[0] +
+    '</button>').join('');
+
   rows.push('<div class="opt"><div class="opt-head">' +
     '<span class="opt-name">對焦點</span>' +
     '<span class="opt-cur">' + (pt && pt.length === 2 ? pt[0] + ', ' + pt[1] : '—') + '</span>' +
     '<span class="opt-note">' +
     (tapFocus ? '點預覽畫面移動（會自動切成單點選擇）' : '開啟上方「點選對焦」後點預覽畫面') +
-    '</span></div></div>');
+    '</span></div>' +
+    (sizeOpts ? '<div class="opts"><span class="grp">' +
+      '<span class="grp-label">框大小</span>' + sizeOpts + '</span></div>' : '') +
+    '</div>');
 
   const html = rows.join('');
   if (box.__last === html) return;
   box.innerHTML = html;
   box.__last = html;
 
+  box.querySelectorAll('[data-target]').forEach(el => {
+    const t = TARGETS.find(x => x.id === el.dataset.target);
+    if (t) el.onclick = () => focusApply(t.body);
+  });
   box.querySelectorAll('[data-focus]').forEach(el => {
-    el.onclick = () => focusApply({[el.dataset.focus]: el.dataset.val});
+    el.onclick = () => {
+      const v = el.dataset.val;
+      // point_size 是索引，要送數字；其餘是 enum 名稱
+      focusApply({[el.dataset.focus]: el.dataset.focus === 'point_size' ? parseInt(v) : v});
+    };
   });
 }
 

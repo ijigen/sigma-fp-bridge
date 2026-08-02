@@ -77,6 +77,7 @@ from sigma_fp_focus import (
     set_face_eye_af,
     set_focus_area,
     set_focus_point,
+    set_focus_point_size,
     trigger_af,
     read_focus_area_bounds,
     read_focus_choices,
@@ -197,6 +198,7 @@ class BridgeState:
     last_face_eye_status: str | None = None
     last_focus_area: str | None = None
     last_focus_point: list | None = None
+    last_point_size: int | None = None
     last_continuous_af: str | None = None
 
 
@@ -1010,6 +1012,7 @@ async def broadcast_state(extra: dict | None = None) -> None:
         "face_eye_detected": state.last_face_eye_status,
         "focus_area": state.last_focus_area,
         "focus_point": state.last_focus_point,
+        "point_size": state.last_point_size,
         "continuous_af": state.last_continuous_af,
         "focal_length_mm": state.last_lens_focal_mm,
         "focus_range": list(state.focus_range) if state.focus_range else None,
@@ -1038,6 +1041,7 @@ async def state_polling_loop():
                 state.last_focus_area = _enum_name(getattr(f, "FocusArea", None))
                 point = getattr(f, "DMFPos", None)
                 state.last_focus_point = list(point) if point else None
+                state.last_point_size = getattr(f, "DMFSize", None)
                 state.last_continuous_af = _enum_name(getattr(f, "PreConstAF", None))
                 # 焦距只有換鏡頭 / 轉變焦環才會變，用不著跟焦點狀態一樣 10Hz 打 USB
                 if tick % FOCAL_POLL_EVERY == 0:
@@ -1272,6 +1276,7 @@ async def handle_focus_get(request: web.Request) -> web.Response:
         "focus_area": _enum_name(getattr(f, "FocusArea", None)),
         # (y, x)。座標系見 /api/focus/bounds
         "focus_point": getattr(f, "DMFPos", None),
+        "point_size": getattr(f, "DMFSize", None),
         "continuous_af": _enum_name(getattr(f, "PreConstAF", None)),
         "af_lock": _enum_name(getattr(f, "AFLock", None)),
     })
@@ -1319,6 +1324,8 @@ async def handle_focus_mode(request: web.Request) -> web.Response:
         actions.append(lambda: set_face_eye_af(state.camera, data["face_eye_af"]))
     if "focus_area" in data:
         actions.append(lambda: set_focus_area(state.camera, data["focus_area"]))
+    if "point_size" in data:
+        actions.append(lambda: set_focus_point_size(state.camera, data["point_size"]))
     if "point" in data:
         point = data["point"]
         if not (isinstance(point, (list, tuple)) and len(point) == 2):
@@ -1363,6 +1370,7 @@ async def handle_focus_mode(request: web.Request) -> web.Response:
         "face_eye_af": _enum_name(getattr(f, "FaceEyeAF", None)),
         "focus_area": _enum_name(getattr(f, "FocusArea", None)),
         "focus_point": getattr(f, "DMFPos", None),
+        "point_size": getattr(f, "DMFSize", None),
         "continuous_af": _enum_name(getattr(f, "PreConstAF", None)),
     })
 
