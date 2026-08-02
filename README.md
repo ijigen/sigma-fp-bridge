@@ -939,20 +939,32 @@ now reduced to a basename before use.
 `~/.sigma_fp_bridge/movies/`, with progress readable from `/api/status`.
 `GET /api/record/movies` lists what is available.
 
-**What `dest_to_save` does to a movie is not established.** An earlier version of
-this section claimed `InComputer` leaves nothing to fetch, on the strength of two
-eight-second takes: `InCamera` reported a 48,128,384 byte file and `InComputer`
-reported none. That comparison was void. The two takes landed on different
-database entries — head/tail 0/1 and 1/2 — and both were queried at index 0, so
-the second was asked about an entry that was never its own. The same index bug
-described below invalidated the experiment meant to characterise a different
-setting entirely.
+**`dest_to_save` makes no difference to a movie transfer.** Four takes recorded
+alternating `InCamera` and `InComputer`, each queried at its own entry index,
+each produced a file:
 
-What the physical argument still says is that a movie cannot be held in a buffer
-the way a still is: a 30 s FHD take is 224 MB. So `InComputer` either streams
-during the take or discards. Neither has been shown. Reading with 0x9037
-mid-recording is not the way to find out — with no entry to serve, that hangs the
-camera outright.
+```
+InCamera    entry 0   A001_020.MOV   42,456,992
+InComputer  entry 1   A001_021.MOV   39,232,152
+InCamera    entry 2   A001_022.MOV   41,991,448
+InComputer  entry 3   A001_023.MOV   41,836,792
+```
+
+An `InComputer` take then downloaded in full — 40,717,408 bytes, ftyp + moov +
+free + mdat walking cleanly to the end, 5.0 s of 1920×1080 avc1 with sowt audio.
+
+> An earlier version of this section claimed `InComputer` leaves nothing to fetch.
+> That rested on two takes landing on entries 0 and 1 while both were queried at
+> index 0, so the second was asked about an entry that was never its own. The
+> index bug did not only hide movies from the download path; it silently
+> corrupted an experiment aimed at an unrelated setting.
+
+This also settles the objection that raised the question: the camera has no RAM
+to buffer 224 MB, and it does not need any. The take is written to a file and
+served from there, which is why 0x9037 can seek to any offset and why a 224 MB
+transfer runs at 56 MB/s rather than at RAM speed. Whether an `InComputer` take
+also lands on the card cannot be checked from the host — PTP enumeration reports
+an empty card in API mode — and is the one part still open.
 
 Both opcodes are undocumented and unwrapped by sigma-ptpy, so this came from
 reading bytes. `SigmaGetMovieFileInfo` (0x9036) turns out to use the same shape
