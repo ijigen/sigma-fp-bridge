@@ -171,8 +171,8 @@ class BridgeState:
     #: 錄影中與否。bridge 自己記，因為相機沒有可直接查詢的「正在錄影」旗標
     recording: bool = False
     recording_started_at: float | None = None
-    # 快門角度換算用的幀率。機身實際幀率在 DataGroupMovie 裡，但那個
-    # DataGroup 的 tag 編號還沒解出來，所以先由使用者指定。
+    # 快門角度換算用的幀率。每次讀設定時會從相機的 DataGroupMovie tag 61
+    # 更新，所以這個預設值只在還沒讀過或不在 CINE 模式時有意義。
     frame_rate: float = 24.0
     camera_connected: bool = False
     # True = 使用者主動交還相機，自動重連要停手，否則放開的下一秒就被搶回去
@@ -687,17 +687,28 @@ def _read_all_settings() -> dict:
 
     CINE 模式下曝光由 DataGroupMovie 管，光看 DataGroup1 會誤導 ——
     它照樣回報一個快門值，但那個值寫不進去也不是實際生效的。
+
+    錄影設定先讀，因為快門角度換算需要幀率，而相機自己就報得出來
+    （DataGroupMovie tag 61）。先前這裡用的是使用者手動指定的 state.frame_rate
+    —— 那是在這個 DataGroup 的 tag 還沒解出來時的權宜做法，猜錯就會讓角度
+    算錯，而使用者不會發現。
     """
-    out = read_settings(state.camera, state.frame_rate)
+    movie = {}
     try:
         movie = movie_settings.read_settings(state.camera)
+        fps = movie.get("frame_rate")
+        if isinstance(fps, (int, float)) and fps > 0:
+            state.frame_rate = float(fps)
+    except Exception as e:
+        log.debug(f"錄影設定讀取失敗（可能不在 CINE 模式）：{e}")
+
+    out = read_settings(state.camera, state.frame_rate)
+    if movie:
         out.update(movie)
         state.shutter_unit = movie.get("shutter_unit")
         # tag 1 直接就是機身模式，比從能力清單推測可靠得多
         if movie.get("capture_mode") in (1, 2):
             state.camera_mode = "stills" if movie["capture_mode"] == 1 else "movie"
-    except Exception as e:
-        log.debug(f"錄影設定讀取失敗（可能不在 CINE 模式）：{e}")
     return out
 
 

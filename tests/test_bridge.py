@@ -330,6 +330,24 @@ async def test_clear_can_release_a_single_entry():
     print("✓ 可以只釋放一筆項目，其餘保留")
 
 
+async def test_frame_rate_comes_from_the_camera_not_the_user():
+    """快門角度換算要用相機實際的幀率。
+
+    先前用的是使用者手動指定的 state.frame_rate（預設 24.0），那是在
+    DataGroupMovie 的 tag 還沒解出來時的權宜做法。相機自己就報得出來
+    （tag 61），猜錯會讓角度算錯，而且使用者不會發現。
+    """
+    reset()
+    cam = fake_camera.FakeCamera()
+    cam.movie[61] = (2997, 100)          # 29.97 fps
+    B.state.camera = cam
+    B.state.frame_rate = 24.0
+    async with running_worker():
+        await B.cam_read_settings()
+        assert abs(B.state.frame_rate - 29.97) < 1e-6, B.state.frame_rate
+    print(f"✓ 幀率從相機讀取（{B.state.frame_rate}），不是沿用預設值")
+
+
 async def test_set_position_coalesces():
     reset()
     async with running_worker():

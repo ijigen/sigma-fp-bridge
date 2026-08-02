@@ -511,10 +511,11 @@ def read_movie_group_raw(cam: SigmaPTPy) -> bytes:
     方法 —— 跟當初 FocusPosition 的處境一樣。這裡自己組 Container 送，
     拿回 IFD 原始 bytes 交給 ifd.py 解析。
 
-    錄影相關的設定（RecordFormat / CinemaDNG 畫質 / 解析度 / FrameRate）
-    很可能就在這個 DataGroup 裡，但它內部的 tag 編號是未知的 —— 不會跟
-    CanSetInfo5 一樣（對照組：DataGroupFocus 用 tag 1/2/81，CanSetInfo5
-    的同一批項目卻編成 600/601/612）。所以得先 dump 出來看。
+    錄影設定確實都在這個 DataGroup 裡，tag 編號後來解出來了（見
+    movie_settings.py）。當初以為編號不會跟 CanSetInfo5 有關係 —— 用
+    DataGroupFocus 當對照組（它用 tag 1/2/81，CanSetInfo5 卻編成 600/601/612）
+    ——那個推論只對了一半：影片這一組確實有規律，**CanSetInfo5 tag =
+    DataGroupMovie tag + 100**，而那正是後來替 tag 10~14 找到名字的關鍵。
 
     只讀不寫。
     """
