@@ -802,6 +802,25 @@ def test_live_view_recovers_from_a_dropped_stream():
         "重接時沒有換 URL"
 
 
+def test_the_client_does_not_poll_for_something_it_ignores():
+    """capture_status 的處理分支跟著測試片段那一段一起被移除了，但輪詢還留
+    著 —— 每 5 秒對相機發一次 PTP，拿回來的東西直接丟掉，而那條 USB 一次只
+    能跑一筆交易，等於固定跟即時預覽搶。
+    """
+    html = HTML.read_text()
+    assert "capture_status" not in html, "還在輪詢沒有人處理的訊息"
+
+
+def test_the_client_never_writes_files_to_the_computer():
+    """錄影是錄進相機記憶卡的。存到電腦的兩條路只存在於 HTTP API，網頁不碰
+    —— 有人在網頁上按一按就把素材倒進家目錄，不是這個介面該做的事。
+    """
+    html = HTML.read_text()
+    for endpoint in ("/api/capture", "/api/record/download", "/api/record/clip",
+                     "save=1", "dest_to_save"):
+        assert endpoint not in html, f"網頁碰到了會存檔的 {endpoint}"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

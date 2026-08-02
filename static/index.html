@@ -1369,7 +1369,6 @@ function doRelease() {
 
 render();
 connect();
-setInterval(() => { if (st.connected && !st.released && !st.recording) send({cmd: 'capture_status'}); }, 5000);
 </script>
 </body>
 </html>
