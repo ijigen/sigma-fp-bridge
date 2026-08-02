@@ -41,7 +41,6 @@ def reset():
     B.state.camera_connected = True
     B.state.mjpeg_clients.clear()
     B.state.ws_clients.clear()
-    B.state.calibration = []
     # 預設不啟用夾值，想測範圍的測試自己呼叫 refresh_focus_range()
     B.state.focus_range = None
     B.state.last_lens_focal_mm = None
@@ -1004,10 +1003,7 @@ async def test_http_endpoints():
             body = await (await s.post(f"{base}/api/focus", json={"position": 1})).json()
             assert body["clamped"] and body["position"] == 5974, body
 
-            await s.post(f"{base}/api/calibration", json={"table": [[1.0, 100], [5.0, 900]]})
-            body = await (await s.post(f"{base}/api/distance", json={"distance": 3.0})).json()
-            assert body["ok"], body
-            print("✓ REST：status / focus / distance / calibration")
+            print("✓ REST：status / focus / settings")
 
             # 兩個 MJPEG client 必須共用影格，而不是各自去抓
             before = CAM.count("frame")

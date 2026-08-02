@@ -503,7 +503,6 @@ def install(camera: FakeCamera | None = None) -> FakeCamera:
     mod.read_movie_group_raw = read_movie_group_raw
     mod.read_capabilities = read_capabilities
     mod.set_focus_position = set_focus_position
-    mod.distance_to_position = lambda table, d: int(d * 2000)  # 3.0m -> 6000，在範圍內
     mod.CamDataGroupFocusExt = FakeFocusState
     sys.modules["sigma_fp_focus"] = mod
 

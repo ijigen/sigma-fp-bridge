@@ -196,35 +196,6 @@
       <div class="panel">
         <h2>相機設定</h2>
         <div id="settings"></div>
-        <div class="btnrow" id="fps-box" style="margin-top:14px; padding-top:12px; border-top:1px solid #2a2a2a">
-          <span class="hint">角度換算用幀率</span>
-          <input type="number" id="fps-input" value="24" step="0.01" style="min-width:78px"
-                 onchange="send({cmd:'set_frame_rate', frame_rate: parseFloat(this.value)})">
-          <span class="hint" id="fps-hint">拍照模式下把快門秒數換算成角度用；錄影模式改用相機自己的幀率。</span>
-        </div>
-      </div>
-
-      <div class="panel">
-        <h2>距離校準</h2>
-        <div class="btnrow" style="margin-bottom:9px">
-          <input type="text" id="lens-id" placeholder="鏡頭 ID" style="min-width:150px">
-          <button class="sm" onclick="setLens()">切換</button>
-        </div>
-        <table id="cal-table"><thead><tr><th>距離 (m)</th><th>Position</th></tr></thead><tbody></tbody></table>
-        <div class="btnrow" style="margin-top:9px">
-          <input type="number" id="cal-dist" placeholder="距離" step="0.1" style="min-width:76px">
-          <input type="number" id="cal-pos" placeholder="position" style="min-width:96px">
-          <button class="sm" onclick="useCurrentPos()">↑ 用當前</button>
-          <button class="sm primary" onclick="addCal()">+ 新增</button>
-          <button class="sm danger" onclick="clearCal()">清空</button>
-        </div>
-        <h3>依距離對焦</h3>
-        <div class="btnrow">
-          <input type="number" id="dist-input" value="2.0" step="0.1" style="min-width:76px">
-          <span class="hint">m</span>
-          <button class="primary sm" id="btn-dist" onclick="setDistance()">對焦</button>
-        </div>
-        <div class="hint" id="cal-hint" style="margin-top:7px"></div>
       </div>
 
       <div class="panel">
@@ -267,7 +238,6 @@ function connect() {
   ws.onopen = () => {
     log('WebSocket 已連線', 'recv');
     st.wsDown = false;
-    send({cmd: 'calibration_get'});
     send({cmd: 'describe_settings'});
     send({cmd: 'get_settings'});
   };
@@ -288,10 +258,8 @@ function handle(m) {
     case 'hello': if (m.focus_range) applyRange(m.focus_range); break;
     case 'settings_schema':
       schema = m.settings;
-      if (m.frame_rate) $('fps-input').value = m.frame_rate;
       renderedKey = null; renderSettings(); break;
     case 'settings': values = m.settings; renderSettings(); break;
-    case 'calibration': renderCal(m); break;
     case 'capture_status': $('rec-status').textContent = m.status.status || m.status.error || '—'; break;
     case 'ack':
       if (m.schema) schema = m.schema;
@@ -354,7 +322,7 @@ function render() {
     ? Math.round(st.recording_seconds) + ' 秒' : '');
 
   // 錄影按鈕只看連線，不看 recording —— 否則要停止的時候反而按不下去
-  for (const id of ['pos-slider','pos-input','btn-setpos','clip-secs','btn-dist'])
+  for (const id of ['pos-slider','pos-input','btn-setpos','clip-secs'])
     setDisabled($(id), !live || st.recording);
   setDisabled($('btn-rec'), !live);
   setDisabled($('btn-clip'), !live || st.recording || clipRunning);
@@ -368,8 +336,6 @@ function render() {
     // 自動 ISO 下的數值…）。這裡只能再加上停用，不能把它打開。
     setDisabled(el, lockSettings || el.dataset.locked === '1');
   });
-  setText($('cal-hint'), st.calibration_points
-    ? st.calibration_points + ' 個校準點' : '尚未校準 — 依距離對焦需要至少 2 點');
 
   renderNotices();
 }
@@ -387,20 +353,6 @@ function renderNotices() {
     out.push(notice('info', '錄影中', '設定已鎖定 —— 錄製途中改曝光會毀掉這一鏡。'));
   }
   const mode = values.exposure_mode;
-  if (mode && mode !== 'Manual' && st.connected && !st.released) {
-    const what = st.camera_mode === 'movie' ? '快門角度' : '快門';
-    out.push(notice('warn', '曝光模式是 ' + mode + '，手動設' + what + '不會生效',
-      '相機的自動曝光會在你設定後立刻改回去 —— 寫入看起來成功，值卻留不住。',
-      '<button class="sm primary" onclick="send({cmd:\'set_settings\',settings:{exposure_mode:\'Manual\'}})">切換成 Manual</button>'));
-  }
-  if (values.iso_auto === 'Auto' && st.connected && !st.released) {
-    out.push(notice('info', 'ISO Auto 開啟中',
-      '設定 ISO 時會自動關掉它 —— 否則寫入不會生效。'));
-  }
-  if (st.connected && st.camera_mode === 'movie' && !st.released) {
-    out.push(notice('info', 'CINE 模式：快門由快門角度控制',
-      '這個模式下 <code>shutter_speed</code> 寫不進去（相機會收下然後丟棄），已從清單移除。'));
-  }
   setHTML($('notices'), out.join(''));
 }
 
@@ -431,8 +383,34 @@ function applyRange(r) {
   log('焦點範圍 ' + r[0] + '–' + r[1], 'recv');
 }
 
-function onSliderInput() { markBusy(); $('pos-input').value = $('pos-slider').value; }
-function onSliderCommit() { markBusy(); commitPos(); }
+// 拖曳時就持續送位置，不用等放開 —— 這才是跟焦該有的手感。
+//
+// 敢這樣做是因為 bridge 的相機 worker 會合併同類指令：連發的位置設定只有
+// 最新的那個會真的送上 USB，先前的以 applied=false 收場。對焦位置是絕對值
+// 不是增量，所以丟掉中間值不影響結果。
+//
+// 仍然節流到每 50ms 一次：合併發生在 bridge 端，WebSocket 上還是少送為妙。
+let sliderTimer = null, sliderPending = null;
+
+function onSliderInput() {
+  markBusy();
+  const v = $('pos-slider').value;
+  $('pos-input').value = v;
+  sliderPending = parseInt(v);
+  if (sliderTimer) return;
+  sliderTimer = setTimeout(() => {
+    sliderTimer = null;
+    if (sliderPending !== null) { send({cmd: 'set_position', position: sliderPending}); sliderPending = null; }
+  }, 50);
+}
+
+function onSliderCommit() {
+  // 放開時補送一次最終值 —— 節流可能把最後一次吃掉
+  markBusy();
+  if (sliderTimer) { clearTimeout(sliderTimer); sliderTimer = null; }
+  sliderPending = null;
+  commitPos();
+}
 function commitPos() {
   const v = parseInt($('pos-input').value);
   if (isNaN(v)) return;
@@ -463,12 +441,41 @@ const ORDER = [
   ['color_space',           '色彩空間'],
   ['tone_effect',           '色調'],
   ['drive_mode',            '驅動模式'],
+
+  // ── 一直在 DataGroup4/5 裡但沒接出來的 ──────────────────────────
+  ['electronic_stabilization', '電子防手震'],
+  ['dc_crop_mode',          'DC 裁切'],
+  ['high_iso_ext',          '高感光擴展'],
+  ['cont_shoot_speed',      '連拍速度'],
+  ['hdr',                   'HDR'],
+  ['fill_light',            '補光'],
+  ['loc_distortion',        '畸變校正'],
+  ['loc_chromatic_aberration', '色差校正'],
+  ['loc_diffraction',       '繞射校正'],
+  ['loc_vignetting',        '周邊光量'],
+  ['interval_timer_seconds','間隔秒數'],
+  ['interval_timer_frames', '間隔張數'],
 ];
 
 // 太長的清單改成橫向捲動，不然一列會佔掉半個畫面
 const SCROLL_IF_OVER = 9;
 
+const ON_OFF = {On:'開', Off:'關', Auto:'自動', Null:'—'};
+
 const FRIENDLY = {
+  electronic_stabilization: ON_OFF,
+  dc_crop_mode: ON_OFF,
+  high_iso_ext: ON_OFF,
+  loc_distortion: ON_OFF,
+  loc_chromatic_aberration: ON_OFF,
+  loc_diffraction: ON_OFF,
+  loc_vignetting: ON_OFF,
+  cont_shoot_speed: {Auto:'自動', High:'高', Medium:'中', Low:'低'},
+  hdr: {Off:'關', Auto:'自動', Null:'—',
+        PlusMinus1:'±1', PlusMinus2:'±2', PlusMinus3:'±3'},
+  focus_mode: {MF:'手動 MF', AF:'自動 AF', AF_S:'單次 AF-S', AF_C:'連續 AF-C'},
+  face_eye_af: {Off:'關', FaceOnly:'僅臉部', FaceEyeAuto:'臉部+眼睛'},
+  focus_area: {MultiAutoFocusPoints:'多點', OnePointSelection:'單點', Tracking:'追蹤'},
   exposure_mode: {ProgramAuto:'P', AperturePriority:'A', ShutterPriority:'S', Manual:'M'},
   iso_auto: {Auto:'自動', Manual:'手動'},
   image_quality: {DNG:'RAW DNG', JPEGFine:'JPEG 高', JPEGNormal:'JPEG 中',
@@ -919,7 +926,6 @@ function renderSettings() {
       };
     });
   }
-  setShown($('fps-box'), st.camera_mode !== 'movie');
   renderNotices();
 }
 
@@ -955,44 +961,6 @@ async function recordClip() {
 }
 
 // ── 校準 ──────────────────────────────────────────────────────────
-function renderCal(m) {
-  const tb = document.querySelector('#cal-table tbody');
-  tb.innerHTML = '';
-  for (const [d, p] of m.table || []) {
-    const tr = document.createElement('tr');
-    tr.innerHTML = '<td>' + d + '</td><td>' + p + '</td>';
-    tb.appendChild(tr);
-  }
-  if (m.active_lens_id) $('lens-id').placeholder = m.active_lens_id;
-}
-function useCurrentPos() { if (st.focus_position != null) $('cal-pos').value = st.focus_position; }
-function addCal() {
-  const d = parseFloat($('cal-dist').value), p = parseInt($('cal-pos').value);
-  if (isNaN(d) || isNaN(p)) { flash('err', '距離與 position 都要填'); return; }
-  if (focusRange && (p < focusRange[0] || p > focusRange[1])) {
-    flash('err', 'position ' + p + ' 超出鏡頭範圍 ' + focusRange[0] + '–' + focusRange[1]); return;
-  }
-  send({cmd: 'calibration_add', distance: d, position: p});
-  $('cal-dist').value = ''; $('cal-pos').value = '';
-  setTimeout(() => send({cmd: 'calibration_get'}), 250);
-}
-function clearCal() {
-  if (!confirm('清空目前鏡頭的校準表？這個動作無法復原。')) return;
-  send({cmd: 'calibration_clear'});
-  setTimeout(() => send({cmd: 'calibration_get'}), 250);
-}
-function setLens() {
-  const id = $('lens-id').value.trim();
-  if (!id) return;
-  send({cmd: 'set_active_lens', lens_id: id});
-  setTimeout(() => send({cmd: 'calibration_get'}), 250);
-}
-function setDistance() {
-  const d = parseFloat($('dist-input').value);
-  if (isNaN(d)) return;
-  if (!st.calibration_points) { flash('err', '尚未校準 — 先新增至少 2 個校準點'); return; }
-  send({cmd: 'set_distance', distance: d});
-}
 
 function doRelease() {
   if (st.recording && !confirm('正在錄影中，交還前會先停止錄影。繼續？')) return;

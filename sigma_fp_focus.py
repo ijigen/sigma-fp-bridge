@@ -727,74 +727,6 @@ def wait_focus_idle(cam: SigmaPTPy, timeout_s: float = 3.0,
 # 校準工具 — 建立 distance ↔ position 對應表
 # =============================================================================
 
-def interactive_calibration(cam: SigmaPTPy) -> list[tuple[float, int]]:
-    """互動式建立 distance(m) ↔ FocusPosition 對應表。
-
-    流程：
-      1. 引導使用者把目標放在 0.5m / 1m / 2m / 5m / 無限遠
-      2. 每點手動轉 FocusPosition 直到清晰
-      3. 記錄
-    """
-    print("\n=== 焦點距離校準 ===")
-    print("放鏡頭設成 MF mode，相機放穩，目標清晰時記錄該 position。")
-    print("最少需要 5 點，越多越準。輸入 q 結束。\n")
-
-    table = []
-    while True:
-        d = input("目標距離（公尺，q 退出）: ").strip()
-        if d.lower() == 'q':
-            break
-        try:
-            distance = float(d)
-        except ValueError:
-            print("錯誤的格式，請再試。")
-            continue
-
-        print(f"  現在請手動轉動 FocusPosition 直到 {distance}m 處清晰。")
-        print("  輸入 'next' 移焦 +50，'prev' -50，'jump N' 直接跳 N，'ok' 確認。")
-        current_pos = 0
-        while True:
-            cmd = input(f"  [position={current_pos}] > ").strip().lower()
-            if cmd == 'ok':
-                table.append((distance, current_pos))
-                print(f"  ✓ 已記錄: {distance}m → position {current_pos}\n")
-                break
-            elif cmd == 'next':
-                current_pos += 50
-            elif cmd == 'prev':
-                current_pos -= 50
-            elif cmd.startswith('jump '):
-                try:
-                    current_pos = int(cmd.split()[1])
-                except (ValueError, IndexError):
-                    print("  jump 後面要接數字")
-                    continue
-            else:
-                print("  指令：next / prev / jump N / ok")
-                continue
-            set_focus_position(cam, current_pos)
-            if not wait_focus_idle(cam):
-                print("  ⚠ 馬達超時，可能超出範圍")
-
-    return sorted(table)
-
-
-def distance_to_position(table: list[tuple[float, int]], distance_m: float) -> int:
-    """以線性內插查表算出 position。實際用建議用 scipy 的 cubic spline。"""
-    table = sorted(table)
-    if distance_m <= table[0][0]:
-        return table[0][1]
-    if distance_m >= table[-1][0]:
-        return table[-1][1]
-    for i in range(len(table) - 1):
-        d1, p1 = table[i]
-        d2, p2 = table[i+1]
-        if d1 <= distance_m <= d2:
-            t = (distance_m - d1) / (d2 - d1)
-            return int(p1 + t * (p2 - p1))
-    return table[-1][1]
-
-
 # =============================================================================
 # Demo
 # =============================================================================
@@ -903,16 +835,6 @@ if __name__ == '__main__':
         if ans == 'y':
             demo_set_focus(cam)
 
-        ans = input("\n要進入校準模式嗎？(y/N): ").strip().lower()
-        if ans == 'y':
-            table = interactive_calibration(cam)
-            print("\n校準完成，對應表：")
-            for d, p in table:
-                print(f"  {d:6.2f}m → position {p}")
-            print("\n試算：")
-            for d in [0.75, 1.5, 3.0, 7.0]:
-                p = distance_to_position(table, d)
-                print(f"  {d}m → ~{p}")
     finally:
         # 必須走 close_camera()：它會送 CloseApplication 讓相機退出 API 模式。
         # 直接 cam.__exit__() 只關 session，機身按鍵會一直鎖著。

@@ -77,7 +77,6 @@ from sigma_fp_focus import (
     set_focus_area,
     set_focus_point,
     read_focus_area_bounds,
-    distance_to_position,
     CamDataGroupFocusExt,
 )
 
@@ -132,7 +131,6 @@ def _restore_ownership(path: Path) -> None:
 
 
 STATE_DIR = _resolve_state_dir()
-CALIBRATION_FILE = STATE_DIR / "calibration.json"
 LIVE_VIEW_INTERVAL_S = 0.04  # live view 目標間隔（~25fps 上限，實際看相機跟得上多少）
 STATE_BROADCAST_INTERVAL_S = 0.1  # 10Hz state push to clients
 LIVE_VIEW_STALE_S = 0.25  # 影格請求排隊超過這個時間就放棄——舊畫面沒有播的價值
@@ -151,7 +149,6 @@ class BridgeState:
     camera: object | None = None
     ws_clients: set[web.WebSocketResponse] = field(default_factory=set)
     mjpeg_clients: set[web.StreamResponse] = field(default_factory=set)
-    calibration: list[tuple[float, int]] = field(default_factory=list)
     active_lens_id: str = "default"
     last_focus_position: int | None = None
     last_focus_state: int | None = None
@@ -190,40 +187,6 @@ class BridgeState:
 
 
 state = BridgeState()
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 校準表持久化
-# ─────────────────────────────────────────────────────────────────────────────
-
-def load_calibration() -> dict[str, list[list]]:
-    """從 ~/.sigma_fp_bridge/calibration.json 讀所有鏡頭的校準表。"""
-    if not CALIBRATION_FILE.exists():
-        return {}
-    try:
-        return json.loads(CALIBRATION_FILE.read_text())
-    except Exception as e:
-        log.warning(f"校準檔讀取失敗：{e}")
-        return {}
-
-
-def save_calibration(all_tables: dict[str, list[list]]) -> None:
-    STATE_DIR.mkdir(parents=True, exist_ok=True)
-    CALIBRATION_FILE.write_text(json.dumps(all_tables, indent=2))
-    # bridge 通常是 sudo 跑的；不把擁有者還回去的話，之後不用 sudo 跑會寫不進去
-    _restore_ownership(STATE_DIR)
-    _restore_ownership(CALIBRATION_FILE)
-
-
-def get_active_calibration() -> list[tuple[float, int]]:
-    return state.calibration
-
-
-def set_active_calibration(table: list[tuple[float, int]]) -> None:
-    state.calibration = sorted(table)
-    all_tables = load_calibration()
-    all_tables[state.active_lens_id] = [list(x) for x in state.calibration]
-    save_calibration(all_tables)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1019,7 +982,6 @@ async def broadcast_state(extra: dict | None = None) -> None:
         "focus_range": list(state.focus_range) if state.focus_range else None,
         "frame_rate": state.frame_rate,
         "active_lens_id": state.active_lens_id,
-        "calibration_points": len(state.calibration),
     }
     if extra:
         msg.update(extra)
@@ -1105,11 +1067,7 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
 async def handle_ws_command(req: dict) -> dict | None:
     """支援的命令：
         {"cmd": "set_position", "position": <int>}
-        {"cmd": "set_distance",  "distance": <float meters>}
         {"cmd": "get_state"}
-        {"cmd": "calibration_add", "distance": <float>, "position": <int>}
-        {"cmd": "calibration_clear"}
-        {"cmd": "calibration_get"}
         {"cmd": "set_active_lens", "lens_id": <str>}
     """
     cmd = req.get("cmd")
@@ -1210,62 +1168,14 @@ async def handle_ws_command(req: dict) -> dict | None:
             "clamped": result.clamped,
         }
 
-    if cmd == "set_distance":
-        if not state.calibration:
-            return {"type": "error", "id": request_id, "error": "no calibration"}
-        d = float(req["distance"])
-        result = await cam_set_position(distance_to_position(state.calibration, d))
-        return {
-            "type": "ack",
-            "id": request_id,
-            "distance": d,
-            "position": result.position,
-            "requested": result.requested,
-            "applied": result.applied,
-            "clamped": result.clamped,
-        }
-
-    if cmd == "get_state":
-        f = await cam_get_focus() if state.camera_connected else None
-        return {
-            "type": "state_response",
-            "id": request_id,
-            "connected": state.camera_connected,
-            "focus_position": getattr(f, "FocusPosition", None),
-            "focus_state": getattr(f, "FocusState", None),
-            "focus_mode": str(getattr(f, "FocusMode", None)),
-        }
-
-    if cmd == "calibration_add":
-        d = float(req["distance"])
-        p = int(req["position"])
-        new_table = list(state.calibration) + [(d, p)]
-        set_active_calibration(new_table)
-        return {"type": "ack", "id": request_id, "calibration_points": len(state.calibration)}
-
-    if cmd == "calibration_clear":
-        set_active_calibration([])
-        return {"type": "ack", "id": request_id, "calibration_points": 0}
-
-    if cmd == "calibration_get":
-        return {
-            "type": "calibration",
-            "id": request_id,
-            "active_lens_id": state.active_lens_id,
-            "table": [list(x) for x in state.calibration],
-        }
-
     if cmd == "set_active_lens":
         lens_id = str(req["lens_id"])
         state.active_lens_id = lens_id
-        all_tables = load_calibration()
-        state.calibration = [tuple(x) for x in all_tables.get(lens_id, [])]
         return {
             "type": "ack",
             "id": request_id,
             "active_lens_id": lens_id,
-            "calibration_points": len(state.calibration),
-        }
+            }
 
     return {"type": "error", "id": request_id, "error": f"unknown cmd: {cmd}"}
 
@@ -1301,7 +1211,6 @@ async def handle_status(request: web.Request) -> web.Response:
         "focal_length_mm": state.last_lens_focal_mm,
         "focus_range": list(state.focus_range) if state.focus_range else None,
         "active_lens_id": state.active_lens_id,
-        "calibration_points": len(state.calibration),
         "ws_clients": len(state.ws_clients),
     })
 
@@ -1405,24 +1314,6 @@ async def handle_focus_post(request: web.Request) -> web.Response:
     result = await cam_set_position(int(data["position"]))
     return web.json_response({
         "ok": True,
-        "position": result.position,
-        "requested": result.requested,
-        "applied": result.applied,
-        "clamped": result.clamped,
-    })
-
-
-async def handle_distance_post(request: web.Request) -> web.Response:
-    if not state.camera_connected:
-        return web.json_response({"error": "not connected"}, status=503)
-    if not state.calibration:
-        return web.json_response({"error": "no calibration"}, status=400)
-    data = await request.json()
-    d = float(data["distance"])
-    result = await cam_set_position(distance_to_position(state.calibration, d))
-    return web.json_response({
-        "ok": True,
-        "distance": d,
         "position": result.position,
         "requested": result.requested,
         "applied": result.applied,
@@ -1939,24 +1830,6 @@ async def handle_acquire(request: web.Request) -> web.Response:
     return web.json_response({"ok": ok, "released": not ok, "connected": ok})
 
 
-async def handle_calibration_get(request: web.Request) -> web.Response:
-    return web.json_response({
-        "active_lens_id": state.active_lens_id,
-        "table": [list(x) for x in state.calibration],
-    })
-
-
-async def handle_calibration_post(request: web.Request) -> web.Response:
-    data = await request.json()
-    table = [(float(d), int(p)) for d, p in data["table"]]
-    set_active_calibration(table)
-    return web.json_response({"ok": True, "calibration_points": len(state.calibration)})
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Live view MJPEG stream
-# ─────────────────────────────────────────────────────────────────────────────
-
 async def handle_liveview(request: web.Request) -> web.StreamResponse:
     """MJPEG 串流：瀏覽器 <img src="/liveview.mjpeg"> 就能看。"""
     boundary = "frame"
@@ -2094,9 +1967,6 @@ def make_app() -> web.Application:
     app.router.add_post("/api/focus", handle_focus_post)
     app.router.add_get("/api/focus/bounds", handle_focus_bounds)
     app.router.add_post("/api/focus/mode", handle_focus_mode)
-    app.router.add_post("/api/distance", handle_distance_post)
-    app.router.add_get("/api/calibration", handle_calibration_get)
-    app.router.add_post("/api/calibration", handle_calibration_post)
     app.router.add_get("/api/settings/schema", handle_settings_schema)
     app.router.add_get("/api/settings", handle_settings_get)
     app.router.add_post("/api/settings", handle_settings_post)
@@ -2121,9 +1991,6 @@ async def main() -> None:
     logging.getLogger("ptpy.transports.usb").setLevel(logging.CRITICAL)
 
     # 載入校準表
-    all_tables = load_calibration()
-    state.calibration = [tuple(x) for x in all_tables.get(state.active_lens_id, [])]
-    log.info(f"已載入 {len(state.calibration)} 個校準點（鏡頭 ID: {state.active_lens_id}）")
 
     # worker 必須先起來——連相機本身也是一個 job
     worker.start()

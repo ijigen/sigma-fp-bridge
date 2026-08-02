@@ -26,7 +26,7 @@ A Python bridge server that talks to Sigma fp over USB PTP and exposes:
 - **MJPEG live view stream** browsers / OpenCV / OBS can consume
 - **Bonjour / mDNS broadcast** so iOS clients can auto-discover the bridge
 - **Browser UI** with live preview, focus control, exposure and movie settings,
-  recording, and distance calibration
+  and recording
 - **Tethered capture** — JPEG, DNG or both, straight to disk
 - **Movie download** over USB at around 56 MB/s
 - **A raw PTP probe** for carrying on the reverse engineering
@@ -55,7 +55,6 @@ Useful for:
 | Tethered capture (JPEG / DNG / both) | ✅ Working |
 | Movie download over USB | ✅ Working |
 | WebSocket + REST + MJPEG | ✅ Working |
-| Calibration persistence | ✅ Working |
 | Bonjour mDNS | ✅ Working |
 | iOS app | ❌ Not yet |
 | Linux / Windows bridge | ⚠ Should work, not tested |
