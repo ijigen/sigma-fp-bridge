@@ -37,6 +37,7 @@ class FakeFocusState:
         self.FaceEyeAFStatus = extra.get("FaceEyeAFStatus")
         self.FocusArea = extra.get("FocusArea")
         self.DMFPos = extra.get("DMFPos")
+        self.DMFSize = extra.get("DMFSize")
         self.PreConstAF = extra.get("PreConstAF")
         self.AFLock = extra.get("AFLock")
 
@@ -501,14 +502,22 @@ def install(camera: FakeCamera | None = None) -> FakeCamera:
         c._tick("set_focus_point")
         c.focus_settings["DMFPos"] = (int(y), int(x))
 
+    def set_focus_point_size(c, index):
+        c._tick("set_point_size")
+        c.focus_settings["DMFSize"] = int(index)
+
     def read_focus_area_bounds(c):
+        # 照實機：三種方框與移動步進（步進就是對焦點會吸附的原因）
         return {"height": 682, "width": 1024,
-                "top": 85, "bottom": 597, "left": 96, "right": 928}
+                "top": 85, "bottom": 597, "left": 96, "right": 928,
+                "point_sizes": [[128, 128], [64, 64], [32, 32]],
+                "point_step": [32, 16]}
 
     mod.set_focus_mode = set_focus_mode
     mod.set_face_eye_af = set_face_eye_af
     mod.set_focus_area = set_focus_area
     mod.set_focus_point = set_focus_point
+    mod.set_focus_point_size = set_focus_point_size
     mod.read_focus_area_bounds = read_focus_area_bounds
 
     def read_focus_choices(c):
