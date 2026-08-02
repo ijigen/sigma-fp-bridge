@@ -9,6 +9,7 @@ dist/
 
 # 相機抓回來的東西 —— 那是實拍素材，不屬於原始碼
 *.mov
+!docs/demo.mov
 *.dng
 *.jpg
 *.jpeg
