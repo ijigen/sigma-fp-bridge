@@ -729,9 +729,13 @@ def set_focus_mode(cam: SigmaPTPy, mode, continuous_af=None) -> None:
 
     Args:
         mode: FocusMode 的成員或名稱（MF / AF / AF_S / AF_C）。
-        continuous_af: PreConstAF 要不要開。None 表示自動判斷 —— 切到 AF 系列
-            就開回來（那是相機出廠行為，也是使用者期待的「自動對焦」），切到
-            MF 就關掉。給明確值可以覆寫。
+        continuous_af: PreConstAF（機身選單上的 Pre-AF）要不要開。None 表示
+            自動判斷 —— 只有 AF_C 才開。
+
+            先前這裡是「AF 系列都開」，結果 AF-S 拿到 PreConstAF=On，相機就
+            一直在對焦 —— 使用者看到的是「AF-S 實際上的行為是 AF-C」。Pre-AF
+            是「按快門前先持續預對焦」，跟單次 / 連續對焦是兩件事，綁在一起
+            等於偷偷把 AF-S 變成 AF-C。給明確值可以覆寫。
     """
     if isinstance(mode, str):
         try:
@@ -741,7 +745,7 @@ def set_focus_mode(cam: SigmaPTPy, mode, continuous_af=None) -> None:
                 f"unknown focus mode: {mode} (available: "
                 f"{', '.join(m.name for m in FocusMode)})") from e
     if continuous_af is None:
-        continuous_af = mode is not FocusMode.MF
+        continuous_af = mode is FocusMode.AF_C
     focus = CamDataGroupFocusExt(
         FocusMode=mode,
         PreConstAF=PreConstAF.On if continuous_af else PreConstAF.Off,

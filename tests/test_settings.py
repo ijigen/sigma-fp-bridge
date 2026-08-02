@@ -564,6 +564,45 @@ def test_a_setting_written_as_a_number_is_not_reported_as_rejected():
     print("✓ 數字寫入 / 名稱回讀會換算後再比對")
 
 
+def test_af_s_does_not_get_pre_af():
+    """Pre-AF 只跟 AF-C 走。
+
+    先前的預設是「AF 系列都開」，於是 AF-S 也拿到 PreConstAF=On —— 相機就
+    一直在對焦，使用者看到的是「選了 AF-S，行為卻是 AF-C」。Pre-AF 是機身
+    選單上的獨立設定（按快門前先持續預對焦），綁在對焦模式上等於偷偷把
+    AF-S 變成 AF-C。
+
+    這裡要載入真的 sigma_fp_focus —— fake_camera 在 sys.modules 裡塞了一個
+    假的，直接 import 會拿到那個。
+    """
+    import importlib.util
+    root = Path(__file__).resolve().parent.parent
+    spec = importlib.util.spec_from_file_location(
+        "_real_sigma_fp_focus", root / "sigma_fp_focus.py")
+    real = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(real)
+
+    class Cam:
+        def __init__(self): self.wrote = []
+        def set_cam_data_group_focus(self, g): self.wrote.append(g)
+
+    got = {}
+    for mode in ("MF", "AF_S", "AF_C"):
+        cam = Cam()
+        real.set_focus_mode(cam, mode)
+        got[mode] = cam.wrote[0].PreConstAF.name
+
+    assert got["AF_C"] == "On", f"AF-C 應該開 Pre-AF：{got}"
+    assert got["AF_S"] == "Off", f"AF-S 不該開 Pre-AF：{got}"
+    assert got["MF"] == "Off", f"MF 不該開 Pre-AF：{got}"
+
+    # 明確指定要能覆寫 —— Pre-AF 是獨立設定，不是對焦模式的附屬品
+    cam = Cam()
+    real.set_focus_mode(cam, "AF_S", continuous_af=True)
+    assert cam.wrote[0].PreConstAF.name == "On", "明確指定被忽略了"
+    print("✓ Pre-AF 只跟 AF-C 走，AF-S 是單次對焦")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

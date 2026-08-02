@@ -185,9 +185,11 @@
       </div>
       <div class="panel">
         <h2>Focus</h2>
+        <input type="range" id="pos-slider" min="0" max="2000" value="0" style="margin:2px 0 10px"
+               oninput="onSliderInput()" onpointerdown="sliderHeld = true"
+               onpointerup="releaseSlider()" onpointercancel="releaseSlider()"
+               onchange="onSliderCommit()">
         <div id="focus-controls"></div>
-        <input type="range" id="pos-slider" min="0" max="2000" value="0" style="margin:10px 0 4px"
-               oninput="onSliderInput()" onchange="onSliderCommit()">
       </div>
 
     </div>
@@ -338,7 +340,7 @@ function render() {
   ].filter(Boolean).join(' · '));
   renderTapFocus();
   if (st.focus_range) applyRange(st.focus_range);
-  if (st.focus_position != null && !busy()) $('pos-slider').value = st.focus_position;
+  if (st.focus_position != null && !sliderHeld) $('pos-slider').value = st.focus_position;
 
   setText($('btn-rec'), st.recording ? '\u25a0 Stop Recording' : '\u25cf Start Recording');
   setText($('rec-elapsed'), st.recording && st.recording_seconds != null
@@ -411,10 +413,19 @@ function applyRange(r) {
 // 不是增量，所以丟掉中間值不影響結果。
 //
 // 仍然節流到每 50ms 一次：合併發生在 bridge 端，WebSocket 上還是少送為妙。
-let sliderTimer = null, sliderPending = null;
+let sliderTimer = null, sliderPending = null, sliderHeld = false;
+
+// 只有使用者真的按著滑桿時才不跟隨相機。先前用的是 busy()（任何指令都會
+// 擋住 4 秒），於是切個對焦模式、點一下對焦點，滑桿就有 4 秒不動 —— 而 AF
+// 正是在那幾秒裡把鏡頭轉到定位的，看起來就是「滑桿不再跟著自動對焦跑」。
+function releaseSlider() {
+  // 放開後留一點時間讓最後那筆位置送到、相機回報回來，否則滑桿會先跳回
+  // 舊值再跳到新值。
+  setTimeout(() => { sliderHeld = false; }, 600);
+}
 
 function onSliderInput() {
-  markBusy();
+  sliderHeld = true;
   sliderPending = parseInt($('pos-slider').value);
   if (sliderTimer) return;
   sliderTimer = setTimeout(() => {
@@ -425,7 +436,7 @@ function onSliderInput() {
 
 function onSliderCommit() {
   // 放開時補送一次最終值 —— 節流可能把最後一次吃掉
-  markBusy();
+  releaseSlider();
   if (sliderTimer) { clearTimeout(sliderTimer); sliderTimer = null; }
   sliderPending = null;
   const v = parseInt($('pos-slider').value);
@@ -942,9 +953,11 @@ function focusApply(body) {
 // 三項對焦設定併成一列。它們是同一件事的三個面向，而且選項都短 ——
 // 各佔一列會把對焦面板撐得比 live view 還高。
 function focusGroup(name, label, current, choices, labels, locked) {
+  // locked 可以是布林，也可以是「這個選項要不要鎖」的函式
+  const isLocked = typeof locked === 'function' ? locked : () => !!locked;
   const opts = choices.map(c =>
     '<button class="o' + (c === current ? ' on' : '') + '" data-focus="' + name +
-    '" data-val="' + escapeHTML(c) + '"' + (locked ? ' disabled data-locked="1"' : '') +
+    '" data-val="' + escapeHTML(c) + '"' + (isLocked(c) ? ' disabled data-locked="1"' : '') +
     '>' + escapeHTML(labels[c] || c) + '</button>').join('');
   return '<span class="grp"><span class="grp-label">' + escapeHTML(label) + '</span>' +
     opts + '</span>';
@@ -1001,12 +1014,15 @@ function renderFocusControls() {
   // 放固定的 id，交給 render() 填。
   const html = '<div class="opt"><div class="opt-head">' +
     '<span class="opt-name">Focus</span>' +
+    '<span id="f-range-hint" class="hint"></span>' +
     '<span class="opt-cur">' + escapeHTML(cur || '—') + ' · ' +
-      '<b id="f-pos">—</b> <span id="f-range-hint" class="hint"></span> ' +
-      '<span id="f-lens" class="hint"></span></span>' +
+      '<b id="f-pos">—</b> <span id="f-lens" class="hint"></span></span>' +
     (notes.length ? '<span class="opt-note">' + escapeHTML(notes.join(' · ')) + '</span>' : '') +
     '</div><div class="opts">' +
-    focusGroup('mode', 'Focus Mode', st.focus_mode, focusBounds.focus_modes || [], fm, false) +
+    // CINE 下相機直接拒收 AF-C：寫進去讀回來是 AF-S（實測，兩種機身模式
+    // 都量過）。畫成可按的話，按了就彈回去，看起來像 bridge 壞掉。
+    focusGroup('mode', 'Focus Mode', st.focus_mode, focusBounds.focus_modes || [], fm,
+               c => c === 'AF_C' && st.camera_mode === 'movie') +
     '<span class="grp"><span class="grp-label">Subject</span>' +
     TARGETS.map(t => '<button class="o' + (t.id === activeTarget ? ' on' : '') +
       '" data-target="' + t.id + '"' + (isMF ? ' disabled data-locked="1"' : '') +

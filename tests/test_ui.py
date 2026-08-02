@@ -689,6 +689,36 @@ def test_dynamic_ids_are_read_safely():
         "範圍提示沒有每次重繪都填"
 
 
+def test_the_slider_follows_the_camera_unless_it_is_being_held():
+    """滑桿要跟著自動對焦跑，除非使用者正按著它。
+
+    先前用的是 busy()：任何指令都會擋住 4 秒。切個對焦模式、點一下對焦點，
+    滑桿就有 4 秒不動 —— 而 AF 正是在那幾秒裡把鏡頭轉到定位的。
+    """
+    html = HTML.read_text()
+    assert re.search(r"st\.focus_position != null && !sliderHeld", html), \
+        "滑桿的跟隨條件還綁在 busy() 上"
+    assert "markBusy()" not in html[html.index("function onSliderInput"):
+                                    html.index("function onSliderCommit")], \
+        "拖曳還在用全域 busy 旗標"
+    assert "function releaseSlider(" in html, "放開後沒有恢復跟隨"
+
+
+def test_af_c_is_locked_in_cine():
+    """CINE 下相機直接拒收 AF-C：寫進去讀回來是 AF-S（兩種機身模式都量過）。"""
+    html = HTML.read_text()
+    assert re.search(r"c === 'AF_C' && st\.camera_mode === 'movie'", html), \
+        "CINE 下沒有鎖住 AF-C"
+    assert "typeof locked === 'function'" in html, "focusGroup 不支援逐項鎖定"
+
+
+def test_the_focus_range_sits_after_the_title():
+    html = HTML.read_text()
+    head = html[html.index("'<span class=\"opt-name\">Focus</span>' +"):]
+    head = head[:head.index("opt-cur")]
+    assert "f-range-hint" in head, "範圍沒有接在 Focus 標題後面"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):
