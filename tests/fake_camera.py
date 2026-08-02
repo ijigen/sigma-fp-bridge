@@ -516,6 +516,14 @@ def install(camera: FakeCamera | None = None) -> FakeCamera:
         return dict(c.focus_choices)
 
     mod.read_focus_choices = read_focus_choices
+
+    def trigger_af(c):
+        # 真機這時鏡頭才會動。假相機用位置變化來代表「有對焦」，
+        # 「移動對焦點之後鏡頭沒動」這件事才測得出來。
+        c._tick("trigger_af")
+        c.position += 43
+
+    mod.trigger_af = trigger_af
     def read_info5_raw(c):
         c._tick("info5_raw")
         return c.info5_raw

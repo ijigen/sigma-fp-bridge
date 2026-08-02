@@ -1253,6 +1253,15 @@ Two places where the camera declares more than it delivers:
   back AF-S. In STILL, AF-C takes.
 - `CanSetInfo5` 610 lists two focus areas and `Tracking` never writes at all.
 
+Moving the point does not refocus by itself. AF-S fires on a trigger, so writing
+`DMFPos` changes the point immediately — the read-back shows the new coordinates —
+while `FocusPosition` does not move at all. Switching to MF and back to AF-S makes
+the lens focus, which is why that sequence looks like it is "applying" the point;
+it is really just triggering AF. `SnapCommand` with `AFDriveOnly` does the same
+thing without the detour, and the bridge issues it after a point move whenever the
+camera is in an AF mode. Not in MF: triggering AF there would throw away the
+position this whole project exists to set by hand.
+
 The focus point does work, and snaps: `[200, 300]` comes back as `[213, 288]`,
 `[340, 512]` as `[341, 512]`. That is the camera's focus point grid, not a lost
 write — 341 is the true centre of the 682-row area.

@@ -759,11 +759,30 @@ def set_focus_area(cam: SigmaPTPy, area) -> None:
     cam.set_cam_data_group_focus(CamDataGroupFocusExt(FocusArea=area))
 
 
+def trigger_af(cam: SigmaPTPy) -> None:
+    """叫相機用目前的對焦點跑一次自動對焦。
+
+    為什麼需要：AF-S 是觸發式的。移動對焦點只是改設定，鏡頭不會因此動 ——
+    實測移動之後 DMFPos 立刻變成新座標，但 FocusPosition 一動也不動，
+    要切一次 MF 再切回 AF-S 才會對焦。那個「切一次」其實就是在觸發 AF。
+
+    SnapCommand 的 AFDriveOnly：只驅動對焦，不拍攝。
+    """
+    from sigma_ptpy.enum import CaptureMode
+    from sigma_ptpy.schema import SnapCommand
+
+    cam.snap_command(SnapCommand(CaptureMode=CaptureMode.AFDriveOnly,
+                                 CaptureAmount=1))
+
+
 def set_focus_point(cam: SigmaPTPy, y: int, x: int) -> None:
     """把對焦點移到指定座標。
 
     座標系見 read_focus_area_bounds()。範圍不在這裡檢查 —— 相機自己會夾，
     而寫入後讀回比對才是可靠的驗證。
+
+    這裡不會自動對焦 —— 呼叫端要在 AF 模式下自己叫 trigger_af()。分開是因為
+    MF 模式下觸發 AF 會把手動設好的位置搶走，而這個專案整個就是在做手動控焦。
     """
     cam.set_cam_data_group_focus(CamDataGroupFocusExt(DMFPos=(int(y), int(x))))
 

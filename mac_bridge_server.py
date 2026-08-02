@@ -77,6 +77,7 @@ from sigma_fp_focus import (
     set_face_eye_af,
     set_focus_area,
     set_focus_point,
+    trigger_af,
     read_focus_area_bounds,
     read_focus_choices,
     CamDataGroupFocusExt,
@@ -1328,10 +1329,20 @@ async def handle_focus_mode(request: web.Request) -> web.Response:
             {"error": "沒有可套用的項目（mode / face_eye_af / focus_area / point）"},
             status=400)
 
+    # 移動對焦點之後要觸發一次 AF，否則鏡頭不會動 —— 使用者看到的是
+    # 「改了對焦點沒反應，要切一次 MF 再切回來」。那個切換就是在觸發 AF。
+    # 只在 AF 模式下做：MF 下觸發 AF 會把手動設好的位置搶走。
+    refocus = "point" in data and data.get("af_trigger", True)
+
     def apply_all():
         for action in actions:
             action()
-        return get_focus_state(state.camera)
+        state_after = get_focus_state(state.camera)
+        mode = getattr(state_after.FocusMode, "name", None)
+        if refocus and mode and mode != "MF":
+            trigger_af(state.camera)
+            state_after = get_focus_state(state.camera)
+        return state_after
 
     try:
         f = await worker.call(apply_all, priority=Priority.CONTROL)

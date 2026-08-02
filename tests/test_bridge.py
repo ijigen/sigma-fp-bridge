@@ -494,6 +494,44 @@ async def test_acquire_does_nothing_when_already_connected():
     print("✓ 已連線時 acquire 不碰 USB")
 
 
+async def test_moving_the_focus_point_triggers_a_refocus():
+    """迴歸：改了對焦點，鏡頭不動。
+
+    實測 AF-S 下移動對焦點，DMFPos 立刻變成新座標，FocusPosition 卻一動也
+    不動 —— 要切一次 MF 再切回 AF-S 才會對焦。那個「切一次」其實就是在觸發
+    AF，所以使用者的解法碰巧有效，但那不是操作方式。
+
+    MF 下不能觸發：那會把手動設好的位置搶走，而手動控焦是這個專案的核心。
+    """
+    reset()
+    async with running_worker():
+        runner = web.AppRunner(B.make_app())
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        base = f"http://127.0.0.1:{runner.addresses[0][1]}"
+        try:
+            async with aiohttp.ClientSession() as session:
+                await session.post(f"{base}/api/focus/mode", json={"mode": "AF_S"})
+                before = CAM.count("trigger_af")
+                await session.post(f"{base}/api/focus/mode", json={"point": [200, 300]})
+                assert CAM.count("trigger_af") == before + 1, "移動對焦點沒有觸發 AF"
+
+                # MF 下不能觸發
+                await session.post(f"{base}/api/focus/mode", json={"mode": "MF"})
+                before = CAM.count("trigger_af")
+                await session.post(f"{base}/api/focus/mode", json={"point": [220, 320]})
+                assert CAM.count("trigger_af") == before, "MF 下不該觸發 AF"
+
+                # 只改模式不該觸發
+                before = CAM.count("trigger_af")
+                await session.post(f"{base}/api/focus/mode", json={"mode": "AF_S"})
+                assert CAM.count("trigger_af") == before, "只改模式不該觸發 AF"
+        finally:
+            await runner.cleanup()
+    print("✓ 移動對焦點會觸發對焦，MF 下不會")
+
+
 async def test_set_position_coalesces():
     reset()
     async with running_worker():
