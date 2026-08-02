@@ -76,6 +76,20 @@ If you test other configurations, please open an issue or PR.
 
 ## Quickstart (macOS)
 
+There are two ways to run it, and they are separate things:
+
+| | What it runs | Needs |
+|---|---|---|
+| `sudo ./run_mac.sh` | the source tree | git, python3, a venv, network for deps |
+| `sudo ./dist/sigma-fp-bridge` | a single built binary | nothing else |
+
+Both need `sudo`, and that has nothing to do with which one you pick: claiming
+the camera away from macOS's own `ptpcamerad` requires root either way.
+
+`run_mac.sh` never runs the built binary — it always executes
+`mac_bridge_server.py` from the tree, so it is what you want while changing the
+code. Building is covered under [A single-file build](#a-single-file-build).
+
 ### 1. Prerequisites
 
 ```bash
