@@ -612,6 +612,20 @@ def test_the_focus_marker_is_centred_with_transform_not_margin():
     print("✓ 對焦框用 transform 置中（負 margin 的垂直百分比是錯的）")
 
 
+def test_motor_state_and_focal_length_share_the_position_row():
+    """兩者都是在描述位置那一列講的那顆鏡頭 —— 各佔一列是把同一件事拆開。"""
+    html = HTML.read_text()
+    # 找那兩列的標籤標記，不是字串本身 —— 註解裡提到它們是正常的
+    for gone in (">馬達狀態<", ">鏡頭焦距<", "'f-state'", "'f-len'"):
+        assert gone not in html, f"還留著 {gone}"
+    assert 'id="f-lens"' in html, "沒有合併後的元素"
+    body = html[html.index("setText($('f-pos')"):]
+    body = body[:body.index("renderFocusControls()")]
+    assert "focus_state" in body and "focal_length_mm" in body, \
+        "馬達狀態或焦距沒有接進位置那一列"
+    print("✓ 馬達狀態與焦距併入位置列")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

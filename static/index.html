@@ -164,13 +164,12 @@
         <h2>對焦</h2>
         <div class="row">
           <span class="label">位置</span>
-          <span class="value"><b id="f-pos">—</b> <span id="f-range-hint" class="hint"></span></span>
+          <span class="value"><b id="f-pos">—</b> <span id="f-range-hint" class="hint"></span>
+            <span id="f-lens" class="hint"></span></span>
         </div>
         <input type="range" id="pos-slider" min="0" max="2000" value="0" style="margin:12px 0 8px"
                oninput="onSliderInput()" onchange="onSliderCommit()">
         <div id="focus-controls" style="margin-top:12px; padding-top:12px; border-top:1px solid #2a2a2a"></div>
-        <div class="row" style="margin-top:10px"><span class="label">馬達狀態</span><span class="value" id="f-state">—</span></div>
-        <div class="row"><span class="label">鏡頭焦距</span><span class="value" id="f-len">—</span></div>
       </div>
 
       <div class="panel">
@@ -317,10 +316,14 @@ function render() {
     : st.wsDown ? 'bridge 連線中斷' : '相機未連線');
 
   setText($('f-pos'), st.focus_position);
-  setText($('f-state'), st.focus_state === 0 ? 'Idle' : st.focus_state === 1 ? 'Moving' : '—');
+  // 馬達狀態和焦距都是在描述這一列講的那顆鏡頭 —— 各佔一列只是把同一件事
+  // 拆開放。接在位置後面，兩列的空間就省下來了。
+  setText($('f-lens'), [
+    st.focus_state === 1 ? '對焦中' : st.focus_state === 0 ? '靜止' : '',
+    st.focal_length_mm ? st.focal_length_mm + ' mm' : '',
+  ].filter(Boolean).join(' · '));
   renderFocusControls();
   renderTapFocus();
-  setText($('f-len'), st.focal_length_mm ? st.focal_length_mm + ' mm' : '—');
   if (st.focus_range) applyRange(st.focus_range);
   if (st.focus_position != null && !busy()) $('pos-slider').value = st.focus_position;
 
