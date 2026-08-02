@@ -172,22 +172,22 @@
         </div>
         <div id="liveview-off" class="liveview-off"></div>
         <div class="btnrow" id="lv-tools" style="padding:8px 10px; line-height:normal">
-          <button class="sm" id="btn-tapfocus">點選對焦：關</button>
+          <button class="sm" id="btn-tapfocus">Tap to Focus: Off</button>
           <span class="hint" id="tapfocus-hint"></span>
         </div>
       </div>
 
       <div class="panel">
-        <h2>錄影</h2>
+        <h2>Recording</h2>
         <div class="btnrow">
-          <button id="btn-rec" class="danger" onclick="toggleRec()">● 開始錄影</button>
+          <button id="btn-rec" class="danger" onclick="toggleRec()">● Start Recording</button>
           <span class="hint" id="rec-elapsed"></span>
         </div>
       </div>
       <div class="panel">
-        <h2>對焦</h2>
+        <h2>Focus</h2>
         <div class="row">
-          <span class="label">位置</span>
+          <span class="label">Position</span>
           <span class="value"><b id="f-pos">—</b> <span id="f-range-hint" class="hint"></span>
             <span id="f-lens" class="hint"></span></span>
         </div>
@@ -200,20 +200,22 @@
 
     <div>
       <div class="panel">
-        <h2>相機控制權</h2>
+        <h2>Camera Control</h2>
         <div class="btnrow">
-          <button id="btn-release" onclick="doRelease()">交還機身操作</button>
-          <button id="btn-acquire" class="primary" onclick="send({cmd:'acquire'})">取回控制權</button>
-          <button class="sm" onclick="send({cmd:'get_settings'})">↻ 重讀設定</button>
+          <button id="btn-release" onclick="doRelease()">Release to Body</button>
+          <button id="btn-acquire" class="primary" onclick="send({cmd:'acquire'})">Take Control</button>
+          <button class="sm" onclick="send({cmd:'get_settings'})">↻ Reload Settings</button>
         </div>
         <div class="hint" style="margin-top:8px">
-          bridge 連線時機身按鍵全部失效，這是協定限制不是 bug。交還時設定會自動保存、
-          取回時還原 —— 但你在機身上改的東西不會保留，因為取回會讓相機重置。
+          While the bridge is connected every control on the body is dead. That is
+          the protocol, not a bug. Settings are saved on release and restored on
+          take-control &mdash; but anything you change on the body is lost, because
+          taking control resets the camera.
         </div>
       </div>
 
       <div class="panel">
-        <h2>相機設定</h2>
+        <h2>Camera Settings</h2>
         <div id="settings"></div>
       </div>
 
@@ -261,19 +263,19 @@ function connect() {
   wireLiveview();
   ws = new WebSocket('ws://' + location.host + '/ws');
   ws.onopen = () => {
-    log('WebSocket 已連線', 'recv');
+    log('WebSocket connected', 'recv');
     st.wsDown = false;
     send({cmd: 'describe_settings'});
     send({cmd: 'get_settings'});
     loadFocusBounds();
   };
-  ws.onclose = () => { log('WebSocket 斷線，2 秒後重試', 'err'); st.wsDown = true; render(); setTimeout(connect, 2000); };
+  ws.onclose = () => { log('WebSocket closed, retrying in 2s', 'err'); st.wsDown = true; render(); setTimeout(connect, 2000); };
   ws.onerror = () => {};
   ws.onmessage = e => handle(JSON.parse(e.data));
 }
 
 function send(obj) {
-  if (!ws || ws.readyState !== WebSocket.OPEN) { log('WebSocket 尚未就緒', 'err'); return; }
+  if (!ws || ws.readyState !== WebSocket.OPEN) { log('WebSocket not ready', 'err'); return; }
   obj.id = Math.floor(Math.random() * 1e9);
   ws.send(JSON.stringify(obj));
 }
@@ -291,21 +293,21 @@ function handle(m) {
       if (m.camera_mode) st.camera_mode = m.camera_mode;
       if (m.settings) { values = m.settings; renderSettings(); }
       reportRejections(m.rejected);
-      if (m.clamped) log('⚠ ' + m.requested + ' 超出合法範圍，已修正為 ' + m.position, 'warn');
-      if (m.recording !== undefined) log(m.recording ? '● 開始錄影' : '■ 停止錄影', 'recv');
+      if (m.clamped) log('\u26a0 ' + m.requested + ' out of range, clamped to ' + m.position, 'warn');
+      if (m.recording !== undefined) log(m.recording ? '\u25cf Recording started' : '\u25a0 Recording stopped', 'recv');
       if (m.frame_rate !== undefined) setTimeout(() => send({cmd: 'get_settings'}), 150);
       break;
-    case 'error': log('錯誤：' + m.error, 'err'); flash('err', m.error); break;
+    case 'error': log('Error: ' + m.error, 'err'); flash('err', m.error); break;
   }
 }
 
 function reportRejections(rejected) {
   if (!rejected || !Object.keys(rejected).length) return;
   for (const [k, d] of Object.entries(rejected)) {
-    log('⚠ 相機沒有接受 ' + k + '=' + d.requested + '（實際 ' + d.actual + '）', 'warn');
+    log('\u26a0 camera did not accept ' + k + '=' + d.requested + ' (actual ' + d.actual + ')', 'warn');
     if (d.hint) log('   ' + d.hint, 'warn');
   }
-  flash('warn', '有設定沒有生效，詳見下方 Log');
+  flash('warn', 'Some settings did not take effect \u2014 see the log');
 }
 
 // ── 頂部狀態 ──────────────────────────────────────────────────────
@@ -317,10 +319,10 @@ function render() {
 
   const b = [];
   b.push(badge(connected ? 'ok' : 'bad',
-    st.wsDown ? 'bridge 斷線' : connected ? '相機已連線' : '相機未連線'));
-  if (st.released) b.push(badge('warn', '已交還機身'));
-  if (st.camera_mode) b.push(badge('info', st.camera_mode === 'movie' ? 'CINE 錄影模式' : 'STILL 拍照模式'));
-  if (st.recording) b.push('<span class="badge rec"><span class="dot pulse"></span>錄影中</span>');
+    st.wsDown ? 'bridge down' : connected ? 'Camera connected' : 'Camera not connected'));
+  if (st.released) b.push(badge('warn', 'Released to body'));
+  if (st.camera_mode) b.push(badge('info', st.camera_mode === 'movie' ? 'CINE' : 'STILL'));
+  if (st.recording) b.push('<span class="badge rec"><span class="dot pulse"></span>REC</span>');
   if (st.focal_length_mm) b.push(badge('', st.focal_length_mm + ' mm'));
   setHTML($('badges'), b.join(''));
 
@@ -329,14 +331,14 @@ function render() {
   if (live) { if (!$('liveview').getAttribute('src')) $('liveview').src = '/liveview.mjpeg'; }
   else if ($('liveview').getAttribute('src')) { $('liveview').removeAttribute('src'); }
   setText($('liveview-off'), st.released
-    ? '已交還機身操作 — 沒有即時預覽。按「取回控制權」恢復。'
-    : st.wsDown ? 'bridge 連線中斷' : '相機未連線');
+    ? 'Released to the body \u2014 no live view. Press Take Control to resume.'
+    : st.wsDown ? 'bridge connection lost' : 'Camera not connected');
 
   setText($('f-pos'), st.focus_position);
   // 馬達狀態和焦距都是在描述這一列講的那顆鏡頭 —— 各佔一列只是把同一件事
   // 拆開放。接在位置後面，兩列的空間就省下來了。
   setText($('f-lens'), [
-    st.focus_state === 1 ? '對焦中' : st.focus_state === 0 ? '靜止' : '',
+    st.focus_state === 1 ? 'Focusing' : st.focus_state === 0 ? 'Idle' : '',
     st.focal_length_mm ? st.focal_length_mm + ' mm' : '',
   ].filter(Boolean).join(' · '));
   renderFocusControls();
@@ -344,9 +346,9 @@ function render() {
   if (st.focus_range) applyRange(st.focus_range);
   if (st.focus_position != null && !busy()) $('pos-slider').value = st.focus_position;
 
-  setText($('btn-rec'), st.recording ? '■ 停止錄影' : '● 開始錄影');
+  setText($('btn-rec'), st.recording ? '\u25a0 Stop Recording' : '\u25cf Start Recording');
   setText($('rec-elapsed'), st.recording && st.recording_seconds != null
-    ? Math.round(st.recording_seconds) + ' 秒' : '');
+    ? Math.round(st.recording_seconds) + 's' : '');
 
   // 錄影按鈕只看連線，不看 recording —— 否則要停止的時候反而按不下去
   for (const id of ['pos-slider'])
@@ -357,7 +359,7 @@ function render() {
   // 錄影中不讓人改設定：曝光在錄製途中變動會毀掉這一鏡
   const lockSettings = !live || !!st.recording;
   document.querySelectorAll('#settings [data-set]').forEach(el => {
-    if (el.classList && el.classList.contains('locked')) return;   // 機身模式一直是鎖的
+    if (el.classList && el.classList.contains('locked')) return;   // 機身模式那一列一直是鎖的
     // data-locked 是 renderSettings 依當下狀態標的（A 模式下的快門、
     // 自動 ISO 下的數值…）。這裡只能再加上停用，不能把它打開。
     setDisabled(el, lockSettings || el.dataset.locked === '1');
@@ -371,12 +373,13 @@ function renderNotices() {
   if (transient && Date.now() < transient.until) out.push(notice(transient.kind, transient.text, ''));
   else if (transient) transient = null;
   if (st.released) {
-    out.push(notice('warn', '機身操作已交還給你',
-      'bridge 仍在執行但完全放開相機 —— 沒有預覽、沒有對焦控制。取回時相機會被重置，' +
-      '你先前的設定會自動還原，但<b>在機身上做的改動不會保留</b>。'));
+    out.push(notice('warn', 'The body is yours',
+      'The bridge is still running but has let go of the camera entirely \u2014 no ' +
+      'live view, no focus control. Taking control resets the camera; your earlier ' +
+      'settings are restored, but <b>changes made on the body are lost</b>.'));
   }
   if (st.recording) {
-    out.push(notice('info', '錄影中', '設定已鎖定 —— 錄製途中改曝光會毀掉這一鏡。'));
+    out.push(notice('info', 'Recording', 'Settings are locked \u2014 changing exposure mid-take ruins the shot.'));
   }
   const mode = values.exposure_mode;
   setHTML($('notices'), out.join(''));
@@ -405,7 +408,7 @@ function applyRange(r) {
   s.min = r[0]; s.max = r[1];
   s.step = Math.max(1, Math.round((r[1] - r[0]) / 1000));
   $('f-range-hint').textContent = '（' + r[0] + ' – ' + r[1] + '）';
-  log('焦點範圍 ' + r[0] + '–' + r[1], 'recv');
+  log('Focus range ' + r[0] + '\u2013' + r[1], 'recv');
 }
 
 // 拖曳時就持續送位置，不用等放開 —— 這才是跟焦該有的手感。
@@ -440,37 +443,37 @@ function onSliderCommit() {
 // 由上而下：機身模式 → 曝光模式 → 影像規格 → 大小 → 幀率 → 位元深度 → 曝光數值。
 // 每一列的選項都來自相機當下回報的合法值，所以上層一改，下層自動跟著變。
 const ORDER = [
-  ['__format',              '影像規格'],
+  ['__format',              'Format'],
   // DC 裁切和電子防手震都是在裁切感光範圍，而且會互相影響（CinemaDNG 下
   // 相機直接關掉電子防手震），所以緊接在影像規格後面、併成一列。
-  ['__crop',                '裁切與防手震'],
-  ['__exposure',            '曝光'],
+  ['__crop',                'Crop & Stabilization'],
+  ['__exposure',            'Exposure'],
   // mov_image_quality 不列在 UI：實測相機在所有格式 / 大小 / 幀率組合下
   // 都不開放調整它，值 1 / 2 的意義也沒有證據。顯示一個按不動又看不懂的
   // 控制項只會造成困惑。它仍可透過 API 讀寫，協定層的對應也留著。
-  ['metering_mode',         '測光'],
-  ['__wb',                  '白平衡'],
+  ['metering_mode',         'Metering Mode'],
+  ['__wb',                  'White Balance'],
   // shutter_unit 併在曝光列的秒 / 角度按鈕裡；capture_mode 是最上層那列，都不另外列
-  ['color_mode',            '色彩模式'],
-  ['aspect_ratio',          '長寬比'],
-  ['color_space',           '色彩空間'],
-  ['tone_effect',           '色調'],
-  ['drive_mode',            '驅動模式'],
+  ['color_mode',            'Color Mode'],
+  ['aspect_ratio',          'Aspect Ratio'],
+  ['color_space',           'Color Space'],
+  ['tone_effect',           'Tone Control'],
+  ['drive_mode',            'Drive Mode'],
 
   // ── 一直在 DataGroup4/5 裡但沒接出來的 ──────────────────────────
-  ['high_iso_ext',          '高感光擴展'],
-  ['cont_shoot_speed',      '連拍速度'],
+  ['high_iso_ext',          'High ISO Expansion'],
+  ['cont_shoot_speed',      'Cont. Shooting Speed'],
   ['hdr',                   'HDR'],
-  ['fill_light',            '補光'],
-  ['__loc',                 '鏡頭校正'],
-  ['interval_timer_seconds','間隔秒數'],
-  ['interval_timer_frames', '間隔張數'],
+  ['fill_light',            'Fill Light'],
+  ['__loc',                 'Lens Optics Compensation'],
+  ['interval_timer_seconds','Interval Time'],
+  ['interval_timer_frames', 'Number of Shots'],
 ];
 
 // 太長的清單改成橫向捲動，不然一列會佔掉半個畫面
 const SCROLL_IF_OVER = 9;
 
-const ON_OFF = {On:'開', Off:'關', Auto:'自動', Null:'—'};
+const ON_OFF = {On:'On', Off:'Off', Auto:'Auto', Null:'\u2014'};
 
 const FRIENDLY = {
   electronic_stabilization: ON_OFF,
@@ -480,30 +483,30 @@ const FRIENDLY = {
   loc_chromatic_aberration: ON_OFF,
   loc_diffraction: ON_OFF,
   loc_vignetting: ON_OFF,
-  cont_shoot_speed: {Auto:'自動', High:'高', Medium:'中', Low:'低'},
-  hdr: {Off:'關', Auto:'自動', Null:'—',
+  cont_shoot_speed: {Auto:'Auto', High:'High', Medium:'Medium', Low:'Low'},
+  hdr: {Off:'Off', Auto:'Auto', Null:'\u2014',
         PlusMinus1:'±1', PlusMinus2:'±2', PlusMinus3:'±3'},
   // fp 選單上的名字。1 和 13–16 是實測定出來的（見 camera_settings.FpColorMode）
   color_mode: {
-    Standard:'標準', Vivid:'鮮豔', Neutral:'自然', Portrait:'人像', Landscape:'風景',
-    Cinema:'電影', WarmGold:'暖金', TealAndOrange:'青橘', SunsetRed:'夕陽紅',
-    ForestGreen:'森林綠', PowderBlue:'粉藍', FovClassicBlue:'FOV 經典藍',
-    FovClassicYellow:'FOV 經典黃', Monochrome:'黑白', Off:'關（供調色）',
-    Duotone:'雙色調',
+    FovClassicBlue:'FOV Classic Blue', FovClassicYellow:'FOV Classic Yellow',
+    WarmGold:'Warm Gold', TealAndOrange:'Teal and Orange', SunsetRed:'Sunset Red',
+    ForestGreen:'Forest Green', PowderBlue:'Powder Blue', Duotone:'Duotone',
   },
-  focus_mode: {MF:'手動 MF', AF:'自動 AF', AF_S:'單次 AF-S', AF_C:'連續 AF-C'},
-  face_eye_af: {Off:'關', FaceOnly:'僅臉部', FaceEyeAuto:'臉部+眼睛'},
-  focus_area: {MultiAutoFocusPoints:'多點', OnePointSelection:'單點', Tracking:'追蹤'},
+  focus_mode: {MF:'MF', AF:'AF', AF_S:'AF-S', AF_C:'AF-C'},
+  face_eye_af: {Off:'Off', FaceOnly:'Face Only', FaceEyeAuto:'Face / Eye Auto'},
+  focus_area: {MultiAutoFocusPoints:'Multi Auto Focus Points',
+              OnePointSelection:'1-Point Selection', Tracking:'Tracking'},
   exposure_mode: {ProgramAuto:'P', AperturePriority:'A', ShutterPriority:'S', Manual:'M'},
-  iso_auto: {Auto:'自動', Manual:'手動'},
-  image_quality: {DNG:'RAW DNG', JPEGFine:'JPEG 高', JPEGNormal:'JPEG 中',
-                  JPEGBasic:'JPEG 低', DNGAndJPEG:'RAW+JPEG'},
-  resolution: {High:'大', Medium:'中', Low:'小'},
-  white_balance: {Auto:'自動', Sunlight:'日光', Shade:'陰影', Overcast:'陰天',
-                  Incandescent:'白熾', Fluorescent:'螢光', Flash:'閃燈', ColorTemp:'色溫', LightSource:'光源',
-                  Custom1:'自訂1', Custom2:'自訂2', Custom3:'自訂3'},
-  metering_mode: {Evaluative:'權衡', CenterWeightedAverage:'中央重點',
-                  CenterArea:'中央', Spot:'點測'},
+  iso_auto: {Auto:'Auto', Manual:'Manual'},
+  image_quality: {DNG:'DNG', JPEGFine:'JPEG Fine', JPEGNormal:'JPEG Normal',
+                  JPEGBasic:'JPEG Basic', DNGAndJPEG:'DNG + JPEG'},
+  resolution: {High:'High', Medium:'Medium', Low:'Low'},
+  white_balance: {Auto:'Auto', Sunlight:'Daylight', Shade:'Shade', Overcast:'Overcast',
+                  Incandescent:'Incandescent', Fluorescent:'Fluorescent', Flash:'Flash',
+                  ColorTemp:'Color Temp.', LightSource:'Light Source',
+                  Custom1:'Custom 1', Custom2:'Custom 2', Custom3:'Custom 3'},
+  metering_mode: {Evaluative:'Evaluative', CenterWeightedAverage:'Center Weighted Average',
+                  CenterArea:'Center Area', Spot:'Spot'},
 };
 
 // 相機回報 10 個曝光模式（含 Null / C1-C3 / Star），但實際會用的就這四個。
@@ -541,7 +544,7 @@ function matchState(choice, current) {
 }
 
 function approxTitle(state, current) {
-  return state === 'on approx' ? ' title="相機實際值 ' + escapeHTML(current) + '"' : '';
+  return state === 'on approx' ? ' title="camera reports ' + escapeHTML(current) + '"' : '';
 }
 
 function labelFor(s, v) {
@@ -633,16 +636,16 @@ function formatRow(byName) {
       locked = true;
       const shown = (v === null || v === undefined) ? '—' : labelFor(s, v);
       btns = '<button class="o on locked" disabled title="' +
-        escapeHTML('目前的規格 / 大小組合下，相機不開放調整這一項') + '">' +
+        escapeHTML('the camera does not offer this at the current format / size') + '">' +
         escapeHTML(shown) + '</button>';
     }
     return '<span class="grp">' + btns + '</span>';
   }).join('');
 
   return '<div class="opt"><div class="opt-head">' +
-    '<span class="opt-name">影像規格</span>' +
+    '<span class="opt-name">Format</span>' +
     '<span class="opt-cur">' + escapeHTML(cur || '—') + '</span>' +
-    (locked ? '<span class="opt-note">灰色項目在此組合下鎖定</span>' : '') +
+    (locked ? '<span class="opt-note">greyed out = locked at this combination</span>' : '') +
     '</div><div class="opts">' + body + '</div></div>';
 }
 
@@ -683,22 +686,32 @@ function exposureRow(byName) {
   if (isoAuto || iso || ev) {
     let g = '';
     if (isoAuto) {
-      g += (isoAuto.choices || ['Auto', 'Manual']).map(v =>
+      // 自動在前 —— 跟其他開關類的排法一致（開在前、關在後）
+      const isoOrder = (isoAuto.choices || []).slice()
+        .sort((a, b) => (a === 'Auto' ? -1 : b === 'Auto' ? 1 : 0));
+      g += (isoOrder.length ? isoOrder : ['Auto', 'Manual']).map(v =>
         '<button class="o' + (String(v) === String(values.iso_auto) ? ' on' : '') + '"' +
         ' data-set="iso_auto" data-val="' + v + '">' +
-        (v === 'Auto' ? '自動' : '手動') + '</button>').join('');
+        v + '</button>').join('');
     }
     if (iso && iso.choices && iso.choices.length) {
       const v = values.iso;
       if (v !== null && v !== undefined) parts.push('ISO ' + v);
       g += '<select data-set="iso"' + lockedAttr(autoIso) +
-        ' title="' + escapeHTML(autoIso ? 'ISO 自動時由相機決定' : 'ISO') + '">' +
+        ' title="' + escapeHTML(autoIso ? 'the camera picks ISO while ISO Auto is on' : 'ISO Sensitivity') + '">' +
         optionsFor(iso.choices, v, c => 'ISO ' + c) + '</select>';
     }
     if (ev && ev.choices && ev.choices.length) {
       const v = values.exposure_compensation;
       if (v !== null && v !== undefined) parts.push('EV ' + labelFor(ev, v));
-      g += '<select data-set="exposure_compensation" title="曝光補償">' +
+      // 相機宣告的範圍縮成單一值 = 這個模式下不開放。實測 M 模式下
+      // min=max=0，切到 P / A 就變成 ±3 EV 共 19 段 —— 全手動下沒有東西可
+      // 補償，本來就該是這樣。畫成只有一個選項的下拉看起來像壞掉。
+      const evFixed = ev.choices.length < 2;
+      g += '<select data-set="exposure_compensation"' + lockedAttr(evFixed) +
+        ' title="' + escapeHTML(evFixed
+          ? 'the camera offers no exposure compensation in this exposure mode'
+          : 'Exposure Compensation') + '">' +
         optionsFor(ev.choices, v, c => 'EV ' + labelFor(ev, c)) + '</select>';
     }
     if (g) body += '<span class="grp">' + g + '</span>';
@@ -708,7 +721,7 @@ function exposureRow(byName) {
   if (ap && ap.choices && ap.choices.length) {
     const v = values.aperture;
     body += '<span class="grp"><select data-set="aperture"' + lockedAttr(!apOK) +
-      ' title="' + escapeHTML(apOK ? '光圈' : 'P / S 模式下由相機決定光圈') + '">' +
+      ' title="' + escapeHTML(apOK ? 'Aperture' : 'the camera picks the aperture in P / S') + '">' +
       optionsFor(ap.choices, v, c => labelFor(ap, c)) + '</select></span>';
   }
 
@@ -737,21 +750,21 @@ function exposureRow(byName) {
     };
     const v = values[active.name];
     body += '<span class="grp">' +
-      unitBtn('time', '秒', unitSetting ? true : secondsAvailable,
-              unitSetting ? '切換相機的快門表示法為速度' :
-              (secondsAvailable ? '' : 'CINE 模式的快門只能用角度設定')) +
-      unitBtn('angle', '角度', unitSetting ? true : !!angle,
-              unitSetting ? '切換相機的快門表示法為角度' : '') +
+      unitBtn('time', 'Speed', unitSetting ? true : secondsAvailable,
+              unitSetting ? 'switch the camera to shutter speed' :
+              (secondsAvailable ? '' : 'in CINE the shutter is set by angle only')) +
+      unitBtn('angle', 'Angle', unitSetting ? true : !!angle,
+              unitSetting ? 'switch the camera to shutter angle' : '') +
       '<select data-set="' + active.name + '"' + lockedAttr(!shOK) +
-      ' title="' + escapeHTML(shOK ? '快門' : 'P / A 模式下由相機決定快門') + '">' +
+      ' title="' + escapeHTML(shOK ? 'Shutter' : 'the camera picks the shutter in P / A') + '">' +
       optionsFor(active.choices, v, c => labelFor(active, c)) + '</select></span>';
   }
 
-  const note = manual ? '' : (cur ? cur.replace('ProgramAuto','P 模式')
-        .replace('AperturePriority','A 模式').replace('ShutterPriority','S 模式') +
-        '：灰色項目由相機決定' : '');
+  const note = manual ? '' : (cur ? cur.replace('ProgramAuto', 'P')
+        .replace('AperturePriority', 'A').replace('ShutterPriority', 'S') +
+        ': greyed out = the camera decides' : '');
   return '<div class="opt"><div class="opt-head">' +
-    '<span class="opt-name">曝光</span>' +
+    '<span class="opt-name">Exposure</span>' +
     '<span class="opt-cur">' + escapeHTML(parts.join(' · ') || '—') + '</span>' +
     (note ? '<span class="opt-note">' + escapeHTML(note) + '</span>' : '') +
     '</div><div class="opts">' + body + '</div></div>';
@@ -763,15 +776,15 @@ function exposureRow(byName) {
 // 四項鏡頭光學校正各佔一列太佔版面，而且它們是同一類東西、選項也一樣。
 // 併成一列，每項只留下拉選單。
 const LOC_PARTS = [
-  ['loc_distortion',           '畸變'],
-  ['loc_chromatic_aberration', '色差'],
-  ['loc_diffraction',          '繞射'],
-  ['loc_vignetting',           '暗角'],
+  ['loc_distortion',           'Distortion'],
+  ['loc_chromatic_aberration', 'Chromatic Aberration'],
+  ['loc_diffraction',          'Diffraction'],
+  ['loc_vignetting',           'Vignetting'],
 ];
 
 const CROP_PARTS = [
-  ['dc_crop_mode',             'DC 裁切'],
-  ['electronic_stabilization', '電子防手震'],
+  ['dc_crop_mode',             'DC Crop Mode'],
+  ['electronic_stabilization', 'Electronic Stabilization'],
 ];
 
 // ── 在預覽畫面上點選對焦點 ─────────────────────────────────────────
@@ -794,11 +807,11 @@ function renderTapFocus() {
   const btn = $('btn-tapfocus'), img = $('liveview'), marker = $('lv-marker');
   const area = $('lv-afarea');
   if (!btn) return;
-  setText(btn, '點選對焦：' + (tapFocus ? '開' : '關'));
+  setText(btn, 'Tap to Focus: ' + (tapFocus ? 'On' : 'Off'));
   btn.classList.toggle('primary', tapFocus);
   if (img) img.classList.toggle('tap', tapFocus);
   setText($('tapfocus-hint'), tapFocus
-    ? '點虛線框內移動對焦點（相機會吸附到最近的格點）' : '');
+    ? 'tap inside the dashed frame to move the AF point (the camera snaps to its grid)' : '');
   if (!marker) return;
 
   const b = (focusBounds && focusBounds.point) || {};
@@ -923,7 +936,7 @@ function focusApply(body) {
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify(body),
   }).then(r => r.json()).then(d => {
-    if (d.error) { log('對焦設定失敗：' + d.error, 'err'); flash('err', d.error); return; }
+    if (d.error) { log('focus: ' + d.error, 'err'); flash('err', d.error); return; }
     Object.assign(st, {
       focus_mode: d.focus_mode, face_eye_af: d.face_eye_af,
       focus_area: d.focus_area, focus_point: d.focus_point,
@@ -931,7 +944,7 @@ function focusApply(body) {
     });
     renderFocusControls();
   renderTapFocus();
-  }).catch(e => log('對焦設定請求失敗：' + e, 'err'));
+  }).catch(e => log('focus request failed: ' + e, 'err'));
 }
 
 // 三項對焦設定併成一列。它們是同一件事的三個面向，而且選項都短 ——
@@ -952,7 +965,7 @@ function renderFocusControls() {
     // 相機連上之前呼叫會失敗，而先前只在連線事件時試一次 —— 失敗就永遠
     // 停在「載入中」。這裡每次 render 都補一次，成功後就不再試。
     if (st.connected && !st.released) loadFocusBounds();
-    setHTML(box, '<div class="hint">對焦選項載入中…</div>');
+    setHTML(box, '<div class="hint">loading focus options\u2026</div>');
     return;
   }
 
@@ -960,33 +973,33 @@ function renderFocusControls() {
   // 臉眼固定回 Off。合理（MF 的「區域」就是放大輔助的位置），但按了沒反應
   // 比按不下去更讓人困惑，所以直接標出來。
   const isMF = st.focus_mode === 'MF';
-  const needAF = isMF ? '需切換成 AF 模式' : '';
+  const needAF = isMF ? 'switch to AF first' : '';
 
   // 單點與臉眼本來就互斥：要嘛你指定位置，要嘛交給相機找臉。合併成一個
   // 控制項，多點不列 —— 它會把對焦點鎖在正中央，跟「點哪對哪」直接衝突，
   // 而這個 bridge 的對焦點就是靠單點運作的。
   const fm = FRIENDLY.focus_mode || {};
   const TARGETS = [
-    {id: 'point', label: '單點', body: {face_eye_af: 'Off', focus_area: 'OnePointSelection'}},
-    {id: 'FaceOnly', label: '僅臉部', body: {face_eye_af: 'FaceOnly'}},
-    {id: 'FaceEyeAuto', label: '臉部+眼睛', body: {face_eye_af: 'FaceEyeAuto'}},
+    {id: 'point', label: 'AF Point', body: {face_eye_af: 'Off', focus_area: 'OnePointSelection'}},
+    {id: 'FaceOnly', label: 'Face Only', body: {face_eye_af: 'FaceOnly'}},
+    {id: 'FaceEyeAuto', label: 'Face / Eye Auto', body: {face_eye_af: 'FaceEyeAuto'}},
   ];
   const activeTarget = (st.face_eye_af && st.face_eye_af !== 'Off') ? st.face_eye_af : 'point';
   const targetLabel = (TARGETS.find(t => t.id === activeTarget) || {}).label || '—';
   const cur = [fm[st.focus_mode] || st.focus_mode, targetLabel].filter(Boolean).join(' · ');
 
   const notes = [];
-  if (needAF) notes.push('MF 下對焦對象無效');
-  if (st.camera_mode === 'movie') notes.push('CINE 下 AF-C 會變成 AF-S');
+  if (needAF) notes.push('no effect in MF');
+  if (st.camera_mode === 'movie') notes.push('AF-C falls back to AF-S in CINE');
 
   const rows = [];
   rows.push('<div class="opt"><div class="opt-head">' +
-    '<span class="opt-name">對焦</span>' +
+    '<span class="opt-name">Focus</span>' +
     '<span class="opt-cur">' + escapeHTML(cur || '—') + '</span>' +
     (notes.length ? '<span class="opt-note">' + escapeHTML(notes.join(' · ')) + '</span>' : '') +
     '</div><div class="opts">' +
-    focusGroup('mode', '模式', st.focus_mode, focusBounds.focus_modes || [], fm, false) +
-    '<span class="grp"><span class="grp-label">對焦對象</span>' +
+    focusGroup('mode', 'Focus Mode', st.focus_mode, focusBounds.focus_modes || [], fm, false) +
+    '<span class="grp"><span class="grp-label">Subject</span>' +
     TARGETS.map(t => '<button class="o' + (t.id === activeTarget ? ' on' : '') +
       '" data-target="' + t.id + '"' + (isMF ? ' disabled data-locked="1"' : '') +
       '>' + t.label + '</button>').join('') + '</span>' +
@@ -1003,13 +1016,14 @@ function renderFocusControls() {
     '</button>').join('');
 
   rows.push('<div class="opt"><div class="opt-head">' +
-    '<span class="opt-name">對焦點</span>' +
+    '<span class="opt-name">AF Point</span>' +
     '<span class="opt-cur">' + (pt && pt.length === 2 ? pt[0] + ', ' + pt[1] : '—') + '</span>' +
     '<span class="opt-note">' +
-    (tapFocus ? '點預覽畫面移動（會自動切成單點選擇）' : '開啟上方「點選對焦」後點預覽畫面') +
+    (tapFocus ? 'tap the preview to move it (switches to 1-Point Selection)'
+              : 'turn on Tap to Focus above, then tap the preview') +
     '</span></div>' +
     (sizeOpts ? '<div class="opts"><span class="grp">' +
-      '<span class="grp-label">框大小</span>' + sizeOpts + '</span></div>' : '') +
+      '<span class="grp-label">Frame Size</span>' + sizeOpts + '</span></div>' : '') +
     '</div>');
 
   const html = rows.join('');
@@ -1080,15 +1094,15 @@ function wbRow(byName) {
   if (ct) {
     body += '<span class="grp"><input type="number" data-set="color_temp" step="100"' +
       lockedAttr(!byTemp) +
-      ' title="' + escapeHTML(byTemp ? '色溫（K）' : '白平衡設成「色溫」時才能指定') + '"' +
+      ' title="' + escapeHTML(byTemp ? 'Color Temperature (K)' : 'only settable when White Balance is Color Temp.') + '"' +
       ' value="' + (curCt === null || curCt === undefined ? '' : curCt) + '"' +
       ' style="min-width:96px"></span>';
   }
 
   return '<div class="opt"><div class="opt-head">' +
-    '<span class="opt-name">白平衡</span>' +
+    '<span class="opt-name">White Balance</span>' +
     '<span class="opt-cur">' + escapeHTML(parts.join(' · ') || '—') + '</span>' +
-    (ct && !byTemp ? '<span class="opt-note">選「色溫」才能指定 K 值</span>' : '') +
+    (ct && !byTemp ? '<span class="opt-note">pick Color Temp. to set K</span>' : '') +
     '</div><div class="opts">' + body + '</div></div>';
 }
 
@@ -1127,7 +1141,7 @@ function coerceValue(name, raw) {
 }
 
 function settingsHTML() {
-  if (!schema) return '<div class="hint">載入中…</div>';
+  if (!schema) return '<div class="hint">loading\u2026</div>';
   const byName = {};
   visibleSettings().forEach(s => byName[s.name] = s);
   const manual = values.exposure_mode === 'Manual';
@@ -1137,23 +1151,23 @@ function settingsHTML() {
   // 真的切換 —— 所以做成可按的按鈕，不是唯讀指示。
   const modeSetting = byName.capture_mode;
   if (modeSetting) {
-    rows.push(optRow('capture_mode', '機身模式', {
+    rows.push(optRow('capture_mode', 'Shooting Mode', {
       current: values.capture_mode,
       currentLabel: values.capture_mode === 1 ? 'STILL'
                   : values.capture_mode === 2 ? 'CINE' : '—',
-      note: '切換會連帶改變快門表示法',
+      note: 'switching also changes how the shutter is expressed',
       choices: [
-        {value: 1, label: 'STILL', title: '拍照模式'},
-        {value: 2, label: 'CINE', title: '錄影模式'},
+        {value: 1, label: 'STILL', title: 'stills'},
+        {value: 2, label: 'CINE', title: 'movie'},
       ],
     }));
   } else {
-    rows.push(optRow('__mode', '機身模式', {
+    rows.push(optRow('__mode', 'Shooting Mode', {
       current: st.camera_mode || '',
       currentLabel: st.camera_mode === 'movie' ? 'CINE'
                   : st.camera_mode === 'stills' ? 'STILL' : '—',
       locked: true,
-      note: '相機未回報，無法切換',
+      note: 'the camera does not report it \u2014 cannot switch',
       choices: [
         {value: 'stills', label: 'STILL'},
         {value: 'movie', label: 'CINE'},
@@ -1166,7 +1180,7 @@ function settingsHTML() {
     if (name === '__exposure') { const r = exposureRow(byName); if (r) rows.push(r); continue; }
     if (name === '__wb') { const r = wbRow(byName); if (r) rows.push(r); continue; }
     if (name === '__loc') {
-      const r = comboRow(byName, '鏡頭校正', LOC_PARTS); if (r) rows.push(r); continue;
+      const r = comboRow(byName, 'Lens Optics Compensation', LOC_PARTS); if (r) rows.push(r); continue;
     }
     if (name === '__crop') {
       const r = comboRow(byName, title, CROP_PARTS); if (r) rows.push(r); continue;
@@ -1195,10 +1209,10 @@ function settingsHTML() {
         current: cur,
         currentLabel: cur === null || cur === undefined ? '—' : labelFor(s, cur),
         disabled: needsM || unavail,
-        note: unavail ? '目前的格式／模式下相機不開放'
-              : needsM ? '需切換成 M 模式'
-              : opaque ? '數值意義尚未確認'
-              : (s.inferred_labels ? '? = 推測未確認' : ''),
+        note: unavail ? 'not offered at the current format / mode'
+              : needsM ? 'needs M mode'
+              : opaque ? 'meaning of these values not confirmed'
+              : (s.inferred_labels ? '? = inferred, unconfirmed' : ''),
         choices: choices.map(v => ({value: v, label: labelFor(s, v)})),
       }));
     } else {
@@ -1238,7 +1252,7 @@ function applyFolds(box) {
     const open = openRows.has(key);
     row.classList.toggle('folded', !open);
     btn.textContent = open ? '▾' : '▸';
-    btn.title = open ? '收起' : key;
+    btn.title = open ? 'collapse' : key;
     btn.onclick = () => {
       if (open) openRows.delete(key); else openRows.add(key);
       applyFolds(box);
@@ -1304,7 +1318,7 @@ function toggleRec() { send({cmd: st.recording ? 'record_stop' : 'record_start'}
 // ── 校準 ──────────────────────────────────────────────────────────
 
 function doRelease() {
-  if (st.recording && !confirm('正在錄影中，交還前會先停止錄影。繼續？')) return;
+  if (st.recording && !confirm('Recording. Releasing will stop it first. Continue?')) return;
   send({cmd: 'release'});
 }
 

@@ -105,12 +105,12 @@ def recv_raw(cam, opcode, params: list[int] | None = None) -> bytes:
 
     if isinstance(opcode, str):
         if opcode not in known_opcodes():
-            raise ProbeError(f"不認得的 opcode：{opcode}")
+            raise ProbeError(f"unknown opcode: {opcode}")
     elif isinstance(opcode, int):
         if not 0x1000 <= opcode <= 0xFFFF:
-            raise ProbeError(f"opcode 超出範圍：0x{opcode:04x}")
+            raise ProbeError(f"opcode out of range: 0x{opcode:04x}")
     else:
-        raise ProbeError("opcode 必須是名稱字串或數值")
+        raise ProbeError("opcode must be a name or a number")
     ptp = Container(
         OperationCode=opcode,
         SessionID=cam._session,

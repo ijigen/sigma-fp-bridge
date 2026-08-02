@@ -230,16 +230,16 @@ DEFAULT_FRAME_RATE = 24.0
 def angle_to_seconds(angle: float, frame_rate: float) -> float:
     """快門角度 → 曝光秒數。"""
     if frame_rate <= 0:
-        raise SettingError(f"幀率必須大於 0，收到 {frame_rate}")
+        raise SettingError(f"frame rate must be > 0, got {frame_rate}")
     if not 0 < angle <= 360:
-        raise SettingError(f"快門角度要在 0–360 之間，收到 {angle}")
+        raise SettingError(f"shutter angle must be 0-360, got {angle}")
     return angle / (360.0 * frame_rate)
 
 
 def seconds_to_angle(seconds: float, frame_rate: float) -> float:
     """曝光秒數 → 快門角度。超過 360°（曝光比一個影格還長）會夾在 360。"""
     if frame_rate <= 0 or not seconds:
-        raise SettingError("幀率與快門秒數都必須大於 0")
+        raise SettingError("frame rate and shutter seconds must both be > 0")
     return min(360.0, round(360.0 * seconds * frame_rate, 1))
 
 
@@ -254,7 +254,7 @@ def nearest_shutter_angle(angle: float, frame_rate: float) -> tuple[float, float
     code = SHUTTER.encode_uint8(wanted)
     actual = SHUTTER.decode_uint8(code)
     if actual is None:
-        raise SettingError(f"快門角度 {angle}° @ {frame_rate}fps 換算不出合法的快門值")
+        raise SettingError(f"{angle} deg at {frame_rate}fps does not convert to a shutter the camera takes")
     return seconds_to_angle(actual, frame_rate), actual
 
 
@@ -300,7 +300,7 @@ def encode_value(setting: Setting, value) -> Any:
         SettingError: 值不合法，或（光圈的情況）踩到 sigma-ptpy 表裡的壞碼。
     """
     if not setting.writable:
-        raise SettingError(f"{setting.name} 是唯讀的")
+        raise SettingError(f"{setting.name} is read-only")
 
     if setting.kind == "enum":
         if isinstance(value, setting.enum_cls):
@@ -332,9 +332,9 @@ def encode_value(setting: Setting, value) -> Any:
         try:
             code = setting.converter.encode_uint8(float(value))
         except (TypeError, ValueError):
-            raise SettingError(f"{setting.name} 需要數值，收到 {value!r}") from None
+            raise SettingError(f"{setting.name} needs a number, got {value!r}") from None
         if code is None:
-            raise SettingError(f"{setting.name}={value!r} 換算不出相機編碼")
+            raise SettingError(f"{setting.name}={value!r} does not convert to a camera code")
         if setting.name == "aperture" and code in _BROKEN_APERTURE_CODES:
             raise SettingError(
                 f"f/{value} 對應到 sigma-ptpy 換算表裡的壞碼 {code}"
@@ -345,7 +345,7 @@ def encode_value(setting: Setting, value) -> Any:
     try:
         return int(value)
     except (TypeError, ValueError):
-        raise SettingError(f"{setting.name} 需要整數，收到 {value!r}") from None
+        raise SettingError(f"{setting.name} needs an integer, got {value!r}") from None
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -491,16 +491,16 @@ def apply_settings(cam, changes: dict[str, Any],
     # shutter_angle 沒有對應的相機欄位 —— 換算成 shutter_speed 再照一般流程走
     if SHUTTER_ANGLE in changes:
         if "shutter_speed" in changes:
-            raise SettingError("shutter_angle 與 shutter_speed 不能同時指定，它們是同一件事")
+            raise SettingError("shutter_angle and shutter_speed are the same setting - pass one")
         if not frame_rate:
             raise SettingError(
-                "設定 shutter_angle 需要幀率 —— 角度要有幀率才有意義"
+                "shutter_angle needs a frame rate - an angle means nothing without one"
             )
         angle = changes.pop(SHUTTER_ANGLE)
         try:
             actual_angle, seconds = nearest_shutter_angle(float(angle), frame_rate)
         except (TypeError, ValueError) as e:
-            raise SettingError(f"快門角度不合法：{angle!r}") from e
+            raise SettingError(f"invalid shutter angle: {angle!r}") from e
         changes["shutter_speed"] = seconds
         applied_angle = actual_angle
     else:
@@ -634,7 +634,7 @@ def check_within_capabilities(name: str, value, capabilities: dict | None) -> No
         return
     if not (lo <= numeric <= hi):
         raise SettingError(
-            f"{name}={value} 超出相機回報的範圍 {lo}–{hi}"
+            f"{name}={value} is outside the range the camera reports, {lo}-{hi}"
         )
 
 

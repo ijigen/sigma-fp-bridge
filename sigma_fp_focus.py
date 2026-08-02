@@ -738,8 +738,8 @@ def set_focus_mode(cam: SigmaPTPy, mode, continuous_af=None) -> None:
             mode = FocusMode[mode]
         except KeyError as e:
             raise ValueError(
-                f"不認得的對焦模式：{mode}（可用："
-                f"{', '.join(m.name for m in FocusMode)}）") from e
+                f"unknown focus mode: {mode} (available: "
+                f"{', '.join(m.name for m in FocusMode)})") from e
     if continuous_af is None:
         continuous_af = mode is not FocusMode.MF
     focus = CamDataGroupFocusExt(
@@ -757,7 +757,7 @@ def set_face_eye_af(cam: SigmaPTPy, value) -> None:
             value = FaceEyeAF[value]
         except KeyError as e:
             raise ValueError(
-                f"不認得的值：{value}（可用："
+                f"unknown value: {value} (available: "
                 f"{', '.join(m.name for m in FaceEyeAF)}）") from e
     cam.set_cam_data_group_focus(CamDataGroupFocusExt(FaceEyeAF=value))
 
@@ -779,8 +779,8 @@ def set_focus_area(cam: SigmaPTPy, area) -> None:
             area = FocusArea[area]
         except KeyError as e:
             raise ValueError(
-                f"不認得的對焦區域：{area}（可用："
-                f"{', '.join(m.name for m in FocusArea)}）") from e
+                f"unknown focus area: {area} (available: "
+                f"{', '.join(m.name for m in FocusArea)})") from e
     cam.set_cam_data_group_focus(CamDataGroupFocusExt(FocusArea=area))
 
 

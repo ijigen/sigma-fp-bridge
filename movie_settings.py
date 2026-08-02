@@ -227,18 +227,18 @@ def encode(setting: MovieSetting, value) -> Any:
         try:
             return (int(round(float(value) * ANGLE_SCALE)), ANGLE_DENOMINATOR)
         except (TypeError, ValueError):
-            raise MovieSettingError(f"{setting.name} 需要數值，收到 {value!r}") from None
+            raise MovieSettingError(f"{setting.name} needs a number, got {value!r}") from None
     if setting.kind == "rational":
         try:
             f = float(value)
         except (TypeError, ValueError):
-            raise MovieSettingError(f"{setting.name} 需要數值，收到 {value!r}") from None
+            raise MovieSettingError(f"{setting.name} needs a number, got {value!r}") from None
         # 23.98 / 29.97 這種要保留兩位小數才對得上相機回報的 (2398, 100)
         return (int(round(f * 100)), 100)
     try:
         return int(value)
     except (TypeError, ValueError):
-        raise MovieSettingError(f"{setting.name} 需要整數，收到 {value!r}") from None
+        raise MovieSettingError(f"{setting.name} needs an integer, got {value!r}") from None
 
 
 def _capability_raw(info5_ifd, name: str) -> list | None:

@@ -74,7 +74,7 @@ def test_body_mode_is_settable_when_the_camera_reports_it():
     """
     js = _script(HTML.read_text())
     assert "byName.capture_mode" in js, "沒有用 capture_mode 當可寫控制"
-    assert "'capture_mode', '機身模式'" in js
+    assert "'capture_mode', 'Shooting Mode'" in js
     # 相機沒回報時仍要有唯讀的後備
     assert "'__mode'" in js and "locked: true" in js, "缺少唯讀後備"
     assert "if (b.dataset.set === '__mode') return;" in js, "後備的按鈕沒擋掉送出"
@@ -87,7 +87,7 @@ def test_manual_only_settings_are_marked():
     assert "NEEDS_MANUAL" in js
     for name in ("shutter_speed", "shutter_angle", "aperture"):
         assert name in js[js.index("NEEDS_MANUAL"):js.index("NEEDS_MANUAL") + 200], name
-    assert "需切換成 M 模式" in js
+    assert "'needs M mode'" in js
     print("✓ 只有 M 模式可設的項目會停用並說明")
 
 
@@ -131,8 +131,8 @@ def test_exposure_row_merges_mode_aperture_and_shutter():
     for token in ("exposure_mode", "aperture", "shutter_speed", "shutter_angle"):
         assert token in block, token
     assert "apOK" in block and "shOK" in block, "沒有依模式決定可不可設"
-    assert "CINE 模式的快門只能用角度設定" in block
-    assert "由相機決定" in block, "被相機接管的項目沒有說明"
+    assert "in CINE the shutter is set by angle only" in block
+    assert "the camera decides" in block, "被相機接管的項目沒有說明"
     body = js[js.index("const ORDER"):js.index("const SCROLL_IF_OVER")]
     for token in ("'exposure_mode'", "'aperture'", "'shutter_speed'", "'shutter_angle'"):
         assert token not in body, f"{token} 不該還在一般的 ORDER 迴圈裡"
@@ -224,8 +224,8 @@ def test_locked_option_groups_do_not_vanish():
     block = js[js.index("function formatRow"):js.index("function settingsHTML")]
     assert ".filter(Boolean);" in block, "沒有可選值的群組仍被濾掉"
     assert "locked = true" in block, "空清單沒有標成鎖定"
-    assert "相機不開放調整這一項" in block
-    assert "灰色項目在此組合下鎖定" in js
+    assert "does not offer this at the current format / size" in block
+    assert "greyed out = locked at this combination" in js
     print("✓ 無可選值的群組改為鎖定顯示，不會消失")
 
 
@@ -236,7 +236,7 @@ def test_unidentified_values_say_so():
     讓使用者對著沒有意義的數字猜，跟控制項壞掉沒兩樣 —— 要直說未確認。
     """
     js = _script(HTML.read_text())
-    assert "數值意義尚未確認" in js
+    assert "meaning of these values not confirmed" in js
     assert "const opaque" in js and "!s.labels" in js
     print("✓ 未確認意義的數值會標明")
 
@@ -266,7 +266,7 @@ def test_white_balance_and_colour_temp_share_a_row():
     block = js[js.index("function wbRow"):js.index("function settingsHTML")]
     assert "byTemp" in block, "沒有判斷白平衡是否為色溫模式"
     assert "lockedAttr(!byTemp)" in block, "非色溫模式下沒有停用 K 值"
-    assert "選「色溫」才能指定 K 值" in block
+    assert "pick Color Temp. to set K" in block
     assert '<select data-set="white_balance">' in block, "白平衡不是下拉選單"
     body = js[js.index("const ORDER"):js.index("const SCROLL_IF_OVER")]
     for token in ("'white_balance'", "'color_temp'"):
@@ -315,7 +315,7 @@ def test_display_matching_is_separate_from_correctness():
     assert "DISPLAY_EPSILON" in js and "function matchState" in js
     assert "'on approx'" in js, "接近命中沒有獨立的樣式"
     assert ".o.on.approx" in HTML.read_text(), "缺少接近命中的樣式定義"
-    assert "相機實際值" in js, "接近命中沒有標出實際值"
+    assert "camera reports" in js, "接近命中沒有標出實際值"
 
     # 伺服器端的容差不得被一起放寬
     src = (Path(__file__).resolve().parent.parent / "camera_settings.py").read_text()
@@ -429,12 +429,13 @@ def test_lens_corrections_share_one_row_and_null_is_not_an_option():
     html = HTML.read_text()
     assert "function comboRow(" in html, "沒有合併列的產生器"
     # 檢查 ORDER 裡的那個中文標題，不是欄位名 —— 欄位名在 LOC_PARTS 裡也有
-    for title in ("'畸變校正'", "'色差校正'", "'繞射校正'", "'周邊光量'"):
+    for title in ("'Distortion Correction'", "'Chromatic Aberration Correction'",
+                  "'Diffraction Correction'", "'Vignetting Correction'"):
         assert title not in html, f"{title} 還單獨佔一列"
     for name in ("loc_distortion", "loc_chromatic_aberration",
                  "loc_diffraction", "loc_vignetting"):
         assert name in html, f"{name} 整個不見了"
-    assert re.search(r"'__loc'.*?comboRow\(byName, '鏡頭校正', LOC_PARTS\)", html, re.S), \
+    assert re.search(r"'__loc'.*?comboRow\(byName, 'Lens Optics Compensation', LOC_PARTS\)", html, re.S), \
         "合併列沒有接進 ORDER"
 
     assert "function usefulChoices(" in html, "沒有濾掉 Null 的地方"
@@ -464,7 +465,7 @@ def test_focus_panel_exists_and_can_return_to_autofocus():
         assert gone not in html, f"還留著 {gone}"
     # 實測：MF 下相機忽略對焦區域與臉眼偵測的寫入。按了沒反應比按不下去
     # 更讓人困惑，所以要標成不可用而不是放著。
-    assert "MF 下對焦對象無效" in html, "MF 下沒有標示對焦對象不可用"
+    assert "'no effect in MF'" in html, "MF 下沒有標示對焦對象不可用"
     # 單點與臉眼互斥，合併成一個控制項；多點會把對焦點鎖在正中央，不列
     import re
     assert re.search(r"\bconst TARGETS\s*=", html), "單點與臉眼沒有合併"
@@ -524,7 +525,7 @@ def test_the_protocol_probe_ui_is_gone():
     都能用了之後，它只剩雜訊。端點留著（/api/record/clip 仍可用於研究）。
     """
     html = HTML.read_text()
-    for gone in ("測試片段", "btn-clip", "clip-secs", "recordClip", "rec-status"):
+    for gone in ("btn-clip", "clip-secs", "recordClip", "rec-status"):
         assert gone not in html, f"還留著 {gone}"
     print("✓ 協定探測用的 UI 已移除")
 
@@ -616,7 +617,7 @@ def test_motor_state_and_focal_length_share_the_position_row():
     """兩者都是在描述位置那一列講的那顆鏡頭 —— 各佔一列是把同一件事拆開。"""
     html = HTML.read_text()
     # 找那兩列的標籤標記，不是字串本身 —— 註解裡提到它們是正常的
-    for gone in (">馬達狀態<", ">鏡頭焦距<", "'f-state'", "'f-len'"):
+    for gone in (">Motor<", ">Focal Length<", "'f-state'", "'f-len'"):
         assert gone not in html, f"還留著 {gone}"
     assert 'id="f-lens"' in html, "沒有合併後的元素"
     body = html[html.index("setText($('f-pos')"):]

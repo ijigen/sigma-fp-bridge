@@ -195,7 +195,7 @@ def test_shutter_angle_needs_frame_rate():
     try:
         CS.apply_settings(cam, {"shutter_angle": 180})
     except CS.SettingError as e:
-        assert "幀率" in str(e)
+        assert "needs a frame rate" in str(e)
         assert cam.set_group_log == []
         print("✓ 沒有幀率時拒絕設定快門角度")
     else:
@@ -209,7 +209,7 @@ def test_shutter_angle_and_speed_conflict_rejected():
         CS.apply_settings(cam, {"shutter_angle": 180, "shutter_speed": 1 / 100},
                           frame_rate=24)
     except CS.SettingError as e:
-        assert "同時" in str(e)
+        assert "same setting" in str(e)
         assert cam.set_group_log == []
         print("✓ 同時指定角度與秒數被擋下")
     else:

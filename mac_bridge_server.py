@@ -395,7 +395,7 @@ class CameraWorker:
                     # 沒有辦法叫醒它。所以這裡不重試，直接標記成不可用。
                     self.stuck = (
                         f"相機操作超過 {job.timeout:.0f} 秒沒有回應，PTP 呼叫回不來了。"
-                        "執行緒無法中止，請重啟 bridge。")
+                        "the thread cannot be killed - restart the bridge.")
                     print(f"錯誤：{self.stuck}", file=sys.stderr)
                     job.future.set_exception(CameraStuck(self.stuck))
                     continue
@@ -1142,7 +1142,7 @@ async def handle_ws_command(req: dict) -> dict | None:
 
     if cmd in ("record_start", "record_stop"):
         if cmd == "record_start" and state.recording:
-            return {"type": "error", "id": request_id, "error": "已經在錄影中"}
+            return {"type": "error", "id": request_id, "error": "already recording"}
         fn = recording.start if cmd == "record_start" else recording.stop
         await worker.call(lambda: fn(state.camera), priority=Priority.CONTROL)
         state.recording = cmd == "record_start"
@@ -1175,9 +1175,9 @@ async def handle_ws_command(req: dict) -> dict | None:
         try:
             fps = float(req["frame_rate"])
         except (KeyError, TypeError, ValueError):
-            return {"type": "error", "id": request_id, "error": "frame_rate 必須是數值"}
+            return {"type": "error", "id": request_id, "error": "frame_rate must be a number"}
         if fps <= 0:
-            return {"type": "error", "id": request_id, "error": "frame_rate 必須大於 0"}
+            return {"type": "error", "id": request_id, "error": "frame_rate must be > 0"}
         state.frame_rate = fps
         log.info(f"快門角度換算幀率設為 {fps}")
         return {"type": "ack", "id": request_id, "frame_rate": fps}
@@ -1323,7 +1323,7 @@ async def handle_focus_mode(request: web.Request) -> web.Response:
     try:
         data = await request.json()
     except Exception:
-        return web.json_response({"error": "需要 JSON body"}, status=400)
+        return web.json_response({"error": "JSON body required"}, status=400)
 
     actions = []
     if "mode" in data:
@@ -1338,7 +1338,7 @@ async def handle_focus_mode(request: web.Request) -> web.Response:
     if "point" in data:
         point = data["point"]
         if not (isinstance(point, (list, tuple)) and len(point) == 2):
-            return web.json_response({"error": "point 要是 [y, x]"}, status=400)
+            return web.json_response({"error": "point must be [y, x]"}, status=400)
         # 對焦點只在單點選擇下有意義 —— 多點模式相機會把它鎖在正中央
         # [340, 512]，於是點畫面任何位置都對焦在同一處。實測確認。
         # 使用者要的是「對這裡」，不是「先去改一個他沒聽過的模式」。
@@ -1358,7 +1358,7 @@ async def handle_focus_mode(request: web.Request) -> web.Response:
         actions.append(lambda: set_focus_point(state.camera, point[0], point[1]))
     if not actions:
         return web.json_response(
-            {"error": "沒有可套用的項目（mode / face_eye_af / focus_area / point）"},
+            {"error": "nothing to apply (mode / face_eye_af / focus_area / point)"},
             status=400)
 
     # 移動對焦點之後要觸發一次 AF，否則鏡頭不會動 —— 使用者看到的是
@@ -1475,7 +1475,7 @@ async def _do_record(action: str, request: web.Request) -> web.Response:
     if action == "start":
         if state.recording:
             return web.json_response(
-                {"error": "已經在錄影中", "recording": True}, status=409)
+                {"error": "already recording", "recording": True}, status=409)
         await worker.call(lambda: recording.start(state.camera), priority=Priority.CONTROL)
         state.recording = True
         state.recording_started_at = time.monotonic()
@@ -1492,13 +1492,13 @@ async def _do_record(action: str, request: web.Request) -> web.Response:
     if action == "clip":
         if state.recording:
             return web.json_response(
-                {"error": "已經在錄影中，先停止再錄", "recording": True}, status=409)
+                {"error": "already recording - stop first", "recording": True}, status=409)
         seconds = float(request.query.get("seconds", 1.5))
         # 上限存在的理由：這會寫到使用者的記憶卡上。要長時間錄製請用
         # start/stop，那樣使用者看得到自己在錄。
         if not 0 < seconds <= 30:
             return web.json_response(
-                {"error": "seconds 要在 0–30 之間；長時間錄製請用 start/stop"},
+                {"error": "seconds must be 0-30; use start/stop for longer takes"},
                 status=400)
         state.recording = True
         state.recording_started_at = time.monotonic()
@@ -1536,7 +1536,7 @@ async def _do_record(action: str, request: web.Request) -> web.Response:
             try:
                 image_id = int(single)
             except ValueError:
-                return web.json_response({"error": "image_id 必須是整數"}, status=400)
+                return web.json_response({"error": "image_id must be an integer"}, status=400)
 
             def clear_one():
                 capture.clear_slot(state.camera, image_id)
@@ -1562,7 +1562,7 @@ async def _do_record(action: str, request: web.Request) -> web.Response:
         try:
             image_id = int(request.query.get("image_id", 0))
         except ValueError:
-            return web.json_response({"error": "image_id 必須是整數"}, status=400)
+            return web.json_response({"error": "image_id must be an integer"}, status=400)
         info = await worker.call(
             lambda: recording.capture_status(state.camera, image_id),
             priority=Priority.STATUS,
@@ -1582,8 +1582,8 @@ async def _do_record(action: str, request: web.Request) -> web.Response:
             # 錄影中要求傳輸會讓相機進入不再服務影片傳輸的狀態，實測重現過。
             # 那個狀態只有把相機斷電才會好，所以這裡直接擋掉。
             return web.json_response(
-                {"error": "錄影中不能下載 —— 實測會讓相機進入必須斷電才能"
-                          "復原的狀態。請先停止錄影。"},
+                {"error": "cannot download while recording - measured to put the "
+                          "camera in a state only a power cycle clears. Stop first."},
                 status=409)
 
         movies = await worker.call(
@@ -1591,29 +1591,31 @@ async def _do_record(action: str, request: web.Request) -> web.Response:
         if not movies:
             # 沒有影片還發 0x9037，相機會 USB 逾時掉線，只能斷電。防線不是提示。
             return web.json_response(
-                {"error": "相機沒有可下載的影片。先 release + acquire 讓資料庫"
-                          "歸零，再錄一段，那一段才會落在可下載的索引 0。"},
+                {"error": "the camera has no movie to serve. release + acquire to "
+                          "reset the database, then record - that take lands at "
+                          "index 0, the only one that can be downloaded."},
                 status=404)
 
         if not any(m.index == 0 for m in movies):
             # 0x9037 只服務索引 0。資料庫 head 前進之後，新錄的那段就下載不了。
             return web.json_response(
-                {"error": "影片不在資料庫索引 0，下載不了（索引 "
-                          + ", ".join(str(m.index) for m in movies) + "）。"
-                          "先 POST /api/release 再 POST /api/acquire 讓資料庫歸零，"
-                          "然後錄一段就會落在索引 0。"},
+                {"error": "no movie at database index 0, which is the only one "
+                          "0x9037 serves (found at "
+                          + ", ".join(str(m.index) for m in movies) + "). POST "
+                          "/api/release then /api/acquire to reset the database, "
+                          "then record."},
                 status=409)
         try:
             index = int(request.query.get("index", 0))
         except ValueError:
-            return web.json_response({"error": "index 必須是整數"}, status=400)
+            return web.json_response({"error": "index must be an integer"}, status=400)
         if not 0 <= index < len(movies):
             return web.json_response(
-                {"error": f"index 超出範圍（有 {len(movies)} 個檔案）"}, status=400)
+                {"error": f"index out of range ({len(movies)} file(s))"}, status=400)
         if movies[index].index != 0:
             return web.json_response(
-                {"error": f"這一筆在資料庫索引 {movies[index].index}，"
-                          "只有索引 0 能下載。"}, status=409)
+                {"error": f"this one is at database index {movies[index].index}; "
+                          "only index 0 can be downloaded"}, status=409)
 
         save = request.query.get("save", "1") not in ("0", "false", "no")
         movies_dir = STATE_DIR / "movies"
@@ -1734,7 +1736,7 @@ async def handle_probe_movie(request: web.Request) -> web.Response:
         type_name = data.get("type", "UInt8")
         value = data["value"]
     except (KeyError, TypeError, ValueError) as e:
-        return web.json_response({"error": f"需要 tag / value：{e}"}, status=400)
+        return web.json_response({"error": f"tag / value required: {e}"}, status=400)
 
     def read_group():
         return {e.tag: e.values for e in parse_ifd(movie_settings.read_raw(state.camera)).entries}
@@ -1776,19 +1778,19 @@ async def handle_ptp_probe(request: web.Request) -> web.Response:
     try:
         body = await request.json()
     except Exception:
-        return web.json_response({"error": "需要 JSON body"}, status=400)
+        return web.json_response({"error": "JSON body required"}, status=400)
 
     opcode = body.get("opcode")
     if isinstance(opcode, str) and opcode.startswith("0x"):
         try:
             opcode = int(opcode, 16)          # 探未文件化指令用
         except ValueError:
-            return web.json_response({"error": "opcode 十六進位格式不正確"}, status=400)
+            return web.json_response({"error": "malformed hex opcode"}, status=400)
     if not isinstance(opcode, (str, int)):
-        return web.json_response({"error": "opcode 必須是名稱或數值"}, status=400)
+        return web.json_response({"error": "opcode must be a name or a number"}, status=400)
     params = body.get("params") or []
     if not isinstance(params, list) or not all(isinstance(x, int) for x in params):
-        return web.json_response({"error": "params 必須是整數陣列"}, status=400)
+        return web.json_response({"error": "params must be an array of integers"}, status=400)
 
     cam = state.camera or state.released_camera
     if cam is None:
@@ -1798,8 +1800,9 @@ async def handle_ptp_probe(request: web.Request) -> web.Response:
         # 實測兩次都出事：一次讓相機不再服務影片傳輸，一次直接 USBTimeoutError
         # 之後從 USB 上掉線。這是研究端點，但這個組合會弄壞硬體狀態，擋掉。
         return web.json_response(
-            {"error": "錄影中不能發 SigmaGetPartialMovieFile —— 實測會讓相機"
-                      "不再服務傳輸，甚至直接掉線。"},
+            {"error": "cannot send SigmaGetPartialMovieFile while recording - "
+                      "measured to stop the camera serving transfers, or drop it "
+                      "off USB entirely."},
             status=409)
 
     try:
@@ -1829,7 +1832,7 @@ async def handle_event_probe(request: web.Request) -> web.Response:
     try:
         seconds = min(10.0, max(0.1, float(request.query.get("seconds", 2))))
     except ValueError:
-        return web.json_response({"error": "seconds 必須是數字"}, status=400)
+        return web.json_response({"error": "seconds must be a number"}, status=400)
 
     loop = asyncio.get_running_loop()
     events = await loop.run_in_executor(
@@ -1883,7 +1886,7 @@ async def handle_dump(request: web.Request) -> web.Response:
     reader = readers.get(which)
     if reader is None:
         return web.json_response(
-            {"error": f"unknown dump: {which}（可用：{', '.join(readers)}, pict）"},
+            {"error": f"unknown dump: {which} (available: {', '.join(readers)}, pict)"},
             status=404
         )
 
@@ -1897,7 +1900,7 @@ async def handle_dump(request: web.Request) -> web.Response:
 
     if not raw:
         return web.json_response(
-            {"error": "相機回了空的 payload", "raw_hex": "", "released": released})
+            {"error": "the camera returned an empty payload", "raw_hex": "", "released": released})
     try:
         out = to_json(parse_ifd(raw))
         out["released"] = released

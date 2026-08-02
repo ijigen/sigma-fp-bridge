@@ -109,7 +109,7 @@ async def test_a_hung_camera_call_fails_fast_instead_of_queueing_forever():
             try:
                 await hung
             except B.CameraStuck as e:
-                assert "重啟" in str(e), e
+                assert "restart the bridge" in str(e), e
             else:
                 raise AssertionError("卡住的工作應該要丟 CameraStuck")
 
@@ -196,7 +196,7 @@ async def test_ptp_probe_returns_raw_bytes_and_rejects_nonsense():
 
         bad = await B.handle_ptp_probe(Req({"opcode": "NotARealOpcode"}))
         assert bad.status == 502, bad.status
-        assert "不認得" in json.loads(bad.body.decode())["error"]
+        assert "unknown" in json.loads(bad.body.decode())["error"]
 
         bad = await B.handle_ptp_probe(Req({"opcode": "SigmaGetPictFileInfo2",
                                             "params": ["九"]}))
@@ -253,7 +253,7 @@ async def test_download_is_refused_while_recording():
                 resp = await session.get(f"{base}/api/record/download")
                 assert resp.status == 409, resp.status
                 body = await resp.json()
-                assert "錄影中" in body["error"] and "斷電" in body["error"], body
+                assert "while recording" in body["error"] and "power cycle" in body["error"], body
 
                 await session.post(f"{base}/api/record/stop")
         finally:
@@ -397,7 +397,7 @@ async def test_probe_accepts_numeric_opcodes_for_undocumented_commands():
 
         bad = await B.handle_ptp_probe(Req({"opcode": "0x0001"}))
         assert bad.status == 502, bad.status
-        assert "超出範圍" in json.loads(bad.body.decode())["error"]
+        assert "out of range" in json.loads(bad.body.decode())["error"]
     print("✓ 探測端點收得下數值 opcode（用來探未文件化指令）")
 
 
