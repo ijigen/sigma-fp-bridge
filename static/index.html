@@ -89,9 +89,26 @@
   .opt { padding: 10px 0; border-bottom: 1px solid #262626; }
   .opt:last-child { border-bottom: none; }
   .opt-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+  /* 設定調好之後就很少再動，但每一列的按鈕都常駐著，一個面板要捲很久。
+     收起時只留標題和目前值，展開時只留控制項 —— 控制項自己就說明了它是
+     什麼，標題再佔一行是多的。 */
+  .opt { display: flex; align-items: flex-start; gap: 8px; }
+  .opt > .opt-body { flex: 1 1 auto; min-width: 0; }
+  .opt > .fold { flex: 0 0 auto; width: 18px; height: 18px; padding: 0; line-height: 1;
+    font-size: 10px; color: #7a7a7a; background: none; border: none; cursor: pointer;
+    margin-top: 1px; }
+  .opt > .fold:hover { color: #ddd; background: none; }
+  .opt.folded { padding: 4px 0; }
+  .opt.folded .opt-head { margin-bottom: 0; }
+  .opt.folded .opts { display: none; }
+  .opt:not(.folded) .opt-name, .opt:not(.folded) .opt-cur { display: none; }
+  /* 展開時標題整行都省掉，除非那一列有提示要講（例如「需切換成 M 模式」）。
+     用 JS 標記而不是 :has() —— 不想賭瀏覽器版本。 */
+  .opt:not(.folded).bare .opt-head { display: none; }
   .opt-name { font-size: 11px; color: #8a8a8a; text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
   .opt-cur { font-size: 11.5px; color: #fff; font-family: ui-monospace, SFMono-Regular, monospace; }
   .opt-note { font-size: 11px; color: #6d6d6d; margin-left: auto; }
+  .opt-head .opt-note + * { margin-left: 0 }
   .opts { display: flex; flex-wrap: wrap; gap: 5px; }
   .opts.scroll { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 5px; scrollbar-width: thin; }
   .opts.scroll::-webkit-scrollbar { height: 6px; }
@@ -1196,6 +1213,39 @@ function settingsHTML() {
   return rows.join('');
 }
 
+// 展開中的設定列。用標題文字當 key —— 每 100ms 的重繪會整個換掉 DOM，
+// 存在節點上的狀態留不住。
+const openRows = new Set();
+
+function applyFolds(box) {
+  box.querySelectorAll('.opt').forEach(row => {
+    let btn = row.querySelector('.fold');
+    if (!btn) {
+      // 每一列的產生器都輸出 <div class="opt"><div class="opt-head">…，
+      // 在這裡統一包一層，比改十處產生器可靠。
+      const body = document.createElement('div');
+      body.className = 'opt-body';
+      while (row.firstChild) body.appendChild(row.firstChild);
+      btn = document.createElement('button');
+      btn.className = 'fold';
+      row.appendChild(btn);
+      row.appendChild(body);
+    }
+    const nameEl = row.querySelector('.opt-name');
+    const key = nameEl ? nameEl.textContent : '';
+    const note = row.querySelector('.opt-note');
+    row.classList.toggle('bare', !(note && note.textContent.trim()));
+    const open = openRows.has(key);
+    row.classList.toggle('folded', !open);
+    btn.textContent = open ? '▾' : '▸';
+    btn.title = open ? '收起' : key;
+    btn.onclick = () => {
+      if (open) openRows.delete(key); else openRows.add(key);
+      applyFolds(box);
+    };
+  });
+}
+
 function renderSettings() {
   if (!schema) return;
   const html = settingsHTML();
@@ -1237,6 +1287,7 @@ function renderSettings() {
               settings: {[el.dataset.set]: coerceValue(el.dataset.set, el.value)}});
       };
     });
+    applyFolds(box);
   }
   renderNotices();
 }

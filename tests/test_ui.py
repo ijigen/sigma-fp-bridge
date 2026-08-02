@@ -626,6 +626,26 @@ def test_motor_state_and_focal_length_share_the_position_row():
     print("✓ 馬達狀態與焦距併入位置列")
 
 
+def test_each_setting_row_folds():
+    """設定調好之後就很少再動，但每一列的按鈕都常駐著，一個面板要捲很久。
+
+    收起時只留標題和目前值，展開時只留控制項 —— 控制項自己就說明了它是
+    什麼，標題再佔一行是多的。
+    """
+    html = HTML.read_text()
+    assert "const openRows = new Set()" in html, "沒有記住展開狀態"
+    assert "function applyFolds(" in html and "applyFolds(box);" in html, \
+        "折疊沒有接進重繪"
+    assert ".opt.folded .opts { display: none; }" in html, "收起時沒有藏掉控制項"
+    assert re.search(r"\.opt:not\(\.folded\) \.opt-name.*display: none", html), \
+        "展開時沒有藏掉標題"
+    # 狀態要存在重繪活得下來的地方 —— 每 100ms 整個 DOM 會被換掉
+    assert "openRows.has(key)" in html and "openRows.delete(key)" in html
+    no_comments = re.sub(r"/\*.*?\*/", "", html, flags=re.S)
+    assert ":has(" not in no_comments, "用了 :has()，瀏覽器支援不保證"
+    print("✓ 每個設定群組可折疊，狀態撐得過重繪")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):
