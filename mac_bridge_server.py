@@ -90,9 +90,13 @@ from sigma_fp_focus import (
 
 log = logging.getLogger("sigma-bridge")
 
-#: 可用 SIGMA_BRIDGE_PORT 覆寫。1025 是「非特權」範圍的第一個 —— 這支程式
-#: 平常是 sudo 跑的（要從 ptpcamerad 手上搶相機），但綁的埠不必跟著吃特權，
-#: 之後若能不用 root 跑也不會卡在這裡。
+#: 10/25 —— fp 出貨的日子（2019-10-25）。
+#:
+#: 剛好也是「非特權」範圍的第一個埠。這支程式平常是 sudo 跑的（要從
+#: ptpcamerad 手上搶相機），但綁的埠不必跟著吃特權：綁在 1024 以下的話，
+#: 之後就算相機那邊不用 root 了也還是會卡在這裡。
+#:
+#: 可用 SIGMA_BRIDGE_PORT 覆寫。
 PORT = int(os.environ.get("SIGMA_BRIDGE_PORT", "1025"))
 SERVICE_TYPE = "_sigmafp._tcp.local."
 SERVICE_NAME = "Sigma fp Bridge"

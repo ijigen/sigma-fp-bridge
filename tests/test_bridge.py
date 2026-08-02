@@ -1250,11 +1250,11 @@ async def test_setting_a_point_turns_face_detection_off():
 
 
 async def test_the_port_is_unprivileged_and_overridable():
-    """1025 是非特權範圍的第一個。
+    """10/25，fp 出貨的日子。
 
-    這支程式平常是 sudo 跑的（要從 ptpcamerad 手上搶相機），但綁的埠不必
-    跟著吃特權 —— 綁在 1024 以下的話，之後就算相機那邊不用 root 了，也還是
-    會卡在這裡。
+    剛好也是非特權範圍的第一個埠。這支程式平常是 sudo 跑的（要從
+    ptpcamerad 手上搶相機），但綁的埠不必跟著吃特權 —— 綁在 1024 以下的
+    話，之後就算相機那邊不用 root 了也還是會卡在這裡。
     """
     assert B.PORT == 1025, f"預設埠變成 {B.PORT}"
     assert B.PORT > 1024, "綁在特權範圍內"
