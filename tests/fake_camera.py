@@ -81,7 +81,8 @@ class FakeCamera:
         #: 記憶卡剩餘空間（實機回報的單位是 MB）
         self.media_free_space = 19366
         #: 對焦模式 / 臉眼偵測 / 區域 / 對焦點
-        self.focus_settings: dict = {}
+        # 實機任何時候都回報得出對焦座標（開機就是正中央），不會是 None
+        self.focus_settings: dict = {"DMFPos": (340, 512)}
         #: 相機宣告接受的列舉值。照實機：色彩模式有 16 個，其中 13~16 是
         #: sigma-ptpy 的 enum 不認得的（fp 的 Off / Teal and Orange 之類）。
         #: 相機宣告的對焦選項。實機 600 = [MF, AF_C, AF_S]，沒有 AF(2)。
@@ -148,6 +149,7 @@ class FakeCamera:
         self.calls.clear()
         self.idle_after_reads = 0
         self.focus_range = (5974, 11116)
+        self.focus_settings = {"DMFPos": (340, 512)}
         self.focal_length = 28
         self.api_mode = True
         self.usb_claimed = True
@@ -503,6 +505,8 @@ def install(camera: FakeCamera | None = None) -> FakeCamera:
         c.focus_settings["FocusArea"] = area
 
     def set_focus_point(c, y, x):
+        # 實機上寫座標不會驅動鏡頭 —— 實測失焦狀態下寫入六秒沒動。假相機
+        # 也不動，否則「改了對焦目標卻沒人叫它去對」這個 bug 測不出來。
         c._tick("set_focus_point")
         c.focus_settings["DMFPos"] = (int(y), int(x))
 
@@ -531,8 +535,8 @@ def install(camera: FakeCamera | None = None) -> FakeCamera:
     mod.read_focus_choices = read_focus_choices
 
     def trigger_af(c):
-        # 真機這時鏡頭才會動。假相機用位置變化來代表「有對焦」，
-        # 「移動對焦點之後鏡頭沒動」這件事才測得出來。
+        # 實機上這是唯一會讓鏡頭動的動作。假相機用位置變化來代表「有對焦」，
+        # 「改了對焦目標鏡頭卻沒動」這件事才測得出來。
         c._tick("trigger_af")
         c.position += 43
 

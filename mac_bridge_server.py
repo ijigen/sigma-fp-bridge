@@ -1445,10 +1445,15 @@ async def handle_focus_mode(request: web.Request) -> web.Response:
             {"error": "nothing to apply (mode / face_eye_af / focus_area / point)"},
             status=400)
 
-    # 移動對焦點之後要觸發一次 AF，否則鏡頭不會動 —— 使用者看到的是
-    # 「改了對焦點沒反應，要切一次 MF 再切回來」。那個切換就是在觸發 AF。
+    # 改對焦目標之後要觸發一次 AF，否則設定生效而鏡頭不動（見 trigger_af）。
+    # 移動對焦點如此，選臉／眼偵測也如此 —— 後者原本不在這個條件裡，所以
+    # 使用者看到的是「選了 Face Only 完全沒反應」，而相機其實已經看到臉了。
+    #
+    # 關掉偵測不算：那不是「改對焦到別的東西上」。
     # 只在 AF 模式下做：MF 下觸發 AF 會把手動設好的位置搶走。
-    refocus = "point" in data and data.get("af_trigger", True)
+    refocus = (data.get("af_trigger", True)
+               and ("point" in data
+                    or data.get("face_eye_af") not in (None, "Off")))
 
     def apply_all():
         for action in actions:

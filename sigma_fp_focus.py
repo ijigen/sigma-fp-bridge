@@ -789,13 +789,27 @@ def set_focus_area(cam: SigmaPTPy, area) -> None:
 
 
 def trigger_af(cam: SigmaPTPy) -> None:
-    """叫相機用目前的對焦點跑一次自動對焦。
+    """叫相機用目前的對焦目標跑一次自動對焦。SnapCommand 的 AFDriveOnly ——
+    只驅動對焦，不拍攝。
 
-    為什麼需要：AF-S 是觸發式的。移動對焦點只是改設定，鏡頭不會因此動 ——
-    實測移動之後 DMFPos 立刻變成新座標，但 FocusPosition 一動也不動，
-    要切一次 MF 再切回 AF-S 才會對焦。那個「切一次」其實就是在觸發 AF。
+    **這是唯一會讓鏡頭動的動作。** 改設定不會 —— 實測，每一輪都先把焦點推到
+    最近端製造失焦，確實回到 AF 之後才施加動作：
 
-    SnapCommand 的 AFDriveOnly：只驅動對焦，不拍攝。
+        寫入對焦座標 DMFPos       沒動
+        只切進 AF 模式            沒動
+        Pre-AF 關再開             沒動
+        對焦區域 多點 → 單點       沒動
+        臉部偵測 關再開            沒動（但相機確實回報看到臉了）
+        SnapCommand AFDriveOnly   5977 → 6061 → 8288  ✓
+
+    所以「移動對焦點沒反應」「選了 Face Only 沒反應」是同一個病：設定都寫進去
+    了，相機也看到臉了，只是沒有人叫它去對。**任何改變對焦目標的操作都要接一次
+    這個**，否則設定生效而鏡頭不動。
+
+    臉／眼偵測開著時，對焦目標由相機決定，跟寫進去的座標無關：把座標寫在畫面
+    上方角落再觸發，鏡頭仍然對到臉的距離（8140，與寫中央座標的 8138 相同）。
+
+    MF 下不要叫 —— 那會把手動設好的位置搶走，而手動控焦是這個專案的核心。
     """
     from sigma_ptpy.enum import CaptureMode
     from sigma_ptpy.schema import SnapCommand
@@ -815,8 +829,9 @@ def set_focus_point(cam: SigmaPTPy, y: int, x: int) -> None:
     座標系見 read_focus_area_bounds()。範圍不在這裡檢查 —— 相機自己會夾，
     而寫入後讀回比對才是可靠的驗證。
 
-    這裡不會自動對焦 —— 呼叫端要在 AF 模式下自己叫 trigger_af()。分開是因為
-    MF 模式下觸發 AF 會把手動設好的位置搶走，而這個專案整個就是在做手動控焦。
+    這裡不會自動對焦 —— 座標寫進去了，鏡頭一動也不動（實測，失焦狀態下寫
+    座標六秒沒動）。呼叫端要在 AF 模式下自己叫 trigger_af()。分開是因為 MF
+    下觸發 AF 會把手動設好的位置搶走，而這個專案整個就是在做手動控焦。
     """
     cam.set_cam_data_group_focus(CamDataGroupFocusExt(DMFPos=(int(y), int(x))))
 
