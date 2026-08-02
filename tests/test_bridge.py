@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import pathlib
 import sys
 import threading
 import types
@@ -202,6 +203,35 @@ async def test_ptp_probe_returns_raw_bytes_and_rejects_nonsense():
                                             "params": ["九"]}))
         assert bad.status == 400, bad.status
     print("✓ 原始 PTP 探測端點可用，並擋掉不合法的輸入")
+
+
+async def test_opcode_table_survives_being_packaged():
+    """迴歸：打包成執行檔之後，每個 opcode 都變成「unknown opcode」。
+
+    opcode 表原本是執行時用正規表示式掃 sigma_ptpy 的 .py 檔湊出來的。
+    PyInstaller 的 bundle 裡只有編譯過的模組，沒有 .py —— 掃出來是空的，
+    於是探測端點在使用者下載的那份完全不能用，而原始碼跑得好好的。
+
+    這裡直接把讀檔擋掉：只要有人再讓這張表依賴原始碼，就會炸在這裡，而不是
+    等到有人下載執行檔之後才發現。
+    """
+    import ptp_probe
+
+    original = pathlib.Path.read_text
+
+    def refuse(self, *a, **kw):
+        raise AssertionError(f"opcode 表不該去讀原始碼（讀了 {self}）")
+
+    pathlib.Path.read_text = refuse
+    try:
+        table = ptp_probe.known_opcodes()
+    finally:
+        pathlib.Path.read_text = original
+
+    assert table.get("SigmaGetCamDataGroupFocus") == 0x9031, table
+    assert table.get("SigmaGetMovieFileInfo") == 0x9036, table
+    assert len(table) >= 25, f"只找到 {len(table)} 個，表殘缺了"
+    print("✓ opcode 表不靠原始碼，打包後仍然完整")
 
 
 async def test_a_long_download_gets_a_bigger_deadline_than_a_normal_command():

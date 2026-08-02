@@ -21,18 +21,19 @@ class ProbeError(RuntimeError):
 
 
 def known_opcodes() -> dict[str, int]:
-    """sigma-ptpy 認得的 Sigma 專屬 opcode。"""
-    import re
-    import pathlib
-    import sigma_ptpy
+    """sigma-ptpy 認得的 Sigma 專屬 opcode。
 
-    out: dict[str, int] = {}
-    root = pathlib.Path(sigma_ptpy.__file__).parent
-    pattern = re.compile(r"(Sigma\w+)\s*=\s*(0x[0-9A-Fa-f]+)")
-    for path in root.rglob("*.py"):
-        for match in pattern.finditer(path.read_text()):
-            out[match.group(1)] = int(match.group(2), 16)
-    return out
+    從 construct Enum 的對應表直接讀，不掃原始碼。原本是用正規表示式掃
+    sigma_ptpy 的 .py 檔 —— 那在打包成單一執行檔之後整個垮掉：bundle 裡
+    只有編譯過的模組，沒有 .py，掃出來是空的，於是每個 opcode 都變成
+    「unknown opcode」。原始碼跑得好好的，只有使用者下載的那份壞掉。
+    """
+    from sigma_ptpy.sigma_ptp import SigmaPTP
+
+    # 不呼叫 __init__ —— 那會去開 USB 裝置，而這裡只想要一張表
+    enum = SigmaPTP.__new__(SigmaPTP)._OperationCode()
+    return {name: code for name, code in enum.encoding.items()
+            if str(name).startswith("Sigma")}
 
 
 def recv_raw(cam, opcode, params: list[int] | None = None) -> bytes:
