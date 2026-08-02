@@ -418,6 +418,54 @@ def test_the_cansetinfo5_fallback_notice_prints_once():
     print("✓ CanSetInfo5 備援提示只印一次")
 
 
+def test_a_declared_list_that_excludes_the_current_value_is_not_a_value_list():
+    """實機炸過：DC 裁切的選項變成「關 / 自動 / -1」。
+
+    CanSetInfo5 500 給 [1, 0, -1]，而 -1 不是合法的 enum 值；LOCVignetting
+    給 [0, -1] 但目前生效的是 Off(2)，根本不在裡面。那些 tag 放的不是可選值。
+
+    我先前就記下「這些欄位的編碼形狀不一致」，然後還是把它們當值列表用了。
+    所以現在有兩道機械化的防線，而不是靠記得：清單不能有負數，而且目前
+    生效的值必須在裡面。
+    """
+    import sigma_ptpy.enum as E
+    # 只違反「不能有負數」這一條 —— 目前值確實在清單裡，所以另一道防線
+    # 不會攔它。兩條要分開測，不然拿掉一條也不會有人發現。
+    cur = E.DriveMode.SingleCapture
+    entries = {e["name"]: e for e in CS.describe(
+        choice_values={"drive_mode": [cur.value, -1]},
+        current_values={"drive_mode": cur.name})}
+    assert entries["drive_mode"]["choices"] == [m.name for m in E.DriveMode], \
+        "含負數的清單被當成可選值了"
+
+    # 目前值不在宣告清單裡 —— 那份清單不是值列表
+    entries = {e["name"]: e for e in CS.describe(
+        choice_values={"metering_mode": [1, 2]},
+        current_values={"metering_mode": "Average"})}
+    got = entries["metering_mode"]["choices"]
+    assert got == [m.name for m in E.AEMeteringMode], f"沒有退回 enum：{got}"
+    print("✓ 不是值列表的宣告會被擋下，退回 enum")
+
+
+def test_unknown_but_declared_values_can_be_written():
+    """畫得出來就要按得下去。
+
+    色彩模式 13~16 是相機宣告、sigma-ptpy 不認得的。UI 把它們顯示成數字，
+    而寫入路徑原本只收 enum 名稱 —— 於是選項看得到、點下去卻是 SettingError。
+    """
+    s = CS.BY_NAME["color_mode"]
+    assert CS.encode_value(s, "Standard").name == "Standard"
+    assert CS.encode_value(s, "13") == 13, "數字字串收不下"
+    assert CS.encode_value(s, 13) == 13, "整數收不下"
+    try:
+        CS.encode_value(s, "nope")
+    except CS.SettingError:
+        pass
+    else:
+        raise AssertionError("亂寫的名稱應該要被擋")
+    print("✓ enum 不認得但相機宣告的值寫得進去")
+
+
 def test_choices_follow_what_the_camera_declares():
     """選項要以相機宣告的為準，enum 只負責提供名稱。
 
@@ -429,16 +477,20 @@ def test_choices_follow_what_the_camera_declares():
     import sigma_ptpy.enum as E
     declared = [15, 14, 13, 12, 8, 7, 6, 10, 9, 5, 4, 3, 2, 1, 11, 16]
     entries = {e["name"]: e for e in
-               CS.describe(choice_values={"color_mode": declared})}
+               CS.describe(choice_values={"color_mode": declared},
+                           current_values={"color_mode": "Standard"})}
     choices = entries["color_mode"]["choices"]
     assert len(choices) == len(declared), f"{len(choices)} 個選項，相機說有 {len(declared)}"
     # enum 認得的用名稱，不認得的用數字 —— 不認得不代表不能用
     assert "Cinema" in choices, choices
     for unknown in ("13", "14", "15", "16"):
         assert unknown in choices, f"相機宣告的 {unknown} 沒有出現在選項裡"
-    # 沒有相機資料時退回 enum，不能整個變空
+    # 沒有相機資料、或驗證不了目前值時退回 enum，不能整個變空
     fallback = {e["name"]: e for e in CS.describe()}["color_mode"]["choices"]
     assert fallback == [m.name for m in E.ColorMode], fallback
+    unverifiable = {e["name"]: e for e in
+                    CS.describe(choice_values={"color_mode": declared})}["color_mode"]["choices"]
+    assert unverifiable == [m.name for m in E.ColorMode], "驗不了目前值卻照用了"
     print(f"✓ 選項跟著相機走（{len(choices)} 個，其中 4 個 enum 不認得）")
 
 

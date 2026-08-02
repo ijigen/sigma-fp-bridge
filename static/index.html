@@ -836,13 +836,19 @@ function onLiveviewClick(ev) {
 // 這幾項都在 DataGroupFocus 裡，但 bridge 一直沒把它們接出來。其中對焦模式
 // 尤其重要：set_focus_position 每次都會強制寫 MF（不然相機會搶回焦點），
 // 而在這個面板出現之前，沒有任何地方能寫回去 —— 拉一次滑桿就永遠停在手動。
-let focusBounds = null;
+let focusBounds = null, loadingBounds = false;
 
 async function loadFocusBounds() {
+  if (focusBounds || loadingBounds) return;
+  loadingBounds = true;
   try {
     const r = await fetch('/api/focus/bounds');
-    if (r.ok) { focusBounds = await r.json(); renderFocusControls(); }
-  } catch (e) { /* 沒連上就算了，下次 render 再試 */ }
+    if (r.ok) {
+      const d = await r.json();
+      if (!d.error) { focusBounds = d; renderFocusControls(); renderTapFocus(); }
+    }
+  } catch (e) { /* 相機還沒好，下面會再試 */ }
+  loadingBounds = false;
 }
 
 function focusApply(body) {
@@ -877,7 +883,13 @@ function focusGroup(name, label, current, choices, labels, locked) {
 function renderFocusControls() {
   const box = $('focus-controls');
   if (!box) return;
-  if (!focusBounds) { setHTML(box, '<div class="hint">對焦選項載入中…</div>'); return; }
+  if (!focusBounds) {
+    // 相機連上之前呼叫會失敗，而先前只在連線事件時試一次 —— 失敗就永遠
+    // 停在「載入中」。這裡每次 render 都補一次，成功後就不再試。
+    if (st.connected && !st.released) loadFocusBounds();
+    setHTML(box, '<div class="hint">對焦選項載入中…</div>');
+    return;
+  }
 
   // 實測：MF 下相機會忽略對焦區域與臉眼偵測的寫入 —— 區域固定回單點，
   // 臉眼固定回 Off。合理（MF 的「區域」就是放大輔助的位置），但按了沒反應

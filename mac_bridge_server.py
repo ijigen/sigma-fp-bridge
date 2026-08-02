@@ -174,6 +174,9 @@ class BridgeState:
     #: 相機當下接受的列舉值 {設定名稱: [原始值]}。跟 capabilities 分開存 ——
     #: 那個字典的每個值都是帶 min/max 的 dict，形狀不同的東西不能混進去。
     choice_values: dict = field(default_factory=dict)
+    #: 最近一次讀到的設定值。describe() 用它來判斷「宣告清單是不是真的值列表」
+    #: —— 目前生效的值不在裡面，那就不是。
+    last_settings: dict = field(default_factory=dict)
     #: 錄影時快門用速度還是角度（DataGroupMovie tag 6：1 = 速度、2 = 角度）
     shutter_unit: int | None = None
     #: "stills" | "movie" | None —— 機身撥桿位置（推測而來，見 refresh_capabilities）
@@ -631,7 +634,7 @@ def _full_schema() -> list:
     schema 的那條路，於是切換快門單位後整組控制項消失。
     """
     return (describe(state.capabilities, state.camera_mode, _shutter_speed_allowed(),
-                     state.choice_values)
+                     state.choice_values, state.last_settings)
             + _movie_schema() + _capture_mode_schema())
 
 
@@ -699,6 +702,8 @@ def _read_all_settings() -> dict:
         # tag 1 直接就是機身模式，比從能力清單推測可靠得多
         if movie.get("capture_mode") in (1, 2):
             state.camera_mode = "stills" if movie["capture_mode"] == 1 else "movie"
+    # describe() 要用它判斷「宣告清單是不是真的值列表」
+    state.last_settings = dict(out)
     return out
 
 

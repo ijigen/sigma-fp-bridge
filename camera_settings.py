@@ -256,15 +256,28 @@ def encode_value(setting: Setting, value) -> Any:
     if setting.kind == "enum":
         if isinstance(value, setting.enum_cls):
             return value
-        try:
-            if isinstance(value, str):
+        # 名稱優先
+        if isinstance(value, str):
+            try:
                 return setting.enum_cls[value]
-            return setting.enum_cls(int(value))
-        except (KeyError, ValueError, TypeError):
+            except KeyError:
+                pass
+        # 數值：enum 認得就轉成成員，不認得就原樣送出去。
+        #
+        # 後者是必要的 —— 相機宣告的可用值可能超出 sigma-ptpy 的 enum（實測
+        # 色彩模式有 16 個，enum 只認得 12 個）。UI 把認不得的顯示成數字，
+        # 這裡就要收得下那個數字，否則畫得出來卻按不下去。
+        try:
+            raw = int(value)
+        except (TypeError, ValueError):
             allowed = ", ".join(m.name for m in setting.enum_cls)
             raise SettingError(
                 f"{setting.name} 不接受 {value!r}；可用值：{allowed}"
             ) from None
+        try:
+            return setting.enum_cls(raw)
+        except ValueError:
+            return raw
 
     if setting.kind == "apex":
         try:
@@ -568,9 +581,14 @@ def check_within_capabilities(name: str, value, capabilities: dict | None) -> No
 #: 會用到的「Off」。以相機宣告的為準，enum 只負責提供名稱。
 #:
 #: 名稱取自 sigma-ptpy 的 CanSetInfo5 欄位表。
+#: ⚠️ 只列**確認過是值列表**的。開關類設定（500~505、810）的編碼不是這個
+#: 形狀 —— DCCropMode 宣告 [1, 0, -1]（-1 不是合法 enum 值），LOCVignetting
+#: 宣告 [0, -1] 而目前值是 Off(2) 根本不在裡面。我先前記下了「這些欄位的編碼
+#: 形狀不一致」，然後還是把它們當值列表用，結果 DC 裁切的選項變成「關 自動 -1」。
+#:
+#: 判斷依據：目前生效的值必須出現在宣告清單裡。不在，那就不是值列表。
 INFO5_CHOICE_TAGS = {
     "drive_mode": 1,
-    "cont_shoot_speed": 2,
     "image_quality": 11,
     "dng_quality": 12,
     "resolution": 20,
@@ -579,14 +597,6 @@ INFO5_CHOICE_TAGS = {
     "metering_mode": 250,
     "white_balance": 301,
     "color_mode": 320,
-    "fill_light": 340,
-    "hdr": 350,
-    "dc_crop_mode": 500,
-    "loc_distortion": 501,
-    "loc_chromatic_aberration": 502,
-    "loc_diffraction": 503,
-    "loc_vignetting": 504,
-    "electronic_stabilization": 810,
 }
 
 
@@ -607,7 +617,8 @@ def label_for_value(setting: "Setting", raw: int) -> str:
 def describe(capabilities: dict | None = None,
              mode: str | None = None,
              also_allowed: set | None = None,
-             choice_values: dict | None = None) -> list[dict[str, Any]]:
+             choice_values: dict | None = None,
+             current_values: dict | None = None) -> list[dict[str, Any]]:
     """所有設定的中繼資料，給 UI 生控制項用。
 
     Args:
@@ -633,9 +644,24 @@ def describe(capabilities: dict | None = None,
             "note": setting.note,
         }
         if setting.kind == "enum":
-            # 相機宣告的優先。enum 只在它認得的時候提供名稱。
+            # 相機宣告的優先，但要先確認那真的是一份值列表。
+            #
+            # 防線：清單裡不能有負數（不是合法的 enum 值），而且目前生效的值
+            # 必須在裡面。兩者任一不成立，那個 tag 的編碼就不是「可選值」——
+            # 有些欄位放的是 min/max/step 之類的東西。
             declared = (choice_values or {}).get(setting.name)
-            if declared:
+            current = (current_values or {}).get(setting.name)
+            usable = bool(declared) and all(v >= 0 for v in declared)
+            if usable:
+                # 驗不了就不信。這類清單已經騙過兩次（DC 裁切的 [1,0,-1]、
+                # 周邊光量的 [0,-1]），所以「無法確認」要當成「不是值列表」，
+                # 不是當成通過。代價只是設定還沒讀到時先用 enum，下一輪就對了。
+                usable = False
+                try:
+                    usable = setting.enum_cls[current].value in declared
+                except (KeyError, TypeError):
+                    pass
+            if usable:
                 entry["choices"] = [label_for_value(setting, v) for v in declared]
             else:
                 entry["choices"] = [m.name for m in setting.enum_cls]
