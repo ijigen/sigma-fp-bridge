@@ -188,6 +188,11 @@ class BridgeState:
     released_by_user: bool = False
     reconnect_task: asyncio.Task | None = None
     last_focus_mode: str | None = None  # 顯示 AF/MF/AF_S 等狀態
+    last_face_eye_af: str | None = None
+    last_face_eye_status: str | None = None
+    last_focus_area: str | None = None
+    last_focus_point: list | None = None
+    last_continuous_af: str | None = None
 
 
 state = BridgeState()
@@ -993,6 +998,12 @@ async def broadcast_state(extra: dict | None = None) -> None:
         "focus_position": state.last_focus_position,
         "focus_state": state.last_focus_state,
         "focus_mode": state.last_focus_mode,
+        # 對焦面板要用的：臉眼偵測、對焦區域、對焦點、持續對焦
+        "face_eye_af": state.last_face_eye_af,
+        "face_eye_detected": state.last_face_eye_status,
+        "focus_area": state.last_focus_area,
+        "focus_point": state.last_focus_point,
+        "continuous_af": state.last_continuous_af,
         "focal_length_mm": state.last_lens_focal_mm,
         "focus_range": list(state.focus_range) if state.focus_range else None,
         "frame_rate": state.frame_rate,
@@ -1015,6 +1026,12 @@ async def state_polling_loop():
                 state.last_focus_mode = (
                     f.FocusMode.name if f.FocusMode is not None else None
                 )
+                state.last_face_eye_af = _enum_name(getattr(f, "FaceEyeAF", None))
+                state.last_face_eye_status = _enum_name(getattr(f, "FaceEyeAFStatus", None))
+                state.last_focus_area = _enum_name(getattr(f, "FocusArea", None))
+                point = getattr(f, "DMFPos", None)
+                state.last_focus_point = list(point) if point else None
+                state.last_continuous_af = _enum_name(getattr(f, "PreConstAF", None))
                 # 焦距只有換鏡頭 / 轉變焦環才會變，用不著跟焦點狀態一樣 10Hz 打 USB
                 if tick % FOCAL_POLL_EVERY == 0:
                     g1 = await worker.call(

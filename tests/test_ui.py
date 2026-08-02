@@ -424,6 +424,26 @@ def test_lens_corrections_share_one_row_and_null_is_not_an_option():
     print("✓ 鏡頭校正併成一列，Null 不會變成可選項")
 
 
+def test_focus_panel_exists_and_can_return_to_autofocus():
+    """對焦面板：模式、臉眼偵測、對焦區域、對焦點。
+
+    模式那一項是重點。set_focus_position 每次都強制寫 MF（不然相機會搶回
+    焦點），在這個面板出現之前沒有任何地方寫得回去 —— 拉一次滑桿就永遠
+    停在手動對焦。
+    """
+    html = HTML.read_text()
+    assert 'id="focus-controls"' in html, "沒有對焦控制的容器"
+    assert "function renderFocusControls(" in html, "沒有對焦面板的渲染"
+    assert "/api/focus/mode" in html, "沒有接上切換對焦模式的端點"
+    assert "/api/focus/bounds" in html, "沒有讀對焦座標範圍"
+    for key in ("focus_mode", "face_eye_af", "focus_area", "focus_point"):
+        assert key in html, f"面板沒有處理 {key}"
+    assert "fp-centre" in html, "沒有回中央的捷徑"
+    # 舊的唯讀顯示要拿掉，不然模式會同時出現在兩個地方
+    assert "$('f-mode')" not in html, "還留著唯讀的對焦模式顯示"
+    print("✓ 對焦面板可切換模式 / 臉眼偵測 / 區域 / 對焦點")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

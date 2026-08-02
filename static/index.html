@@ -155,8 +155,8 @@
           <button class="sm" onclick="stepPos(10)">+10</button>
           <button class="sm" onclick="stepPos(100)">+100</button>
         </div>
+        <div id="focus-controls" style="margin-top:12px; padding-top:12px; border-top:1px solid #2a2a2a"></div>
         <div class="row" style="margin-top:10px"><span class="label">馬達狀態</span><span class="value" id="f-state">—</span></div>
-        <div class="row"><span class="label">對焦模式</span><span class="value" id="f-mode">—</span></div>
         <div class="row"><span class="label">鏡頭焦距</span><span class="value" id="f-len">—</span></div>
       </div>
 
@@ -241,6 +241,7 @@ function connect() {
     st.wsDown = false;
     send({cmd: 'describe_settings'});
     send({cmd: 'get_settings'});
+    loadFocusBounds();
   };
   ws.onclose = () => { log('WebSocket 斷線，2 秒後重試', 'err'); st.wsDown = true; render(); setTimeout(connect, 2000); };
   ws.onerror = () => {};
@@ -310,7 +311,7 @@ function render() {
 
   setText($('f-pos'), st.focus_position);
   setText($('f-state'), st.focus_state === 0 ? 'Idle' : st.focus_state === 1 ? 'Moving' : '—');
-  setText($('f-mode'), st.focus_mode);
+  renderFocusControls();
   setText($('f-len'), st.focal_length_mm ? st.focal_length_mm + ' mm' : '—');
   if (st.focus_range) applyRange(st.focus_range);
   if (st.focus_position != null && !busy()) {
@@ -748,6 +749,97 @@ const LOC_PARTS = [
   ['loc_diffraction',          '繞射'],
   ['loc_vignetting',           '暗角'],
 ];
+
+// ── 對焦控制 ──────────────────────────────────────────────────────
+//
+// 這幾項都在 DataGroupFocus 裡，但 bridge 一直沒把它們接出來。其中對焦模式
+// 尤其重要：set_focus_position 每次都會強制寫 MF（不然相機會搶回焦點），
+// 而在這個面板出現之前，沒有任何地方能寫回去 —— 拉一次滑桿就永遠停在手動。
+let focusBounds = null;
+
+async function loadFocusBounds() {
+  try {
+    const r = await fetch('/api/focus/bounds');
+    if (r.ok) { focusBounds = await r.json(); renderFocusControls(); }
+  } catch (e) { /* 沒連上就算了，下次 render 再試 */ }
+}
+
+function focusApply(body) {
+  markBusy();
+  fetch('/api/focus/mode', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  }).then(r => r.json()).then(d => {
+    if (d.error) { log('對焦設定失敗：' + d.error, 'err'); flash('err', d.error); return; }
+    Object.assign(st, {
+      focus_mode: d.focus_mode, face_eye_af: d.face_eye_af,
+      focus_area: d.focus_area, focus_point: d.focus_point,
+      continuous_af: d.continuous_af,
+    });
+    renderFocusControls();
+  }).catch(e => log('對焦設定請求失敗：' + e, 'err'));
+}
+
+function focusOptRow(name, title, current, choices, labels) {
+  const cur = current === null || current === undefined ? '—' : (labels[current] || current);
+  const opts = choices.map(c =>
+    '<button class="o' + (c === current ? ' on' : '') + '" data-focus="' + name +
+    '" data-val="' + escapeHTML(c) + '">' + escapeHTML(labels[c] || c) + '</button>').join('');
+  return '<div class="opt"><div class="opt-head">' +
+    '<span class="opt-name">' + escapeHTML(title) + '</span>' +
+    '<span class="opt-cur">' + escapeHTML(cur) + '</span>' +
+    '</div><div class="opts">' + opts + '</div></div>';
+}
+
+function renderFocusControls() {
+  const box = $('focus-controls');
+  if (!box) return;
+  if (!focusBounds) { setHTML(box, '<div class="hint">對焦選項載入中…</div>'); return; }
+
+  const rows = [];
+  rows.push(focusOptRow('mode', '對焦模式', st.focus_mode,
+    focusBounds.focus_modes || [], FRIENDLY.focus_mode || {}));
+  rows.push(focusOptRow('face_eye_af', '臉部・眼睛', st.face_eye_af,
+    focusBounds.face_eye_options || [], FRIENDLY.face_eye_af || {}));
+  rows.push(focusOptRow('focus_area', '對焦區域', st.focus_area,
+    focusBounds.focus_areas || [], FRIENDLY.focus_area || {}));
+
+  // 對焦點：座標系由相機提供，超出有效範圍相機會自己夾
+  const pt = st.focus_point || [];
+  const b = focusBounds.point || {};
+  const centre = [Math.round((b.height || 682) / 2), Math.round((b.width || 1024) / 2)];
+  rows.push('<div class="opt"><div class="opt-head">' +
+    '<span class="opt-name">對焦點</span>' +
+    '<span class="opt-cur">' + (pt.length === 2 ? pt[0] + ', ' + pt[1] : '—') + '</span>' +
+    '<span class="opt-note">y 0–' + (b.height || '?') + ' · x 0–' + (b.width || '?') +
+    (b.top !== undefined ? '（有效 y ' + b.top + '–' + b.bottom + ' · x ' + b.left + '–' + b.right + '）' : '') +
+    '</span></div><div class="opts">' +
+    '<span class="grp"><span class="grp-label">y</span>' +
+    '<input type="number" id="fp-y" value="' + (pt[0] !== undefined ? pt[0] : '') + '" style="min-width:78px"></span>' +
+    '<span class="grp"><span class="grp-label">x</span>' +
+    '<input type="number" id="fp-x" value="' + (pt[1] !== undefined ? pt[1] : '') + '" style="min-width:78px"></span>' +
+    '<span class="grp"><button class="o" id="fp-set">移動</button>' +
+    '<button class="o" id="fp-centre">回中央</button></span>' +
+    '</div></div>');
+
+  const html = rows.join('');
+  if (box.__last === html) return;
+  box.innerHTML = html;
+  box.__last = html;
+
+  box.querySelectorAll('[data-focus]').forEach(el => {
+    el.onclick = () => focusApply({[el.dataset.focus]: el.dataset.val});
+  });
+  const setBtn = box.querySelector('#fp-set');
+  if (setBtn) setBtn.onclick = () => {
+    const y = parseInt($('fp-y').value), x = parseInt($('fp-x').value);
+    if (isNaN(y) || isNaN(x)) { flash('err', '對焦點要填 y 和 x'); return; }
+    focusApply({point: [y, x]});
+  };
+  const centreBtn = box.querySelector('#fp-centre');
+  if (centreBtn) centreBtn.onclick = () => focusApply({point: centre});
+}
 
 function locRow(byName) {
   const present = LOC_PARTS.filter(([name]) => byName[name]);
