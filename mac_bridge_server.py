@@ -78,6 +78,7 @@ from sigma_fp_focus import (
     set_focus_area,
     set_focus_point,
     read_focus_area_bounds,
+    read_focus_choices,
     CamDataGroupFocusExt,
 )
 
@@ -1275,13 +1276,19 @@ async def handle_focus_bounds(request: web.Request) -> web.Response:
     if not state.camera_connected:
         return web.json_response({"error": "not connected"}, status=503)
     from sigma_ptpy.enum import FocusMode, FaceEyeAF, FocusArea
-    bounds = await worker.call(
-        lambda: read_focus_area_bounds(state.camera), priority=Priority.STATUS)
+
+    def read_both():
+        return (read_focus_area_bounds(state.camera),
+                read_focus_choices(state.camera))
+
+    bounds, choices = await worker.call(read_both, priority=Priority.STATUS)
+    # 相機宣告的優先。列 enum 全部成員的話，會把相機不提供的東西畫成按鈕 ——
+    # 實測 600 只有 [MF, AF_C, AF_S]，enum 裡的 AF(2) 按了永遠沒反應。
     return web.json_response({
         "point": bounds,
-        "focus_modes": [m.name for m in FocusMode],
-        "face_eye_options": [m.name for m in FaceEyeAF],
-        "focus_areas": [m.name for m in FocusArea],
+        "focus_modes": choices.get("focus_modes") or [m.name for m in FocusMode],
+        "face_eye_options": choices.get("face_eye_options") or [m.name for m in FaceEyeAF],
+        "focus_areas": choices.get("focus_areas") or [m.name for m in FocusArea],
     })
 
 

@@ -458,6 +458,11 @@ async def test_focus_point_face_eye_and_area_round_trip():
                 bounds = await (await session.get(f"{base}/api/focus/bounds")).json()
                 assert bounds["point"]["height"] == 682, bounds
                 assert "FaceEyeAuto" in bounds["face_eye_options"], bounds
+                # 選項要以相機宣告的為準。列 enum 全部成員的話，相機不提供的
+                # AF(2) 也會被畫成按鈕 —— 使用者按了永遠沒反應。
+                assert bounds["focus_modes"] == ["MF", "AF_C", "AF_S"], bounds
+                assert "AF" not in bounds["focus_modes"], bounds
+                assert "Tracking" not in bounds["focus_areas"], bounds
 
                 bad = await session.post(f"{base}/api/focus/mode",
                                          json={"mode": "NotAMode"})

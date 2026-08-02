@@ -83,6 +83,12 @@ class FakeCamera:
         self.focus_settings: dict = {}
         #: 相機宣告接受的列舉值。照實機：色彩模式有 16 個，其中 13~16 是
         #: sigma-ptpy 的 enum 不認得的（fp 的 Off / Teal and Orange 之類）。
+        #: 相機宣告的對焦選項。實機 600 = [MF, AF_C, AF_S]，沒有 AF(2)。
+        self.focus_choices: dict = {
+            "focus_modes": ["MF", "AF_C", "AF_S"],
+            "face_eye_options": ["FaceEyeAuto", "FaceOnly", "Off"],
+            "focus_areas": ["MultiAutoFocusPoints", "OnePointSelection"],
+        }
         self.choice_values: dict = {
             "color_mode": [15, 14, 13, 12, 8, 7, 6, 10, 9, 5, 4, 3, 2, 1, 11, 16],
         }
@@ -504,6 +510,12 @@ def install(camera: FakeCamera | None = None) -> FakeCamera:
     mod.set_focus_area = set_focus_area
     mod.set_focus_point = set_focus_point
     mod.read_focus_area_bounds = read_focus_area_bounds
+
+    def read_focus_choices(c):
+        # 照實機：600 只有 MF / AF_C / AF_S —— enum 裡的 AF(2) 不在清單裡
+        return dict(c.focus_choices)
+
+    mod.read_focus_choices = read_focus_choices
     def read_info5_raw(c):
         c._tick("info5_raw")
         return c.info5_raw

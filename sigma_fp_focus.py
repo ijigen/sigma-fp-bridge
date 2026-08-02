@@ -630,6 +630,41 @@ def get_focus_state(cam: SigmaPTPy) -> CamDataGroupFocusExt:
 DEFAULT_FOCUS_AREA = (682, 1024)
 
 
+#: 對焦選項 ↔ CanSetInfo5 的 tag。跟色彩模式那次是同一個教訓：列出 enum 的
+#: 全部成員，就會把相機不提供的東西畫成按鈕。實測 600 只有 [MF, AF_C, AF_S]
+#: —— enum 裡的 AF(2) 根本不在清單裡，而它在介面上按了當然沒反應。
+FOCUS_CHOICE_TAGS = {"focus_modes": (600, "FocusMode"),
+                     "face_eye_options": (602, "FaceEyeAF"),
+                     "focus_areas": (610, "FocusArea")}
+
+
+def read_focus_choices(cam: SigmaPTPy) -> dict:
+    """相機**現在**提供哪些對焦模式 / 臉眼選項 / 對焦區域。
+
+    讀不到就回空的 —— 呼叫端要能退回 enum，但那只是備援，不是預設。
+    """
+    import sigma_ptpy.enum as E
+
+    out: dict[str, list[str]] = {}
+    try:
+        ifd = parse_ifd(read_info5_raw(cam))
+    except Exception:
+        return out
+    for key, (tag, enum_name) in FOCUS_CHOICE_TAGS.items():
+        entry = find_tag(ifd, tag)
+        if entry is None or not entry.values:
+            continue
+        enum_cls = getattr(E, enum_name, None)
+        names = []
+        for v in entry.values:
+            try:
+                names.append(enum_cls(v).name)
+            except (ValueError, TypeError):
+                names.append(str(v))
+        out[key] = names
+    return out
+
+
 def read_focus_area_bounds(cam: SigmaPTPy) -> dict:
     """對焦點的座標範圍。
 
