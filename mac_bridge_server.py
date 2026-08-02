@@ -667,7 +667,7 @@ def _read_all_settings() -> dict:
     try:
         state.camera_status = read_status(state.camera)
     except Exception as e:
-        log.debug(f"狀態讀取失敗：{e}")
+        log.warning(f"狀態讀取失敗：{e}")
 
     movie = {}
     try:

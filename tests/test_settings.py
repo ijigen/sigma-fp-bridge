@@ -356,6 +356,40 @@ def test_read_only_status_is_not_writable():
     print("✓ 唯讀狀態沒有混進可寫設定")
 
 
+def test_capabilities_values_are_all_dicts():
+    """read_capabilities 的契約：每個值都是帶 min/max 的 dict。
+
+    實機炸過：我把對焦點的座標陣列（CanSetInfo5 612 / 613）也塞進這個字典，
+    於是 bridge 裡 `v.get('min')` 那行對著 list 呼叫 .get，整個狀態讀取失敗，
+    log 只留下一句 'list' object has no attribute 'get' —— 錯誤出現的地方
+    離成因很遠。混了兩種值型別的字典就是這樣。
+
+    直接替換 read_info5_raw，讓真實的 read_capabilities 跑在已知 payload 上；
+    用假相機是測不到的（那條路徑靠 decode 時的側錄 patch）。
+    """
+    import sigma_fp_focus as F
+    payload = fake_camera._sample_ifd([
+        (215, 3, [1280, 3328, 256, 85]),     # ISO 範圍
+        (612, 3, [682, 1024]),               # 對焦點整體區域
+        (613, 3, [85, 597, 96, 928]),        # 對焦點有效區域
+        (658, 3, [5974, 11116]),             # 焦點位置範圍
+    ])
+    original = F.read_info5_raw
+    F.read_info5_raw = lambda cam: payload
+    try:
+        caps = F.read_capabilities(object())
+    finally:
+        F.read_info5_raw = original
+
+    assert caps, "什麼都沒解出來，這個測試就是空轉的"
+    bad = {k: type(v).__name__ for k, v in caps.items() if not isinstance(v, dict)}
+    assert not bad, f"這些能力值不是 dict：{bad}"
+    # bridge 會對每個值做 v.get('min')，這裡照做一次確認不會炸
+    for name, limits in caps.items():
+        limits.get("min"), limits.get("max")
+    print(f"✓ {len(caps)} 個能力值都是 dict，v.get('min') 不會炸")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

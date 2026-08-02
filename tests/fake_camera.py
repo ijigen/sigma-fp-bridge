@@ -83,7 +83,16 @@ class FakeCamera:
         self.focus_settings: dict = {}
         self.files: list = []
         # /api/dump/* 用的原始 IFD payload
-        self.info5_raw = _sample_ifd([(658, 3, [5974, 11116])])
+        # 照實機：658 是焦點範圍，215/216/217 是 ISO 與曝光補償的定點數範圍，
+        # 612/613 是對焦點的座標區域（原始像素，不是定點數）。
+        # 612/613 一定要在 —— 它們曾經被誤塞進 read_capabilities 的回傳值裡，
+        # 而那個字典的每個值都會被呼叫 .get("min")。
+        self.info5_raw = _sample_ifd([
+            (215, 3, [1280, 3328, 256, 85]),
+            (612, 3, [682, 1024]),
+            (613, 3, [85, 597, 96, 928]),
+            (658, 3, [5974, 11116]),
+        ])
         self.movie_raw = _sample_ifd([(1, 1, [2]), (10, 3, [25])])
         # 照實機回報：ISO 100–25600、曝光補償 ±5EV
         self.capabilities = {

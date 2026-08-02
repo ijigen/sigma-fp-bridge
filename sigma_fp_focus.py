@@ -238,13 +238,6 @@ def read_capabilities(cam: SigmaPTPy) -> dict:
     except Exception:
         pass
 
-    # 對焦點的座標範圍。612 是整體（高, 寬），613 是實際可對焦的子區域
-    # （上, 下, 左, 右）。這兩個不走上面的定點數轉換 —— 它們是原始像素座標。
-    for tag, name in ((612, "focus_area_overall"), (613, "focus_area_valid")):
-        entry = find_tag(ifd, tag)
-        if entry is not None and entry.values:
-            caps[name] = list(entry.values)
-
     return caps
 
 
@@ -611,10 +604,23 @@ def read_focus_area_bounds(cam: SigmaPTPy) -> dict:
     CanSetInfo5 612 FocusAreaOverallArea = [高, 寬]，613 FocusAreaValidArea
     是實際可對焦的子區域。出廠對焦點 (340, 512) 正好是 682/2 與 1024/2 ——
     畫面正中央，這是座標系解讀的佐證。
+
+    這裡自己解 IFD，不走 read_capabilities —— 那個字典的契約是「每個值都是
+    帶 min/max 的 dict」，而這兩個是原始像素座標的陣列。先前把它們塞進去，
+    結果每個對 caps 做 v.get("min") 的消費端都炸了。
     """
-    caps = read_capabilities(cam) or {}
-    overall = caps.get("focus_area_overall") or list(DEFAULT_FOCUS_AREA)
-    valid = caps.get("focus_area_valid")
+    overall, valid = list(DEFAULT_FOCUS_AREA), None
+    try:
+        ifd = parse_ifd(read_info5_raw(cam))
+        entry = find_tag(ifd, 612)
+        if entry is not None and entry.values:
+            overall = list(entry.values)
+        entry = find_tag(ifd, 613)
+        if entry is not None and entry.values:
+            valid = list(entry.values)
+    except Exception:
+        pass
+
     out = {"height": overall[0], "width": overall[1] if len(overall) > 1 else None}
     if valid and len(valid) >= 4:
         out.update({"top": valid[0], "bottom": valid[1],
