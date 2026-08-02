@@ -1184,6 +1184,37 @@ treated as the same failure, and chunk size was blamed three times over — 4 MB
 too big, then 64 KB, then anything above 4 KB. On a healthy camera every size from
 256 bytes to 4 MB verifies clean. Size never mattered.
 
+### UHD 12-bit CinemaDNG is not reachable over PTP
+
+The fp records UHD 12-bit CinemaDNG only to an external SSD over USB-C; the SD
+card tops out well below it. The obvious question is whether PTP can lift that
+restriction, since the camera advertises 12-bit and 29.97 in its capability list.
+It cannot, and the reason is structural rather than a missing flag.
+
+The camera recomputes what is settable from the current combination. Measured:
+
+| combination | CinemaDNG bit depth | frame rates |
+|---|---|---|
+| CinemaDNG + FHD | 12, 10, 8 | 23.98, 25, 29.97, 50, 59.94 |
+| **CinemaDNG + UHD** | **none selectable** | **23.98, 25** |
+| MOV + FHD | — | up to 111.98 |
+| MOV + UHD | — | 23.98, 25, 29.97 |
+
+Switching to UHD with CinemaDNG empties `CanSetInfo5` 151 and cuts 161 to two
+entries, and writes are refused accordingly — `cinema_dng_quality = 12` comes back
+as 8. Capability tags 152, 350 and 810 empty out in that mode too.
+
+There is no USB-mode or external-storage field anywhere to flip: 85 entries in
+`CanSetInfo5`, 56 across `DataGroup1`–`5`, plus the focus and movie groups, and
+the only storage concept in the protocol is `DestToSave` with its three values.
+
+The deeper obstacle is the port. Recording to an SSD makes the camera a USB
+*host*; PTP requires it to be a USB *device*. One connector, mutually exclusive —
+so a switch that enabled SSD recording would end the session that flipped it.
+Intercepting the stream means presenting to the camera as USB mass storage, which
+needs a device-mode controller. A Mac has none; a Linux board with a UDC in
+gadget mode does.
+
 ### Live view
 
 ```
