@@ -518,7 +518,6 @@ reached USB (see [camera worker](#camera-worker)).
 curl http://localhost:8765/api/status
 curl -X POST http://localhost:8765/api/focus  -d '{"position":1500}' -H "Content-Type: application/json"
 curl -X POST http://localhost:8765/api/distance -d '{"distance":2.5}' -H "Content-Type: application/json"
-curl http://localhost:8765/api/calibration
 
 # Camera settings
 curl http://localhost:8765/api/settings/schema   # what's settable, with choices
