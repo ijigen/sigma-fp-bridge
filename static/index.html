@@ -781,14 +781,17 @@ function focusApply(body) {
   }).catch(e => log('對焦設定請求失敗：' + e, 'err'));
 }
 
-function focusOptRow(name, title, current, choices, labels) {
+function focusOptRow(name, title, current, choices, labels, note) {
   const cur = current === null || current === undefined ? '—' : (labels[current] || current);
+  const locked = !!note;
   const opts = choices.map(c =>
     '<button class="o' + (c === current ? ' on' : '') + '" data-focus="' + name +
-    '" data-val="' + escapeHTML(c) + '">' + escapeHTML(labels[c] || c) + '</button>').join('');
+    '" data-val="' + escapeHTML(c) + '"' + (locked ? ' disabled data-locked="1"' : '') +
+    '>' + escapeHTML(labels[c] || c) + '</button>').join('');
   return '<div class="opt"><div class="opt-head">' +
     '<span class="opt-name">' + escapeHTML(title) + '</span>' +
     '<span class="opt-cur">' + escapeHTML(cur) + '</span>' +
+    (note ? '<span class="opt-note">' + escapeHTML(note) + '</span>' : '') +
     '</div><div class="opts">' + opts + '</div></div>';
 }
 
@@ -797,13 +800,20 @@ function renderFocusControls() {
   if (!box) return;
   if (!focusBounds) { setHTML(box, '<div class="hint">對焦選項載入中…</div>'); return; }
 
+  // 實測：MF 下相機會忽略對焦區域與臉眼偵測的寫入 —— 區域固定回單點，
+  // 臉眼固定回 Off。合理（MF 的「區域」就是放大輔助的位置），但按了沒反應
+  // 比按不下去更讓人困惑，所以直接標出來。
+  const isMF = st.focus_mode === 'MF';
+  const needAF = isMF ? '需切換成 AF 模式' : '';
+
   const rows = [];
   rows.push(focusOptRow('mode', '對焦模式', st.focus_mode,
-    focusBounds.focus_modes || [], FRIENDLY.focus_mode || {}));
+    focusBounds.focus_modes || [], FRIENDLY.focus_mode || {},
+    st.camera_mode === 'movie' ? 'CINE 下選 AF-C 會變成 AF-S（實測）' : ''));
   rows.push(focusOptRow('face_eye_af', '臉部・眼睛', st.face_eye_af,
-    focusBounds.face_eye_options || [], FRIENDLY.face_eye_af || {}));
+    focusBounds.face_eye_options || [], FRIENDLY.face_eye_af || {}, needAF));
   rows.push(focusOptRow('focus_area', '對焦區域', st.focus_area,
-    focusBounds.focus_areas || [], FRIENDLY.focus_area || {}));
+    focusBounds.focus_areas || [], FRIENDLY.focus_area || {}, needAF));
 
   // 對焦點：座標系由相機提供，超出有效範圍相機會自己夾
   const pt = st.focus_point || [];
@@ -812,7 +822,7 @@ function renderFocusControls() {
   rows.push('<div class="opt"><div class="opt-head">' +
     '<span class="opt-name">對焦點</span>' +
     '<span class="opt-cur">' + (pt.length === 2 ? pt[0] + ', ' + pt[1] : '—') + '</span>' +
-    '<span class="opt-note">y 0–' + (b.height || '?') + ' · x 0–' + (b.width || '?') +
+    '<span class="opt-note">相機會吸附到最近的對焦格點 · y 0–' + (b.height || '?') + ' · x 0–' + (b.width || '?') +
     (b.top !== undefined ? '（有效 y ' + b.top + '–' + b.bottom + ' · x ' + b.left + '–' + b.right + '）' : '') +
     '</span></div><div class="opts">' +
     '<span class="grp"><span class="grp-label">y</span>' +

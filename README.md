@@ -1232,6 +1232,31 @@ Intercepting the stream means presenting to the camera as USB mass storage, whic
 needs a device-mode controller. A Mac has none; a Linux board with a UDC in
 gadget mode does.
 
+### Focus mode gates the rest of the focus settings
+
+`DataGroupFocus` exposes focus mode, face/eye detection, focus area and the
+focus point, and the last two only take in an AF mode. Writing
+`MultiAutoFocusPoints` while the camera is in MF reads back as
+`OnePointSelection`; switching to AF-S and repeating the same write takes.
+Face/eye behaves identically — set to `FaceOnly` under MF, it reads back `Off`.
+Both make sense, since MF's "focus area" is where the magnifier sits, but a
+control that silently does nothing is worse than one that is visibly disabled, so
+the UI marks them.
+
+This matters more than it sounds because `set_focus_position` writes MF on every
+move. Driving focus from the slider therefore turns face/eye and area off until
+the mode is put back.
+
+Two places where the camera declares more than it delivers:
+
+- `CanSetInfo5` 600 lists MF, AF-C and AF-S in CINE, but writing AF-C there reads
+  back AF-S. In STILL, AF-C takes.
+- `CanSetInfo5` 610 lists two focus areas and `Tracking` never writes at all.
+
+The focus point does work, and snaps: `[200, 300]` comes back as `[213, 288]`,
+`[340, 512]` as `[341, 512]`. That is the camera's focus point grid, not a lost
+write — 341 is the true centre of the 682-row area.
+
 ### Live view
 
 ```

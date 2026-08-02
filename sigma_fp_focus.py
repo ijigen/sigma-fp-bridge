@@ -703,7 +703,16 @@ def set_face_eye_af(cam: SigmaPTPy, value) -> None:
 
 
 def set_focus_area(cam: SigmaPTPy, area) -> None:
-    """對焦區域模式。多點 / 單點選擇 / 追蹤。"""
+    """對焦區域模式。多點 / 單點選擇 / 追蹤。
+
+    ⚠️ **只在 AF 模式下有效。** MF 下相機會忽略寫入並固定在單點選擇 —— 合理，
+    因為 MF 的「對焦區域」就是放大輔助的位置，多點沒有意義。實測：MF 下寫
+    MultiAutoFocusPoints 讀回仍是 OnePointSelection，切到 AF_S 之後同樣的
+    寫入就生效了。臉眼偵測（set_face_eye_af）也一樣。
+
+    另外 CanSetInfo5 610 在 CINE 下宣告 [1, 2]，但 Tracking(3) 從來寫不進去，
+    而且 600 宣告的 AF_C 在 CINE 下會被換成 AF_S —— 能力清單會多報。
+    """
     from sigma_ptpy.enum import FocusArea
     if isinstance(area, str):
         try:
