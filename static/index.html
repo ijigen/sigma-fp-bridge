@@ -120,6 +120,11 @@
   .lockicon { font-size: 10px; opacity: .8; }
   .opts select { min-width: 120px; max-width: 160px; }
   /* 同一列裡的多個小群組：用細標籤與分隔線區隔，免得三排按鈕黏成一團 */
+  #lv-marker { position:absolute; width:34px; height:34px; margin:-17px 0 0 -17px;
+    border:2px solid #4da3ff; border-radius:3px; pointer-events:none; display:none;
+    box-shadow:0 0 0 1px rgba(0,0,0,.6), inset 0 0 0 1px rgba(0,0,0,.6) }
+  #lv-marker.snap { border-color:#7ee787 }
+  #liveview.tap { cursor: crosshair }
   .grp { display: flex; align-items: center; gap: 5px; }
   .grp + .grp { margin-left: 4px; padding-left: 10px; border-left: 1px solid #333; }
   .grp-label { font-size: 11px; color: #8a8a8a; margin-right: 5px; align-self: center }
@@ -135,8 +140,15 @@
   <div class="grid">
     <div>
       <div class="panel flush">
-        <img id="liveview" class="liveview" alt="">
+        <div id="lv-wrap" style="position:relative; line-height:0">
+          <img id="liveview" class="liveview" alt="">
+          <div id="lv-marker"></div>
+        </div>
         <div id="liveview-off" class="liveview-off"></div>
+        <div class="btnrow" id="lv-tools" style="padding:8px 10px; line-height:normal">
+          <button class="sm" id="btn-tapfocus">點選對焦：關</button>
+          <span class="hint" id="tapfocus-hint"></span>
+        </div>
       </div>
 
       <div class="panel">
@@ -234,7 +246,14 @@ function log(text, cls = '') {
 }
 
 // ── 連線 ──────────────────────────────────────────────────────────
+function wireLiveview() {
+  const img = $('liveview'), btn = $('btn-tapfocus');
+  if (img && !img.__wired) { img.__wired = true; img.addEventListener('click', onLiveviewClick); }
+  if (btn && !btn.__wired) { btn.__wired = true; btn.onclick = toggleTapFocus; }
+}
+
 function connect() {
+  wireLiveview();
   ws = new WebSocket('ws://' + location.host + '/ws');
   ws.onopen = () => {
     log('WebSocket 已連線', 'recv');
@@ -312,6 +331,7 @@ function render() {
   setText($('f-pos'), st.focus_position);
   setText($('f-state'), st.focus_state === 0 ? 'Idle' : st.focus_state === 1 ? 'Moving' : '—');
   renderFocusControls();
+  renderTapFocus();
   setText($('f-len'), st.focal_length_mm ? st.focal_length_mm + ' mm' : '—');
   if (st.focus_range) applyRange(st.focus_range);
   if (st.focus_position != null && !busy()) {
@@ -750,6 +770,67 @@ const LOC_PARTS = [
   ['loc_vignetting',           '暗角'],
 ];
 
+// ── 在預覽畫面上點選對焦點 ─────────────────────────────────────────
+//
+// 座標映射有個已知的不確定性：對焦座標系是 682×1024（3:2，全片幅比例），
+// 而 CINE 模式的 live view 是 16:9。相機宣告的有效區域（CanSetInfo5 613）
+// 是上 85 下 597 左 96 右 928，長寬比 1.625 —— 跟兩者都不完全一致。
+//
+// 所以這裡把點擊位置正規化之後映射到「有效區域」，並在畫面上標出相機實際
+// 採用的位置（它會吸附到格點）。映射若有偏差，marker 跟手指的落差會直接
+// 看得出來 —— 這比假裝精確好。
+let tapFocus = false;
+
+function toggleTapFocus() {
+  tapFocus = !tapFocus;
+  renderTapFocus();
+}
+
+function renderTapFocus() {
+  const btn = $('btn-tapfocus'), img = $('liveview'), marker = $('lv-marker');
+  if (!btn) return;
+  setText(btn, '點選對焦：' + (tapFocus ? '開' : '關'));
+  btn.classList.toggle('primary', tapFocus);
+  if (img) img.classList.toggle('tap', tapFocus);
+  setText($('tapfocus-hint'), tapFocus
+    ? '點畫面移動對焦點（相機會吸附到最近的格點）' : '');
+  if (!marker) return;
+
+  const b = (focusBounds && focusBounds.point) || {};
+  const pt = st.focus_point;
+  const show = tapFocus && pt && pt.length === 2 && b.height && b.width;
+  setShown(marker, show);
+  if (!show) return;
+
+  // 對焦座標 → 有效區域內的比例 → 畫面像素
+  const top = b.top !== undefined ? b.top : 0;
+  const bottom = b.bottom !== undefined ? b.bottom : b.height;
+  const left = b.left !== undefined ? b.left : 0;
+  const right = b.right !== undefined ? b.right : b.width;
+  const fy = (pt[0] - top) / Math.max(1, bottom - top);
+  const fx = (pt[1] - left) / Math.max(1, right - left);
+  marker.style.top = (fy * 100) + '%';
+  marker.style.left = (fx * 100) + '%';
+}
+
+function onLiveviewClick(ev) {
+  if (!tapFocus || !focusBounds) return;
+  const img = $('liveview');
+  const r = img.getBoundingClientRect();
+  if (!r.width || !r.height) return;
+  const fx = Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width));
+  const fy = Math.min(1, Math.max(0, (ev.clientY - r.top) / r.height));
+
+  const b = focusBounds.point || {};
+  const top = b.top !== undefined ? b.top : 0;
+  const bottom = b.bottom !== undefined ? b.bottom : (b.height || 682);
+  const left = b.left !== undefined ? b.left : 0;
+  const right = b.right !== undefined ? b.right : (b.width || 1024);
+  const y = Math.round(top + fy * (bottom - top));
+  const x = Math.round(left + fx * (right - left));
+  focusApply({point: [y, x]});
+}
+
 // ── 對焦控制 ──────────────────────────────────────────────────────
 //
 // 這幾項都在 DataGroupFocus 裡，但 bridge 一直沒把它們接出來。其中對焦模式
@@ -778,6 +859,7 @@ function focusApply(body) {
       continuous_af: d.continuous_af,
     });
     renderFocusControls();
+  renderTapFocus();
   }).catch(e => log('對焦設定請求失敗：' + e, 'err'));
 }
 

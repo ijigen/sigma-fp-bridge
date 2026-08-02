@@ -448,6 +448,24 @@ def test_focus_panel_exists_and_can_return_to_autofocus():
     print("✓ 對焦面板可切換模式 / 臉眼偵測 / 區域 / 對焦點")
 
 
+def test_tap_to_focus_is_behind_a_toggle():
+    """在預覽畫面上點選對焦點，預設關閉。
+
+    預覽是拿來看構圖的，隨手一點就把焦點移走會很煩 —— 所以要有開關，而且
+    預設是關的。開啟時畫面上要標出相機實際採用的位置（它會吸附到格點），
+    不然使用者分不出「點歪了」和「相機吸附了」。
+    """
+    html = HTML.read_text()
+    assert 'id="btn-tapfocus"' in html, "沒有點選對焦的開關"
+    assert "let tapFocus = false" in html, "點選對焦預設不是關閉"
+    assert "function onLiveviewClick(" in html, "預覽沒有點擊處理"
+    assert 'id="lv-marker"' in html, "沒有標示對焦點的 marker"
+    assert "getBoundingClientRect" in html, "沒有把點擊換算成畫面比例"
+    # 映射要用相機宣告的有效區域，不是憑空假設
+    assert "b.top" in html and "b.left" in html, "沒有用相機宣告的有效區域做映射"
+    print("✓ 點選對焦有開關，預設關閉，並標出相機實際位置")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):
