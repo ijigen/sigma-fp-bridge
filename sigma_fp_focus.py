@@ -78,7 +78,16 @@ class CamDataGroupFocusExt(CamDataGroupFocus):
         if self.DMFSize is not None:
             data.append((12, DirectoryType.UInt8, self.DMFSize))
         if self.DMFPos is not None:
-            data.append((13, DirectoryType.UInt8, self.DMFPos))
+            # 實機回報的是 Any8 count=4 —— 兩個小端 UInt16，順序是 (y, x)。
+            # 先前這裡寫成單一 UInt8，那寫不出一個座標。
+            #
+            # 座標系由 CanSetInfo5 提供：612 FocusAreaOverallArea = [682, 1024]
+            # 是整個範圍（高, 寬），613 FocusAreaValidArea 是可對焦的子區域。
+            # 出廠值 54 01 00 02 解出來是 y=340, x=512 —— 682/2 與 1024/2，
+            # 正中央，這也是這個解讀的佐證。
+            y, x = self.DMFPos
+            data.append((13, DirectoryType.Any8,
+                         [y & 0xFF, (y >> 8) & 0xFF, x & 0xFF, (x >> 8) & 0xFF]))
         if self.PreConstAF is not None:
             data.append((51, DirectoryType.UInt8, self.PreConstAF.value))
         if self.FocusLimit is not None:
@@ -92,7 +101,10 @@ class CamDataGroupFocusExt(CamDataGroupFocus):
     def decode(self, rawdata):
         super().decode(rawdata)
         for tag, val in self._decode(rawdata):
-            if tag == 80:
+            if tag == 13 and hasattr(val, "__getitem__") and len(val) >= 4:
+                # 兩個小端 UInt16：(y, x)
+                self.DMFPos = (val[0] | (val[1] << 8), val[2] | (val[3] << 8))
+            elif tag == 80:
                 self.FocusState = val[0] if hasattr(val, '__getitem__') else int(val)
             elif tag == 81:
                 # SHORT (UInt16, unsigned 16-bit)
@@ -225,6 +237,13 @@ def read_capabilities(cam: SigmaPTPy) -> dict:
         caps["focus_position"] = {"min": lo, "max": hi}
     except Exception:
         pass
+
+    # 對焦點的座標範圍。612 是整體（高, 寬），613 是實際可對焦的子區域
+    # （上, 下, 左, 右）。這兩個不走上面的定點數轉換 —— 它們是原始像素座標。
+    for tag, name in ((612, "focus_area_overall"), (613, "focus_area_valid")):
+        entry = find_tag(ifd, tag)
+        if entry is not None and entry.values:
+            caps[name] = list(entry.values)
 
     return caps
 
@@ -579,6 +598,92 @@ def get_focus_state(cam: SigmaPTPy) -> CamDataGroupFocusExt:
     cam.get_cam_data_group_focus() 直接回傳 Ext 版本。
     """
     return cam.get_cam_data_group_focus()
+
+
+#: 對焦點座標系。相機用 CanSetInfo5 612 / 613 回報，這裡只是預設值 ——
+#: 讀得到就用相機的。
+DEFAULT_FOCUS_AREA = (682, 1024)
+
+
+def read_focus_area_bounds(cam: SigmaPTPy) -> dict:
+    """對焦點的座標範圍。
+
+    CanSetInfo5 612 FocusAreaOverallArea = [高, 寬]，613 FocusAreaValidArea
+    是實際可對焦的子區域。出廠對焦點 (340, 512) 正好是 682/2 與 1024/2 ——
+    畫面正中央，這是座標系解讀的佐證。
+    """
+    caps = read_capabilities(cam) or {}
+    overall = caps.get("focus_area_overall") or list(DEFAULT_FOCUS_AREA)
+    valid = caps.get("focus_area_valid")
+    out = {"height": overall[0], "width": overall[1] if len(overall) > 1 else None}
+    if valid and len(valid) >= 4:
+        out.update({"top": valid[0], "bottom": valid[1],
+                    "left": valid[2], "right": valid[3]})
+    return out
+
+
+def set_focus_mode(cam: SigmaPTPy, mode, continuous_af=None) -> None:
+    """切換對焦模式。**這是從手動控焦回到自動對焦的唯一途徑。**
+
+    set_focus_position() 為了不讓相機搶回焦點，每次都會寫入 FocusMode=MF、
+    AFLock=Off、PreConstAF=Off。那三個沒有任何地方會寫回去 —— 所以拉過一次
+    滑桿之後，相機就永遠停在手動對焦。這個函式補上回程。
+
+    Args:
+        mode: FocusMode 的成員或名稱（MF / AF / AF_S / AF_C）。
+        continuous_af: PreConstAF 要不要開。None 表示自動判斷 —— 切到 AF 系列
+            就開回來（那是相機出廠行為，也是使用者期待的「自動對焦」），切到
+            MF 就關掉。給明確值可以覆寫。
+    """
+    if isinstance(mode, str):
+        try:
+            mode = FocusMode[mode]
+        except KeyError as e:
+            raise ValueError(
+                f"不認得的對焦模式：{mode}（可用："
+                f"{', '.join(m.name for m in FocusMode)}）") from e
+    if continuous_af is None:
+        continuous_af = mode is not FocusMode.MF
+    focus = CamDataGroupFocusExt(
+        FocusMode=mode,
+        PreConstAF=PreConstAF.On if continuous_af else PreConstAF.Off,
+    )
+    cam.set_cam_data_group_focus(focus)
+
+
+def set_face_eye_af(cam: SigmaPTPy, value) -> None:
+    """臉部 / 眼睛偵測自動對焦。Off / FaceOnly / FaceEyeAuto。"""
+    from sigma_ptpy.enum import FaceEyeAF
+    if isinstance(value, str):
+        try:
+            value = FaceEyeAF[value]
+        except KeyError as e:
+            raise ValueError(
+                f"不認得的值：{value}（可用："
+                f"{', '.join(m.name for m in FaceEyeAF)}）") from e
+    cam.set_cam_data_group_focus(CamDataGroupFocusExt(FaceEyeAF=value))
+
+
+def set_focus_area(cam: SigmaPTPy, area) -> None:
+    """對焦區域模式。多點 / 單點選擇 / 追蹤。"""
+    from sigma_ptpy.enum import FocusArea
+    if isinstance(area, str):
+        try:
+            area = FocusArea[area]
+        except KeyError as e:
+            raise ValueError(
+                f"不認得的對焦區域：{area}（可用："
+                f"{', '.join(m.name for m in FocusArea)}）") from e
+    cam.set_cam_data_group_focus(CamDataGroupFocusExt(FocusArea=area))
+
+
+def set_focus_point(cam: SigmaPTPy, y: int, x: int) -> None:
+    """把對焦點移到指定座標。
+
+    座標系見 read_focus_area_bounds()。範圍不在這裡檢查 —— 相機自己會夾，
+    而寫入後讀回比對才是可靠的驗證。
+    """
+    cam.set_cam_data_group_focus(CamDataGroupFocusExt(DMFPos=(int(y), int(x))))
 
 
 def set_focus_position(cam: SigmaPTPy, position: int) -> None:

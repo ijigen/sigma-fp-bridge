@@ -402,6 +402,74 @@ async def test_probe_accepts_numeric_opcodes_for_undocumented_commands():
     print("✓ 探測端點收得下數值 opcode（用來探未文件化指令）")
 
 
+async def test_focus_can_return_to_autofocus_after_manual_control():
+    """迴歸：拉過一次滑桿就再也回不了自動對焦。
+
+    set_focus_position 為了不讓相機搶回焦點，每次都寫 FocusMode=MF、
+    PreConstAF=Off，而在 /api/focus/mode 出現之前，沒有任何地方寫得回去。
+    """
+    reset()
+    from sigma_ptpy.enum import FocusMode, PreConstAF
+    async with running_worker():
+        runner = web.AppRunner(B.make_app())
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        base = f"http://127.0.0.1:{runner.addresses[0][1]}"
+        try:
+            async with aiohttp.ClientSession() as session:
+                await session.post(f"{base}/api/focus", json={"position": 7000})
+                got = await (await session.get(f"{base}/api/focus")).json()
+                assert got["focus_mode"] == "MF", got
+                assert got["continuous_af"] == "Off", got
+
+                resp = await session.post(f"{base}/api/focus/mode",
+                                          json={"mode": "AF_C"})
+                assert resp.status == 200, resp.status
+                body = await resp.json()
+                assert body["focus_mode"] == "AF_C", body
+                # 切回 AF 要把持續對焦一起打開，否則相機不會真的自己追焦
+                assert body["continuous_af"] == "On", body
+        finally:
+            await runner.cleanup()
+    print("✓ 手動控焦之後切得回自動對焦，持續對焦也一起恢復")
+
+
+async def test_focus_point_face_eye_and_area_round_trip():
+    """對焦點、臉眼偵測、對焦區域都要寫得進去也讀得回來。"""
+    reset()
+    async with running_worker():
+        runner = web.AppRunner(B.make_app())
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        base = f"http://127.0.0.1:{runner.addresses[0][1]}"
+        try:
+            async with aiohttp.ClientSession() as session:
+                resp = await session.post(f"{base}/api/focus/mode", json={
+                    "face_eye_af": "FaceEyeAuto",
+                    "focus_area": "OnePointSelection",
+                    "point": [200, 400],
+                })
+                body = await resp.json()
+                assert body["face_eye_af"] == "FaceEyeAuto", body
+                assert body["focus_area"] == "OnePointSelection", body
+                assert body["focus_point"] == [200, 400], body
+
+                bounds = await (await session.get(f"{base}/api/focus/bounds")).json()
+                assert bounds["point"]["height"] == 682, bounds
+                assert "FaceEyeAuto" in bounds["face_eye_options"], bounds
+
+                bad = await session.post(f"{base}/api/focus/mode",
+                                         json={"mode": "NotAMode"})
+                assert bad.status == 400, bad.status
+                bad = await session.post(f"{base}/api/focus/mode", json={})
+                assert bad.status == 400, bad.status
+        finally:
+            await runner.cleanup()
+    print("✓ 對焦點 / 臉眼偵測 / 對焦區域可讀可寫，不合法的值被擋下")
+
+
 async def test_set_position_coalesces():
     reset()
     async with running_worker():

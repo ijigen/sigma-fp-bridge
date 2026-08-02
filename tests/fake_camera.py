@@ -27,10 +27,18 @@ def _sample_ifd(entries) -> bytes:
 class FakeFocusState:
     """對應 CamDataGroupFocusExt 的最小介面。"""
 
-    def __init__(self, position=0, state=0, mode=None):
+    def __init__(self, position=0, state=0, mode=None, **extra):
         self.FocusPosition = position
         self.FocusState = state
-        self.FocusMode = mode
+        # focus_settings 用的是相機欄位名，優先於位置參數
+        self.FocusMode = extra.get("FocusMode", mode)
+        # 臉眼偵測 / 區域 / 對焦點
+        self.FaceEyeAF = extra.get("FaceEyeAF")
+        self.FaceEyeAFStatus = extra.get("FaceEyeAFStatus")
+        self.FocusArea = extra.get("FocusArea")
+        self.DMFPos = extra.get("DMFPos")
+        self.PreConstAF = extra.get("PreConstAF")
+        self.AFLock = extra.get("AFLock")
 
 
 class FakeCamera:
@@ -71,6 +79,8 @@ class FakeCamera:
         self.image_quality = "JPEGFine"
         #: 記憶卡剩餘空間（實機回報的單位是 MB）
         self.media_free_space = 19366
+        #: 對焦模式 / 臉眼偵測 / 區域 / 對焦點
+        self.focus_settings: dict = {}
         self.files: list = []
         # /api/dump/* 用的原始 IFD payload
         self.info5_raw = _sample_ifd([(658, 3, [5974, 11116])])
@@ -386,12 +396,17 @@ def install(camera: FakeCamera | None = None) -> FakeCamera:
     def get_focus_state(c):
         c._tick("focus")
         moving = c.count("focus") < c.idle_after_reads
-        return FakeFocusState(c.position, 1 if moving else 0)
+        return FakeFocusState(c.position, 1 if moving else 0, **c.focus_settings)
 
     def set_focus_position(c, position):
+        # 忠實反映真機：為了不讓相機搶回焦點，這裡會強制切到 MF。
+        # 「拉過滑桿就回不去 AF」的成因就在這裡，要能被測出來。
+        from sigma_ptpy.enum import FocusMode, PreConstAF
         c._tick("set")
         c.position = position
         c.set_log.append(position)
+        c.focus_settings["FocusMode"] = FocusMode.MF
+        c.focus_settings["PreConstAF"] = PreConstAF.Off
 
     def read_capabilities(c):
         c._tick("capabilities")
@@ -426,6 +441,55 @@ def install(camera: FakeCamera | None = None) -> FakeCamera:
     mod.leave_api_mode = lambda c: c.close_application()
     mod.enter_api_mode = lambda c: c.config_api()
     mod.get_focus_state = get_focus_state
+
+    # 對焦模式 / 臉眼偵測 / 對焦區域 / 對焦點。假相機把值記在 focus_settings
+    # 裡，讀回來就看得到 —— 「拉過滑桿還回得去 AF」這件事要能被測到。
+    def set_focus_mode(c, mode, continuous_af=None):
+        from sigma_ptpy.enum import FocusMode, PreConstAF
+        if isinstance(mode, str):
+            try:
+                mode = FocusMode[mode]
+            except KeyError as e:
+                raise ValueError(f"不認得的對焦模式：{mode}") from e
+        if continuous_af is None:
+            continuous_af = mode is not FocusMode.MF
+        c._tick("set_focus_mode")
+        c.focus_settings["FocusMode"] = mode
+        c.focus_settings["PreConstAF"] = PreConstAF.On if continuous_af else PreConstAF.Off
+
+    def set_face_eye_af(c, value):
+        from sigma_ptpy.enum import FaceEyeAF
+        if isinstance(value, str):
+            try:
+                value = FaceEyeAF[value]
+            except KeyError as e:
+                raise ValueError(f"不認得的值：{value}") from e
+        c._tick("set_face_eye")
+        c.focus_settings["FaceEyeAF"] = value
+
+    def set_focus_area(c, area):
+        from sigma_ptpy.enum import FocusArea
+        if isinstance(area, str):
+            try:
+                area = FocusArea[area]
+            except KeyError as e:
+                raise ValueError(f"不認得的對焦區域：{area}") from e
+        c._tick("set_focus_area")
+        c.focus_settings["FocusArea"] = area
+
+    def set_focus_point(c, y, x):
+        c._tick("set_focus_point")
+        c.focus_settings["DMFPos"] = (int(y), int(x))
+
+    def read_focus_area_bounds(c):
+        return {"height": 682, "width": 1024,
+                "top": 85, "bottom": 597, "left": 96, "right": 928}
+
+    mod.set_focus_mode = set_focus_mode
+    mod.set_face_eye_af = set_face_eye_af
+    mod.set_focus_area = set_focus_area
+    mod.set_focus_point = set_focus_point
+    mod.read_focus_area_bounds = read_focus_area_bounds
     def read_info5_raw(c):
         c._tick("info5_raw")
         return c.info5_raw

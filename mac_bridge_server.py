@@ -72,6 +72,11 @@ from sigma_fp_focus import (
     get_focus_range,
     get_focus_state,
     set_focus_position,
+    set_focus_mode,
+    set_face_eye_af,
+    set_focus_area,
+    set_focus_point,
+    read_focus_area_bounds,
     distance_to_position,
     CamDataGroupFocusExt,
 )
@@ -1301,6 +1306,10 @@ async def handle_status(request: web.Request) -> web.Response:
     })
 
 
+def _enum_name(value):
+    return getattr(value, "name", None) if value is not None else None
+
+
 async def handle_focus_get(request: web.Request) -> web.Response:
     if not state.camera_connected:
         return web.json_response({"error": "not connected"}, status=503)
@@ -1308,7 +1317,84 @@ async def handle_focus_get(request: web.Request) -> web.Response:
     return web.json_response({
         "focus_position": f.FocusPosition,
         "focus_state": f.FocusState,
-        "focus_mode": str(f.FocusMode),
+        "focus_mode": _enum_name(f.FocusMode),
+        "face_eye_af": _enum_name(getattr(f, "FaceEyeAF", None)),
+        # 相機自己回報的偵測結果，唯讀
+        "face_eye_detected": _enum_name(getattr(f, "FaceEyeAFStatus", None)),
+        "focus_area": _enum_name(getattr(f, "FocusArea", None)),
+        # (y, x)。座標系見 /api/focus/bounds
+        "focus_point": getattr(f, "DMFPos", None),
+        "continuous_af": _enum_name(getattr(f, "PreConstAF", None)),
+        "af_lock": _enum_name(getattr(f, "AFLock", None)),
+    })
+
+
+async def handle_focus_bounds(request: web.Request) -> web.Response:
+    """對焦點的座標範圍與各項可用值。"""
+    if not state.camera_connected:
+        return web.json_response({"error": "not connected"}, status=503)
+    from sigma_ptpy.enum import FocusMode, FaceEyeAF, FocusArea
+    bounds = await worker.call(
+        lambda: read_focus_area_bounds(state.camera), priority=Priority.STATUS)
+    return web.json_response({
+        "point": bounds,
+        "focus_modes": [m.name for m in FocusMode],
+        "face_eye_options": [m.name for m in FaceEyeAF],
+        "focus_areas": [m.name for m in FocusArea],
+    })
+
+
+async def handle_focus_mode(request: web.Request) -> web.Response:
+    """切換對焦模式 / 臉眼偵測 / 對焦區域 / 對焦點。
+
+    這是拉過滑桿之後回到自動對焦的途徑 —— set_focus_position 為了不讓相機
+    搶回焦點會強制寫 MF，而在這個端點出現之前沒有任何地方寫得回去。
+    """
+    if not state.camera_connected:
+        return web.json_response({"error": "not connected"}, status=503)
+    try:
+        data = await request.json()
+    except Exception:
+        return web.json_response({"error": "需要 JSON body"}, status=400)
+
+    actions = []
+    if "mode" in data:
+        actions.append(lambda: set_focus_mode(
+            state.camera, data["mode"], data.get("continuous_af")))
+    if "face_eye_af" in data:
+        actions.append(lambda: set_face_eye_af(state.camera, data["face_eye_af"]))
+    if "focus_area" in data:
+        actions.append(lambda: set_focus_area(state.camera, data["focus_area"]))
+    if "point" in data:
+        point = data["point"]
+        if not (isinstance(point, (list, tuple)) and len(point) == 2):
+            return web.json_response({"error": "point 要是 [y, x]"}, status=400)
+        actions.append(lambda: set_focus_point(state.camera, point[0], point[1]))
+    if not actions:
+        return web.json_response(
+            {"error": "沒有可套用的項目（mode / face_eye_af / focus_area / point）"},
+            status=400)
+
+    def apply_all():
+        for action in actions:
+            action()
+        return get_focus_state(state.camera)
+
+    try:
+        f = await worker.call(apply_all, priority=Priority.CONTROL)
+    except (ValueError, KeyError) as e:
+        # 值不合法是呼叫端的錯，不是伺服器壞掉。KeyError 也接住 ——
+        # enum 查表失敗會丟它，而那同樣是「使用者給了不認得的值」。
+        return web.json_response({"error": str(e)}, status=400)
+
+    # 寫入後讀回 —— 相機會夾值，回報實際生效的才誠實
+    return web.json_response({
+        "ok": True,
+        "focus_mode": _enum_name(f.FocusMode),
+        "face_eye_af": _enum_name(getattr(f, "FaceEyeAF", None)),
+        "focus_area": _enum_name(getattr(f, "FocusArea", None)),
+        "focus_point": getattr(f, "DMFPos", None),
+        "continuous_af": _enum_name(getattr(f, "PreConstAF", None)),
     })
 
 
@@ -2006,6 +2092,8 @@ def make_app() -> web.Application:
     app.router.add_post("/api/probe/ptp", handle_ptp_probe)
     app.router.add_get("/api/focus", handle_focus_get)
     app.router.add_post("/api/focus", handle_focus_post)
+    app.router.add_get("/api/focus/bounds", handle_focus_bounds)
+    app.router.add_post("/api/focus/mode", handle_focus_mode)
     app.router.add_post("/api/distance", handle_distance_post)
     app.router.add_get("/api/calibration", handle_calibration_get)
     app.router.add_post("/api/calibration", handle_calibration_post)
