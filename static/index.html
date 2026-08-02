@@ -804,17 +804,23 @@ const CROP_PARTS = [
 // 點選對焦不再是獨立開關 —— 它就是「對焦對象 = AF Point」這件事。多開一個
 // 開關等於要求使用者把兩件同一回事的設定對齊，忘了對齊就會覺得點了沒反應。
 // MF 下相機不會自己對焦，點了也沒有意義。
-function tapFocusOn() {
-  return !st.face_eye_af || st.face_eye_af === 'Off'
-    ? st.focus_mode !== 'MF'
-    : false;
+// 對焦點現在生效中 —— 決定要不要畫出對焦框和 AF 範圍。
+function afPointActive() {
+  return (!st.face_eye_af || st.face_eye_af === 'Off') && st.focus_mode !== 'MF';
+}
+
+// 點畫面永遠可以點。指定座標就是在說「對這裡」—— 相機端會把臉／眼偵測關掉、
+// 區域切成單點、MF 切回 AF-S。要求使用者先自己把那三項調對，等於把「點哪對
+// 哪」變成一個要先讀說明書的功能。
+function canTapFocus() {
+  return !!st.connected && !st.released && !st.wsDown;
 }
 
 function renderTapFocus() {
   const img = $('liveview'), marker = $('lv-marker'), area = $('lv-afarea');
-  const tapFocus = tapFocusOn();
+  const tapFocus = afPointActive();
   // 提示不必留 —— 虛線框和游標已經說明了可以點，而且它每次都在講同一句話。
-  if (img) img.classList.toggle('tap', tapFocus);
+  if (img) img.classList.toggle('tap', canTapFocus());
   if (!marker) return;
 
   const b = (focusBounds && focusBounds.point) || {};
@@ -892,7 +898,7 @@ function visibleSpan(b) {
 }
 
 function onLiveviewClick(ev) {
-  if (!tapFocusOn() || !focusBounds) return;
+  if (!canTapFocus() || !focusBounds) return;
   const img = $('liveview');
   const r = img.getBoundingClientRect();
   if (!r.width || !r.height) return;

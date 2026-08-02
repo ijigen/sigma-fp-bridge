@@ -1344,6 +1344,11 @@ async def handle_focus_mode(request: web.Request) -> web.Response:
         # 使用者要的是「對這裡」，不是「先去改一個他沒聽過的模式」。
         if "focus_area" not in data:
             actions.insert(0, lambda: set_focus_area(state.camera, "OnePointSelection"))
+        # 臉／眼偵測開著時，對焦點由相機決定 —— 指定座標就是在說「不要找臉，
+        # 對這裡」。不關掉的話點了畫面完全沒有反應，而使用者根本不知道還有
+        # 一個偵測模式擋在中間。跟上面那行同一個道理。
+        if "face_eye_af" not in data:
+            actions.insert(0, lambda: set_face_eye_af(state.camera, "Off"))
         # 指定對焦點就是在說「交給相機對這裡」，所以自動切回 AF ——
         # 跟「拉對焦滑桿自動切 MF」對稱，兩邊都是從動作推出意圖。
         # MF 下對焦點寫得進去但不會有任何作用，那才是真的沒反應。

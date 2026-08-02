@@ -603,6 +603,30 @@ def test_af_s_does_not_get_pre_af():
     print("✓ Pre-AF 只跟 AF-C 走，AF-S 是單次對焦")
 
 
+def test_declared_choices_can_be_topped_up_with_measured_values():
+    """相機宣告的清單是「選單上列的」，不是「API 收得下的全集」。
+
+    白平衡宣告 [1..12]，裡面沒有 14 ColorTemp —— 但 14 和 15 LightSource 都
+    寫得進去、也讀得回同一個值（STILL 與 CINE 都量過）。反過來 13
+    CustomCapt3 沒宣告，寫進去也真的被拒。所以只在量過的地方補。
+    """
+    declared = [2, 9, 12, 11, 10, 8, 7, 6, 5, 4, 3, 1]
+    by = {e["name"]: e for e in CS.describe(
+        choice_values={"white_balance": declared},
+        current_values={"white_balance": "Auto"})}
+    choices = by["white_balance"]["choices"]
+    assert "ColorTemp" in choices, f"少了實測可用的色溫：{choices}"
+    assert "LightSource" in choices, choices
+    assert "CustomCapt3" not in choices, "補進了沒宣告也真的被拒的值"
+
+    # 沒量過的設定不能被順手放寬 —— 那幾個的宣告會隨模式正確地收窄
+    narrow = {e["name"]: e for e in CS.describe(
+        choice_values={"resolution": [1]},
+        current_values={"resolution": "High"})}["resolution"]["choices"]
+    assert len(narrow) == 1, f"resolution 的宣告被放寬了：{narrow}"
+    print("✓ 只在量過的地方補上宣告漏掉的值")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

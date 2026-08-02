@@ -1219,5 +1219,35 @@ async def main():
     print("\ntest_bridge 全部通過")
 
 
+async def test_setting_a_point_turns_face_detection_off():
+    """臉／眼偵測開著時對焦點由相機決定 —— 指定座標就是在說「不要找臉，對
+    這裡」。不關掉的話點畫面完全沒有反應，而使用者根本不知道還有一個偵測
+    模式擋在中間。
+    """
+    reset()
+    async with running_worker():
+        runner = web.AppRunner(B.make_app())
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        base = f"http://127.0.0.1:{runner.addresses[0][1]}"
+        try:
+            async with aiohttp.ClientSession() as session:
+                await session.post(f"{base}/api/focus/mode",
+                                   json={"face_eye_af": "FaceOnly"})
+                body = await (await session.post(
+                    f"{base}/api/focus/mode", json={"point": [300, 500]})).json()
+                assert body["face_eye_af"] == "Off", body
+                assert body["focus_point"] == [300, 500], body
+
+                # 明確指定就不要覆寫 —— 那是呼叫端的決定
+                body = await (await session.post(f"{base}/api/focus/mode", json={
+                    "point": [200, 400], "face_eye_af": "FaceOnly"})).json()
+                assert body["face_eye_af"] == "FaceOnly", body
+        finally:
+            await runner.cleanup()
+    print("✓ 指定對焦點會關掉臉／眼偵測")
+
+
 if __name__ == "__main__":
     asyncio.run(main())

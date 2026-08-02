@@ -490,11 +490,17 @@ def test_tap_to_focus_follows_the_af_point_subject():
     分不出「點歪了」和「相機吸附了」。
     """
     html = HTML.read_text()
-    assert "function tapFocusOn(" in html, "點選對焦沒有跟著對焦對象"
     assert 'id="btn-tapfocus"' not in html, "還留著獨立開關"
-    assert re.search(r"tapFocusOn\(\)[\s\S]{0,200}face_eye_af", html), \
+    # 畫不畫對焦框：看對焦點現在是不是生效中
+    assert "function afPointActive(" in html, "沒有判斷對焦點是否生效"
+    assert re.search(r"afPointActive\(\)[\s\S]{0,160}face_eye_af", html), \
         "沒有依對焦對象判斷"
     assert re.search(r"st\.focus_mode !== 'MF'", html), "MF 下沒有關掉"
+    # 能不能點：只要相機在就能點。指定座標就是在說「對這裡」，相機端會把
+    # 臉／眼偵測關掉、區域切成單點、MF 切回 AF-S。
+    assert "function canTapFocus(" in html, "沒有獨立的可點判斷"
+    assert re.search(r"if \(!canTapFocus\(\) \|\| !focusBounds\) return;", html), \
+        "點擊還綁在對焦對象上"
     assert "function onLiveviewClick(" in html, "預覽沒有點擊處理"
     assert 'id="lv-marker"' in html, "沒有標示對焦點的 marker"
     assert "getBoundingClientRect" in html, "沒有把點擊換算成畫面比例"

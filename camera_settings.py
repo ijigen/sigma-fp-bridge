@@ -672,6 +672,19 @@ INFO5_AVAILABILITY_TAGS = {
     "electronic_stabilization": 810,
 }
 
+#: 相機宣告漏掉、但實測寫得進去的值。
+#:
+#: white_balance 宣告的是 [1..12]，裡面沒有 14 ColorTemp。但 14 和 15
+#: LightSource 都寫得進去、也讀得回同一個值（STILL 與 CINE 都量過）。反過來
+#: 13 CustomCapt3 沒宣告，寫進去也真的被拒（回讀變成 Auto）—— 所以宣告清單
+#: 是「相機選單上列的」，不是「API 收得下的全集」。
+#:
+#: 只在量過的地方補，不放寬其他設定：image_quality / resolution 那幾個的
+#: 宣告會隨模式正確地收窄，補進去只會列出按了沒用的選項。
+INFO5_EXTRA_VALUES = {
+    "white_balance": (14, 15),
+}
+
 INFO5_CHOICE_TAGS = {
     "drive_mode": 1,
     "image_quality": 11,
@@ -742,6 +755,11 @@ def describe(capabilities: dict | None = None,
             # 必須在裡面。兩者任一不成立，那個 tag 的編碼就不是「可選值」——
             # 有些欄位放的是 min/max/step 之類的東西。
             declared = (choice_values or {}).get(setting.name)
+            if declared:
+                extra = [v for v in INFO5_EXTRA_VALUES.get(setting.name, ())
+                         if v not in declared]
+                if extra:
+                    declared = list(declared) + extra
             current = (current_values or {}).get(setting.name)
             usable = bool(declared) and all(v >= 0 for v in declared)
             if usable:
