@@ -829,7 +829,10 @@ def test_unknown_frame_size_is_not_the_largest_one():
     「零是合法值」是同一個坑。
     """
     html = HTML.read_text()
-    assert "st.point_size || 0" not in html, "又用 || 0 把未知當成索引 0"
+    # 去掉註解再找 —— 說明「為什麼不能這樣寫」的那行註解裡就有這個字串，
+    # 直接搜整份檔案會被自己的說明絆倒。
+    code = re.sub(r"//[^\n]*", "", re.sub(r"/\*.*?\*/", "", html, flags=re.S))
+    assert "st.point_size || 0" not in code, "又用 || 0 把未知當成索引 0"
     assert re.search(r"st\.point_size == null \? null : sizes\[st\.point_size\]", html), \
         "不知道框大小時仍然畫了尺寸"
     assert "i === st.point_size" in html, "選中狀態仍把未知當成 0"
