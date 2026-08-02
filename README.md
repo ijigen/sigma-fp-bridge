@@ -3,14 +3,14 @@
 Control a **Sigma fp** over USB — focus, exposure, movie settings, recording,
 tethered stills — from a browser, a script, or anything that speaks HTTP.
 
-<!-- No inline player: GitHub strips <video>, and Forgejo does not rewrite a
-     relative src in raw HTML, so the tag is dead on both. Inline playback needs
-     a URL the host serves itself -- on GitHub, drag docs/demo.mp4 into an issue
-     or a release and paste the user-attachments URL here on its own line. -->
+<!-- GitHub renders this bare URL as a player because it hosts the file itself;
+     a relative path to docs/demo.mp4 would not play, on GitHub or on Forgejo.
+     The file stays in docs/ for anyone reading the repo elsewhere. -->
 
-[![Watch the walkthrough](docs/demo.png)](docs/demo.mp4)
+https://github.com/user-attachments/assets/32b5e32b-f669-43c7-a34f-81bc41edbcac
 
-*▶ [Walkthrough](docs/demo.mp4) — 1:49*
+*1:49 — focus, tap-to-focus, settings, recording.
+Not playing? [docs/demo.mp4](docs/demo.mp4)*
 
 > Built with [Claude Code](https://claude.com/claude-code). The protocol
 > reverse-engineering, the library patches and most of the code came out of
