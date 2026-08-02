@@ -1273,5 +1273,94 @@ async def test_the_port_is_unprivileged_and_overridable():
     print("✓ 埠是非特權的，且可用環境變數覆寫")
 
 
+async def test_liveview_ws_labels_each_frame_with_the_position():
+    """每張影格要帶著「它是在什麼狀態下抓的」。
+
+    自動對焦要判斷一張影像反映的是不是剛下的位置。沒有這個資訊就只能等
+    一個保守的固定時間（相機管線延遲實測 193 ms），而那段等待佔掉對焦
+    迴路將近一半的時間。
+    """
+    reset()
+    async with running_worker():
+        runner = web.AppRunner(B.make_app())
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        base = f"http://127.0.0.1:{runner.addresses[0][1]}"
+        try:
+            async with aiohttp.ClientSession() as session:
+                await session.post(f"{base}/api/focus", json={"position": 8000})
+                async with session.ws_connect(f"{base}/ws/liveview") as ws:
+                    B.frames.publish(b"\xff\xd8fake\xff\xd9")
+                    msg = await asyncio.wait_for(ws.receive(), timeout=5)
+                    assert msg.type == aiohttp.WSMsgType.BINARY, msg.type
+                    raw = msg.data
+                    n = int.from_bytes(raw[:4], "big")
+                    meta = json.loads(raw[4:4 + n])
+                    jpeg = raw[4 + n:]
+                    assert jpeg.startswith(b"\xff\xd8"), "JPEG 沒有跟在標頭後面"
+                    assert meta["pos"] == 8000, meta
+                    assert meta["pos_age_ms"] is not None and meta["pos_age_ms"] >= 0, meta
+                    assert meta["seq"] > 0 and meta["t"] > 0, meta
+        finally:
+            await runner.cleanup()
+    print("✓ liveview WS 的每張影格都標了當時的對焦位置與維持時間")
+
+
+async def test_frame_rate_rounding_is_not_a_rejection():
+    """相機把 29.97 和 59.94 存成有理數，讀回來是 30.0 和 60.0。
+
+    差 0.1%，遠大於一般的比對容差，於是每次設定幀率都被報成「相機沒有
+    接受」—— 但相機接受了，那只是顯示上的四捨五入。
+    """
+    assert B._roughly_equal_setting("frame_rate", 30.0, 29.97), "29.97→30.0 被誤判"
+    assert B._roughly_equal_setting("frame_rate", 60.0, 59.94), "59.94→60.0 被誤判"
+
+    # 容差只放寬給幀率，而且真的不一樣仍然要報出來
+    assert not B._roughly_equal_setting("frame_rate", 25.0, 59.94), "放太寬"
+    assert not B._roughly_equal_setting("iso", 30.0, 29.97), "其他設定不該跟著放寬"
+    print("✓ 幀率的四捨五入不算拒絕，其他設定的容差沒有跟著鬆掉")
+
+
+async def test_choosing_face_detection_turns_pre_af_on():
+    """相機的臉／眼偵測只在 Pre-AF 開著時才跑。
+
+    實測：Pre-AF 關著時 FaceEyeAFStatus 永遠是 0，開了之後才回報偵測到
+    臉。使用者看到的是「選了 Face Only 卻沒有任何反應」。
+
+    在 CINE 下特別容易中：Pre-AF 先前只綁在 AF-C 上，而相機在 CINE 拒收
+    AF-C —— 於是臉部偵測永遠開不起來。
+    """
+    reset()
+    async with running_worker():
+        runner = web.AppRunner(B.make_app())
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        base = f"http://127.0.0.1:{runner.addresses[0][1]}"
+        try:
+            async with aiohttp.ClientSession() as session:
+                # 先確定 Pre-AF 是關的 —— 不然這條測試不管有沒有那段
+                # 邏輯都會過（實測突變存活過一次）。
+                off = await (await session.post(
+                    f"{base}/api/focus/mode",
+                    json={"mode": "AF_S", "continuous_af": False})).json()
+                assert off["continuous_af"] == "Off", off
+                body = await (await session.post(
+                    f"{base}/api/focus/mode",
+                    json={"face_eye_af": "FaceOnly"})).json()
+                assert body["face_eye_af"] == "FaceOnly", body
+                assert body["continuous_af"] == "On", \
+                    f"選了臉部偵測卻沒開 Pre-AF，相機不會去找臉：{body}"
+
+                # 關掉偵測不該順手開 Pre-AF
+                body = await (await session.post(
+                    f"{base}/api/focus/mode", json={"face_eye_af": "Off"})).json()
+                assert body["face_eye_af"] == "Off", body
+        finally:
+            await runner.cleanup()
+    print("✓ 選臉／眼偵測會一併開 Pre-AF，否則相機根本不會去找")
+
+
 if __name__ == "__main__":
     asyncio.run(main())

@@ -550,15 +550,20 @@ AUTO_OVERRIDE_HINTS = {
 #: 相機給了不同的值 —— 先前設 2% 的後果是：寫 29.97 相機存 30，
 #: 差 0.1% 被判定為相等，於是「寫入沒生效」完全不會被報出來。
 VALUE_EPSILON = 1e-6
+#: 幀率例外。相機把 29.97 和 59.94 存成有理數，讀回來是 30.0 和 60.0 ——
+#: 差 0.1%，遠大於 VALUE_EPSILON，於是每次設定都被誤報成「相機沒有接受」。
+#: 那不是拒絕，是顯示上的四捨五入。
+LOOSE_EPSILON = 2e-3
+LOOSE_SETTINGS = frozenset({"frame_rate"})
 
 
-def _roughly_equal(a, b) -> bool:
+def _roughly_equal(a, b, epsilon: float = VALUE_EPSILON) -> bool:
     if a is None or b is None:
         return a is b
     if isinstance(a, (int, float)) and isinstance(b, (int, float)):
         if a == 0 or b == 0:
             return a == b
-        return abs(a - b) / max(abs(a), abs(b)) < VALUE_EPSILON
+        return abs(a - b) / max(abs(a), abs(b)) < epsilon
     return str(a) == str(b)
 
 
@@ -596,7 +601,8 @@ def verify_applied(cam, requested: dict[str, Any],
         if name not in actual:
             continue
         got = actual[name]
-        if _roughly_equal(got, canonical_value(name, wanted)):
+        tol = LOOSE_EPSILON if name in LOOSE_SETTINGS else VALUE_EPSILON
+        if _roughly_equal(got, canonical_value(name, wanted), tol):
             continue
         hint = None
         modes = AUTO_OVERRIDE_HINTS.get(name)

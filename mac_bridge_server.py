@@ -152,7 +152,16 @@ def _app_dir() -> Path:
 
 
 STATE_DIR = _resolve_state_dir()
-LIVE_VIEW_INTERVAL_S = 0.04  # live view 目標間隔（~25fps 上限，實際看相機跟得上多少）
+#: live view 的目標間隔。0 = 不節流。
+#:
+#: 這是上限不是下限：相機比目標慢時完全不睡。
+#:
+#: 33 ms 是量出來的，不是猜的。完全不節流時 bridge 每秒問相機 42.5 次，
+#: 但其中只有 30 張內容真的不同 —— 另外 30% 是同一張又拿了一次，那些 PTP
+#: 交易白白佔用匯流排，而匯流排一次只跑一筆，會直接排擠對焦指令。
+#: 貼著相機的實際產出速率，就不浪費也不設限。
+#: 用 SIGMA_LIVEVIEW_INTERVAL 覆寫。
+LIVE_VIEW_INTERVAL_S = float(os.environ.get("SIGMA_LIVEVIEW_INTERVAL", "0.033"))
 STATE_BROADCAST_INTERVAL_S = 0.1  # 10Hz state push to clients
 LIVE_VIEW_STALE_S = 0.25  # 影格請求排隊超過這個時間就放棄——舊畫面沒有播的價值
 MJPEG_IDLE_CHECK_S = 1.0  # 沒有新影格時，每隔這麼久確認一次 client 還在不在
@@ -215,6 +224,11 @@ class BridgeState:
     last_face_eye_status: str | None = None
     last_focus_area: str | None = None
     last_focus_point: list | None = None
+    #: 最後一次「命令」的位置，以及命令發出的時間。跟 last_focus_position
+    #: 不同 —— 那個是相機回報的實際值，會落後。影格要標的是命令，因為
+    #: 消費端問的是「這張影像反映的是不是我剛下的那個位置」。
+    last_focus_position_cmd: int | None = None
+    position_changed_at: float | None = None
     last_point_size: int | None = None
     last_continuous_af: str | None = None
 
@@ -448,6 +462,7 @@ class FrameHub:
     def __init__(self) -> None:
         self.frame: bytes | None = None
         self.seq = 0
+        self.meta: dict = {}
         self._event: asyncio.Event | None = None
 
     def _get_event(self) -> asyncio.Event:
@@ -461,11 +476,27 @@ class FrameHub:
     def publish(self, jpeg: bytes) -> None:
         self.frame = jpeg
         self.seq += 1
+        # 每張影格帶上「它是在什麼狀態下抓的」。消費端要判斷一張影像反映
+        # 的是不是最新下的位置，靠的就是 pos_age_ms —— 沒有這個就只能等一
+        # 個保守的固定時間，而那個等待佔掉了對焦迴路快一半的時間。
+        now = time.time()
+        changed = state.position_changed_at
+        self.meta = {
+            "seq": self.seq,
+            "t": now,
+            "pos": state.last_focus_position_cmd,
+            "pos_age_ms": None if changed is None else round((now - changed) * 1000),
+        }
         # set() 會叫醒所有等待者，緊接著 clear() 讓下一輪重新等。
         # 已經被叫醒的不會因為 clear() 而失效。
         event = self._get_event()
         event.set()
         event.clear()
+
+    async def wait_for_next_meta(self, last_seq: int) -> tuple[int, bytes, dict]:
+        """跟 wait_for_next 一樣，但連同影格的中繼資料一起回。"""
+        seq, jpeg = await self.wait_for_next(last_seq)
+        return seq, jpeg, dict(self.meta)
 
     async def wait_for_next(self, last_seq: int) -> tuple[int, bytes]:
         """等到有一張比 last_seq 新的影格。忙碌中的 client 會直接拿到最新的。"""
@@ -610,6 +641,10 @@ async def cam_set_position(position: int) -> SetPositionResult:
     target, clamped = clamp_to_range(position)
     if clamped:
         log.warning(f"位置 {position} 超出範圍 {state.focus_range}，修正為 {target}")
+
+    if target != state.last_focus_position_cmd:
+        state.last_focus_position_cmd = target
+        state.position_changed_at = time.time()
 
     result = await worker.call(
         lambda: _set_and_readback(target),
@@ -779,8 +814,10 @@ def _apply_and_verify(changes: dict) -> dict:
 
 
 def _roughly_equal_setting(name: str, got, wanted) -> bool:
-    from camera_settings import _roughly_equal, canonical_value
-    return _roughly_equal(got, canonical_value(name, wanted))
+    from camera_settings import (LOOSE_EPSILON, LOOSE_SETTINGS, VALUE_EPSILON,
+                                 _roughly_equal, canonical_value)
+    tol = LOOSE_EPSILON if name in LOOSE_SETTINGS else VALUE_EPSILON
+    return _roughly_equal(got, canonical_value(name, wanted), tol)
 
 
 async def cam_apply_settings(changes: dict) -> dict:
@@ -1348,6 +1385,19 @@ async def handle_focus_mode(request: web.Request) -> web.Response:
             state.camera, data["mode"], data.get("continuous_af")))
     if "face_eye_af" in data:
         actions.append(lambda: set_face_eye_af(state.camera, data["face_eye_af"]))
+        # 相機的臉／眼偵測只在 Pre-AF 開著時才運作。實測：關著時
+        # FaceEyeAFStatus 永遠是 0，開了之後才回報偵測到臉 —— 而使用者
+        # 看到的是「選了 Face Only 卻沒有任何反應」。
+        #
+        # 這件事在 CINE 下特別容易發生：Pre-AF 先前只綁在 AF-C 上，而
+        # 相機在 CINE 拒收 AF-C，所以臉部偵測永遠開不起來。
+        #
+        # 選「偵測臉」就是在說「請你去找臉」，那本來就蘊含要持續偵測。
+        if data["face_eye_af"] not in (None, "Off") and "mode" not in data:
+            actions.append(lambda: set_focus_mode(
+                state.camera,
+                getattr(get_focus_state(state.camera), "FocusMode", None) or "AF_S",
+                continuous_af=True))
     if "focus_area" in data:
         actions.append(lambda: set_focus_area(state.camera, data["focus_area"]))
     if "point_size" in data:
@@ -1943,6 +1993,49 @@ async def handle_acquire(request: web.Request) -> web.Response:
     return web.json_response({"ok": ok, "released": not ok, "connected": ok})
 
 
+async def handle_liveview_ws(request: web.Request) -> web.WebSocketResponse:
+    """影格 + 中繼資料的 WebSocket 串流。
+
+    跟 /liveview.mjpeg 同一個來源，差別在每張影格前面掛一段 JSON：抓的時
+    間、當時命令的對焦位置、以及那個位置已經維持多久。
+
+    為什麼這件事值得一個新端點：自動對焦要判斷「這張影像反映的是不是我剛
+    下的位置」。沒有這個資訊就只能等一個保守的固定時間（實測相機管線延遲
+    193 ms），而那段等待佔掉對焦迴路將近一半的時間。有了 pos_age_ms，消費
+    端可以一邊下新指令一邊繼續收前一個位置的影格，靠標籤分類 —— 死區從
+    每個週期的成本變成一個固定的落後。
+
+    每則訊息是二進位：
+
+        4 bytes   JSON 標頭長度（big-endian uint32）
+        N bytes   JSON 標頭
+        剩下      JPEG
+
+    合成一則而不是分兩則，是因為兩則訊息之間沒有原子性保證 —— 客戶端
+    重連或掉訊息時會錯位，而錯位的後果是「用錯的位置標籤去解讀影像」。
+    """
+    ws = web.WebSocketResponse(max_msg_size=0)
+    await ws.prepare(request)
+    state.mjpeg_clients.add(ws)
+    log.info(f"liveview WS client 連入（共 {len(state.mjpeg_clients)}）")
+    last_seq = frames.seq
+    try:
+        while not ws.closed:
+            try:
+                last_seq, jpeg, meta = await asyncio.wait_for(
+                    frames.wait_for_next_meta(last_seq), timeout=MJPEG_IDLE_CHECK_S)
+            except asyncio.TimeoutError:
+                continue
+            header = json.dumps(meta, separators=(",", ":")).encode()
+            await ws.send_bytes(len(header).to_bytes(4, "big") + header + jpeg)
+    except (ConnectionResetError, asyncio.CancelledError):
+        pass
+    finally:
+        state.mjpeg_clients.discard(ws)
+        log.info(f"liveview WS client 離開（剩 {len(state.mjpeg_clients)}）")
+    return ws
+
+
 async def handle_liveview(request: web.Request) -> web.StreamResponse:
     """MJPEG 串流：瀏覽器 <img src="/liveview.mjpeg"> 就能看。"""
     boundary = "frame"
@@ -2091,6 +2184,7 @@ def make_app() -> web.Application:
     app.router.add_post("/api/release", handle_release)
     app.router.add_post("/api/acquire", handle_acquire)
     app.router.add_get("/liveview.mjpeg", handle_liveview)
+    app.router.add_get("/ws/liveview", handle_liveview_ws)
     return app
 
 
