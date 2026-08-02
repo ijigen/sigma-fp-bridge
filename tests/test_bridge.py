@@ -517,11 +517,12 @@ async def test_moving_the_focus_point_triggers_a_refocus():
                 await session.post(f"{base}/api/focus/mode", json={"point": [200, 300]})
                 assert CAM.count("trigger_af") == before + 1, "移動對焦點沒有觸發 AF"
 
-                # MF 下不能觸發
-                await session.post(f"{base}/api/focus/mode", json={"mode": "MF"})
+                # 明確指定 MF 的同時給對焦點：照他說的做，不觸發 AF ——
+                # 觸發會把手動設好的位置搶走。
                 before = CAM.count("trigger_af")
-                await session.post(f"{base}/api/focus/mode", json={"point": [220, 320]})
-                assert CAM.count("trigger_af") == before, "MF 下不該觸發 AF"
+                await session.post(f"{base}/api/focus/mode",
+                                   json={"mode": "MF", "point": [220, 320]})
+                assert CAM.count("trigger_af") == before, "明確指定 MF 時不該觸發 AF"
 
                 # 只改模式不該觸發
                 before = CAM.count("trigger_af")
@@ -562,6 +563,52 @@ async def test_setting_a_point_switches_to_one_point_selection():
         finally:
             await runner.cleanup()
     print("✓ 設定對焦點會自動切成單點選擇")
+
+
+async def test_choosing_a_point_switches_back_to_autofocus():
+    """指定對焦點就是在說「交給相機對這裡」。
+
+    跟拉滑桿自動切 MF 對稱：兩邊都從動作推出意圖。MF 下對焦點寫得進去卻
+    不會有任何作用 —— 那才是使用者會回報「沒反應」的情況。
+    """
+    reset()
+    async with running_worker():
+        runner = web.AppRunner(B.make_app())
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        base = f"http://127.0.0.1:{runner.addresses[0][1]}"
+        try:
+            async with aiohttp.ClientSession() as session:
+                # 拉滑桿 → 進 MF
+                await session.post(f"{base}/api/focus", json={"position": 7000})
+                got = await (await session.get(f"{base}/api/focus")).json()
+                assert got["focus_mode"] == "MF", got
+
+                body = await (await session.post(
+                    f"{base}/api/focus/mode", json={"point": [200, 300]})).json()
+                assert body["focus_mode"] == "AF_S", body
+                assert body["focus_point"] == [200, 300], body
+
+                # 明確指定模式時就照他說的，不要自作主張
+                body = await (await session.post(f"{base}/api/focus/mode", json={
+                    "mode": "MF", "point": [210, 310]})).json()
+                assert body["focus_mode"] == "MF", body
+        finally:
+            await runner.cleanup()
+    print("✓ 選對焦點會自動切回 AF")
+
+
+async def test_liveview_interval_throttles_rather_than_delays():
+    """節流不是延遲。
+
+    先前是取完影格直接 sleep(間隔)，所以每輪 = PTP 時間 + 40ms，而不是
+    「至少間隔 40ms」。相機給得比目標慢時完全不該睡。
+    """
+    src = (Path(B.__file__).resolve()).read_text()
+    assert "remaining = LIVE_VIEW_INTERVAL_S - elapsed" in src, "間隔仍是加在後面的延遲"
+    assert "await asyncio.sleep(LIVE_VIEW_INTERVAL_S)" not in src, "還留著固定延遲"
+    print("✓ live view 的間隔是節流，不是額外延遲")
 
 
 async def test_set_position_coalesces():

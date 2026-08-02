@@ -952,6 +952,7 @@ async def liveview_loop():
         if not state.camera_connected or not state.mjpeg_clients:
             await asyncio.sleep(0.2)
             continue
+        started = time.monotonic()
         try:
             result = await worker.call(
                 _grab_view_frame,
@@ -970,7 +971,15 @@ async def liveview_loop():
             continue  # 排太久，直接抓下一張新的
         if result:
             frames.publish(result)
-        await asyncio.sleep(LIVE_VIEW_INTERVAL_S)
+
+        # 節流，不是延遲。先前這裡直接 sleep(LIVE_VIEW_INTERVAL_S)，那是加在
+        # 取得時間**之後** —— 每輪變成「PTP 時間 + 40ms」，而不是「至少間隔
+        # 40ms」。實測 15.2 fps，其中有一大塊是這個多睡的時間。
+        # 相機給得比目標慢時就完全不睡，直接抓下一張。
+        elapsed = time.monotonic() - started
+        remaining = LIVE_VIEW_INTERVAL_S - elapsed
+        if remaining > 0:
+            await asyncio.sleep(remaining)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1335,6 +1344,17 @@ async def handle_focus_mode(request: web.Request) -> web.Response:
         # 使用者要的是「對這裡」，不是「先去改一個他沒聽過的模式」。
         if "focus_area" not in data:
             actions.insert(0, lambda: set_focus_area(state.camera, "OnePointSelection"))
+        # 指定對焦點就是在說「交給相機對這裡」，所以自動切回 AF ——
+        # 跟「拉對焦滑桿自動切 MF」對稱，兩邊都是從動作推出意圖。
+        # MF 下對焦點寫得進去但不會有任何作用，那才是真的沒反應。
+        # 讀當下的，不要用 state.last_focus_mode —— 那是定時廣播更新的快取，
+        # 剛拉完滑桿的那一刻它還是舊值。
+        if "mode" not in data:
+            def af_if_manual():
+                now = getattr(get_focus_state(state.camera), "FocusMode", None)
+                if getattr(now, "name", None) == "MF":
+                    set_focus_mode(state.camera, "AF_S")
+            actions.insert(0, af_if_manual)
         actions.append(lambda: set_focus_point(state.camera, point[0], point[1]))
     if not actions:
         return web.json_response(
