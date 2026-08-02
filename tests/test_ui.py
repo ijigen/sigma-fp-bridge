@@ -838,6 +838,25 @@ def test_unknown_frame_size_is_not_the_largest_one():
     assert "i === st.point_size" in html, "選中狀態仍把未知當成 0"
 
 
+def test_focus_bounds_are_refetched_when_the_area_changes():
+    """相機宣告的對焦框大小隨對焦區域而變，不是常數。
+
+      單點  [[128,128],[64,64],[32,32]]
+      多點  [[512,832],[365,595],[219,357],[73,119]]
+
+    多點的索引 0 是 512×832 —— 畫出來佔畫面 81%×89%。開頁時相機若在多點，
+    抓到的就是那一組，而先前抓一次就永遠沿用，切回單點也不更新，只有
+    重新整理才會。那就是「第一次進來對焦點超大一顆」。
+    """
+    html = HTML.read_text()
+    assert "async function loadFocusBounds(force)" in html, "沒有強制重抓的路徑"
+    assert re.search(r"\(focusBounds && !force\) \|\| loadingBounds", html), \
+        "force 沒有繞過快取"
+    assert re.search(r"st\.focus_area !== boundsArea", html), \
+        "沒有偵測區域變更"
+    assert "loadFocusBounds(true)" in html, "偵測到變更卻沒有重抓"
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_"):

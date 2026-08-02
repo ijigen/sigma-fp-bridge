@@ -950,16 +950,29 @@ function onLiveviewClick(ev) {
 // 這幾項都在 DataGroupFocus 裡，但 bridge 一直沒把它們接出來。其中對焦模式
 // 尤其重要：set_focus_position 每次都會強制寫 MF（不然相機會搶回焦點），
 // 而在這個面板出現之前，沒有任何地方能寫回去 —— 拉一次滑桿就永遠停在手動。
-let focusBounds = null, loadingBounds = false;
+let focusBounds = null, loadingBounds = false, boundsArea = null;
 
-async function loadFocusBounds() {
-  if (focusBounds || loadingBounds) return;
+// 對焦區域一變就要重抓 —— 相機宣告的框大小**隨區域而變**，不是常數：
+//
+//   單點  point_sizes [[128,128],[64,64],[32,32]]        step [32,16]
+//   多點  point_sizes [[512,832],[365,595],[219,357],…]  step [0,0]
+//
+// 多點的索引 0 是 512×832，畫出來佔畫面 81%×89%。開頁時若相機在多點，
+// 抓到的就是那一組，而抓一次就永遠沿用 —— 之後切回單點也不會更新，
+// 只有重新整理才會。那正是「第一次進來對焦點超大一顆」的成因。
+async function loadFocusBounds(force) {
+  if ((focusBounds && !force) || loadingBounds) return;
   loadingBounds = true;
   try {
     const r = await fetch('/api/focus/bounds');
     if (r.ok) {
       const d = await r.json();
-      if (!d.error) { focusBounds = d; renderFocusControls(); renderTapFocus(); }
+      if (!d.error) {
+        focusBounds = d;
+        boundsArea = st.focus_area;
+        renderFocusControls();
+        renderTapFocus();
+      }
     }
   } catch (e) { /* 相機還沒好，下面會再試 */ }
   loadingBounds = false;
@@ -1005,6 +1018,11 @@ function renderFocusControls() {
     if (st.connected && !st.released) loadFocusBounds();
     setHTML(box, '<div class="hint">loading focus options\u2026</div>');
     return;
+  }
+  // 區域變了，相機宣告的框大小就跟著變 —— 重抓，不要沿用舊的那一組
+  if (st.focus_area && boundsArea && st.focus_area !== boundsArea && !loadingBounds) {
+    boundsArea = st.focus_area;
+    loadFocusBounds(true);
   }
 
   // 實測：MF 下相機會忽略對焦區域與臉眼偵測的寫入 —— 區域固定回單點，
