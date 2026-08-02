@@ -131,7 +131,7 @@ curl -X POST http://localhost:1025/api/record/start
 changing code. Both need `sudo`, for the same unrelated reason.
 
 ```bash
-git clone https://github.com/<you>/sigma-fp-bridge.git
+git clone https://github.com/ijigen/sigma-fp-bridge.git
 cd sigma-fp-bridge
 sudo ./run_mac.sh                # creates the venv on first run
 .venv/bin/python diagnose.py     # reads the camera, never drives the motor
