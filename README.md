@@ -1063,14 +1063,15 @@ and 14. Recording still works — the file lands on the card and `GetMovieFileIn
 its size normally — but 0x9037 stops serving it. What it actually controls is
 unknown.
 
-Recovery is by power cycle. That conclusion has flipped twice, so here is the
-whole sequence rather than just the current answer: first "only power works",
-from setting the tag back, release/acquire and re-recording all failing — a floor
-on what does not work, stated as a proof that nothing does. Then the camera
-recovered with no power cycle at all, so it became "it clears on its own, switch
-to STILL and back" — one success generalised. Then a deliberate reproduction:
-STILL and back, re-recording, release/acquire, each tried in turn, none of them
-recovered it.
+Recovery is by power cycle, and nothing else found so far: switching to STILL and
+back, re-recording, release/acquire and restarting the bridge were each tried and
+none worked.
+
+This was written twice as "it clears on its own" before landing here, both times
+for the same reason. Transfers started working again, and the cause was picked
+from whatever had just been done in this session — when in fact the camera had
+been power-cycled by hand, which is not visible from the host. In a system whose
+inputs are not all observable, "it works now" does not identify what fixed it.
 
 Note also that *writing* to tag 10 may be the trigger, not the value: one break
 followed a write of 1, the value it already held.
