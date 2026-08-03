@@ -27,9 +27,6 @@ iPhone：
 """
 from __future__ import annotations
 import asyncio
-import collections
-import heapq
-import statistics
 import json
 import logging
 import os
@@ -328,18 +325,6 @@ class JobSkipped:
     reason: str
 
 
-#: 一個影格週期裡，抓取以外剩下多少時間。
-#:
-#: 實測：節流 33 ms、相機給一張要 29.7 ms，所以空檔約 3.9 ms。塞得進去的
-#: （設定對焦 0.42、讀對焦 0.90、讀 DataGroup1 1.0、能力清單 1.67）先跑不會
-#: 耽誤影格；塞不進去的（改曝光 4.42、拍攝、下載 27 MB DNG 2.5 秒）先跑就會
-#: 把下一張推遲。取 3.0 留一點餘裕。
-FRAME_SLACK_MS = 3.0
-
-#: 每種工作的耗時樣本留幾筆。取中位數 —— 平均會被偶發的長尾拉走。
-COST_SAMPLES = 16
-
-
 @dataclass
 class CameraJob:
     priority: int
@@ -350,9 +335,6 @@ class CameraJob:
     coalesce_key: str | None = None
     expires_at: float | None = None
     timeout: float = DEFAULT_JOB_TIMEOUT_S
-    #: 用來累積「這種工作要跑多久」的鍵。同一個鍵的耗時會被記下來，
-    #: 之後用中位數預測它塞不塞得進影格之間的空檔。
-    cost_key: str = "misc"
 
 
 class CameraWorker:
@@ -368,14 +350,8 @@ class CameraWorker:
         # 層級建立的 —— 那時候還沒有 asyncio.run() 的那個 loop。綁錯 loop 的話
         # put_nowait() 喚醒的 getter future 屬於一個永遠不會再跑的 loop，
         # worker 會靜靜地卡死。改在 start() 裡建（那時已經在正確的 loop 內）。
-        #: 自己管 heap 而不是用 asyncio.PriorityQueue —— 需要窺看和重排。
-        #: 排程規則是「預測這個工作會不會耽誤下一張影格」，那必須看得到
-        #: 佇列裡還有什麼，而 Queue 只給得出最前面那個。
-        self._heap: list[tuple[int, int, CameraJob]] = []
-        self._wake: asyncio.Event | None = None
+        self._queue: asyncio.PriorityQueue | None = None
         self._seq = 0
-        #: cost_key -> 最近幾次的耗時（秒）
-        self._costs: dict[str, collections.deque] = {}
         self._newest: dict[str, int] = {}  # coalesce_key -> 目前最新的 seq
         self._task: asyncio.Task | None = None
         #: 有工作逾時沒回來就記在這裡。設了之後所有工作立刻失敗，不再排隊。
@@ -384,8 +360,7 @@ class CameraWorker:
     # -- 生命週期 ---------------------------------------------------------
 
     def start(self) -> None:
-        self._heap = []
-        self._wake = asyncio.Event()
+        self._queue = asyncio.PriorityQueue()
         self._task = asyncio.create_task(self._run(), name="camera-worker")
 
     async def stop(self) -> None:
@@ -407,7 +382,6 @@ class CameraWorker:
         coalesce_key: str | None = None,
         ttl: float | None = None,
         timeout: float = DEFAULT_JOB_TIMEOUT_S,
-        cost_key: str | None = None,
     ) -> asyncio.Future:
         """把一個同步的相機操作排進佇列，回傳等結果用的 future。
 
@@ -420,11 +394,8 @@ class CameraWorker:
                 這種語意 —— 例如焦點位置，只有最後一個目標值有意義。
             ttl: 秒。超過就不執行，回 JobSkipped("expired")。
             timeout: 秒。開始執行之後超過這麼久還沒回來就判定相機卡住。
-            cost_key: 把耗時記在哪一類底下。同一類的中位數用來預測這個工作
-                塞不塞得進影格之間的空檔 —— 塞不進去就讓影格先走。不給的話
-                依優先權歸類，那比 lambda 的名字有意義。
         """
-        if self._wake is None:
+        if self._queue is None:
             raise RuntimeError("CameraWorker 還沒 start()")
         loop = asyncio.get_running_loop()
         self._seq += 1
@@ -437,60 +408,13 @@ class CameraWorker:
             coalesce_key=coalesce_key,
             expires_at=(time.monotonic() + ttl) if ttl is not None else None,
             timeout=timeout,
-            cost_key=cost_key or ("liveview" if priority is Priority.LIVEVIEW
-                                  else f"p{int(priority)}"),
         )
         if coalesce_key is not None:
             self._newest[coalesce_key] = job.seq
         # seq 放在 tuple 裡當 tie-breaker，這樣同優先權時是 FIFO，
         # 而且比較永遠不會比到 CameraJob 本身（它不可比較）。
-        heapq.heappush(self._heap, (job.priority, job.seq, job))
-        self._wake.set()
+        self._queue.put_nowait((job.priority, job.seq, job))
         return job.future
-
-    # -- 排程 -------------------------------------------------------------
-
-    def estimated_ms(self, cost_key: str) -> float | None:
-        """這一類工作通常要跑多久（毫秒）。沒有樣本就回 None。"""
-        samples = self._costs.get(cost_key)
-        if not samples:
-            return None
-        return statistics.median(samples) * 1000.0
-
-    def _take_next(self) -> CameraJob:
-        """挑下一個要跑的工作。
-
-        規則：**預測會不會耽誤下一張影格**。優先權最高的那個如果塞得進空檔
-        （見 FRAME_SLACK_MS），照常先跑；塞不進去而且已經有影格在等，就讓
-        影格先走，這個工作排在抓完之後 —— 那時候它有一整個空檔可用。
-
-        少了這條，一次改曝光（4.42 ms）或一次下載（2.5 秒）會卡在週期中間
-        把影格推遲，畫面就頓一下。純優先權排序看不出這件事，因為它只問
-        「誰比較重要」，不問「跑下去會不會來不及」。
-        """
-        best = self._heap[0][2]
-        if best.priority == int(Priority.LIVEVIEW):
-            return heapq.heappop(self._heap)[2]
-
-        est = self.estimated_ms(best.cost_key)
-        if est is None or est <= FRAME_SLACK_MS:
-            return heapq.heappop(self._heap)[2]   # 塞得進去，照優先權跑
-
-        # 塞不進去 —— 有影格在等的話讓它先走
-        for i, (_, _, job) in enumerate(self._heap):
-            if job.priority == int(Priority.LIVEVIEW):
-                self._heap[i] = self._heap[-1]
-                self._heap.pop()
-                if i < len(self._heap):
-                    heapq._siftup(self._heap, i)
-                    heapq._siftdown(self._heap, 0, i)
-                return job
-        return heapq.heappop(self._heap)[2]       # 沒有影格在等，就跑它
-
-    def _record_cost(self, job: CameraJob, seconds: float) -> None:
-        d = self._costs.setdefault(job.cost_key,
-                                   collections.deque(maxlen=COST_SAMPLES))
-        d.append(seconds)
 
     async def call(self, fn: Callable[[], object], **kwargs):
         """submit() 之後直接等結果。"""
@@ -501,11 +425,7 @@ class CameraWorker:
     async def _run(self) -> None:
         loop = asyncio.get_running_loop()
         while True:
-            while not self._heap:
-                self._wake.clear()
-                await self._wake.wait()
-            job = self._take_next()
-            started = time.monotonic()
+            _, _, job = await self._queue.get()
             try:
                 if job.future.cancelled():
                     continue
@@ -535,7 +455,6 @@ class CameraWorker:
                 try:
                     result = await asyncio.wait_for(
                         loop.run_in_executor(None, job.fn), timeout=job.timeout)
-                    self._record_cost(job, time.monotonic() - started)
                 except asyncio.TimeoutError:
                     # wait_for 只放棄等待 —— executor 那條執行緒還卡在 USB 呼叫裡，
                     # 沒有辦法叫醒它。所以這裡不重試，直接標記成不可用。
@@ -555,6 +474,8 @@ class CameraWorker:
             else:
                 if not job.future.done():
                     job.future.set_result(result)
+            finally:
+                self._queue.task_done()
 
 
 worker = CameraWorker()

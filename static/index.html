@@ -289,18 +289,8 @@ function drawLiveview() {
   lvBusy = true;
   const blob = lvPending;
   lvPending = null;                       // 期間到的影格會蓋在 lvPending 上
-
-  // 解碼時就縮到實際顯示的尺寸。影格是 1620×911、每張約 600 KB，而預覽在
-  // 畫面上通常只有八百多像素寬 —— 解成全尺寸再讓 CSS 縮小，等於每秒白做
-  // 三十次全解析度解碼。瀏覽器端的卡頓來自這裡，不是傳輸：實測 bridge 端
-  // 抓取間隔中位數 29.6 ms、12 秒內零次超過 100 ms、序號一張沒漏。
-  //
-  // 只給 resizeWidth，高度依原比例。乘上 devicePixelRatio，Retina 上才不會糊。
-  const c = $('liveview');
-  const want = c ? Math.round(c.clientWidth * (window.devicePixelRatio || 1)) : 0;
-  const opts = want > 0 ? {resizeWidth: want, resizeQuality: 'medium'} : undefined;
-
-  createImageBitmap(blob, opts).then(bmp => {
+  createImageBitmap(blob).then(bmp => {
+    const c = $('liveview');
     if (c) {
       if (c.width !== bmp.width || c.height !== bmp.height) {
         c.width = bmp.width; c.height = bmp.height;
@@ -310,10 +300,7 @@ function drawLiveview() {
     bmp.close();
     lvBusy = false;
     drawLiveview();                       // 有更新的就接著畫，沒有就停
-  }).catch(() => {
-    lvBusy = false;
-    drawLiveview();                       // 這一張解不開就換下一張，不要停住
-  });
+  }).catch(() => { lvBusy = false; });
 }
 
 function stopLiveview() {

@@ -813,10 +813,6 @@ def test_live_view_drops_stale_frames_instead_of_queueing_them():
     assert re.search(r"if \(lvBusy \|\| !lvPending\) return", html),         "解碼中還會再開一個，那就是排隊"
     assert re.search(r"lvPending = null;", html), "畫完沒有把待畫的清掉"
     assert "createImageBitmap" in html, "沒有非同步解碼"
-    # 解碼時就縮到顯示尺寸 —— 影格 1620 寬而預覽通常不到一半，解全尺寸再讓
-    # CSS 縮小等於每秒白做三十次全解析度解碼，而那正是瀏覽器端卡頓的來源
-    assert "resizeWidth" in html, "解碼時沒有縮到顯示尺寸"
-    assert "devicePixelRatio" in html, "沒有考慮 Retina，縮完會糊"
     # 別再回頭用 <img src=mjpeg> —— 那條路的延遲會累積
     assert "liveview.mjpeg" not in html, "預覽又走回 MJPEG"
 
