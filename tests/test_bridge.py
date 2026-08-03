@@ -527,6 +527,51 @@ async def test_acquire_does_nothing_when_already_connected():
     print("✓ 已連線時 acquire 不碰 USB")
 
 
+async def test_a_slow_job_lets_a_waiting_frame_go_first():
+    """排程要問「跑下去會不會來不及」，不只問「誰比較重要」。
+
+    一個影格週期是 33 ms，抓取本身 29.7 ms，所以空檔只有約 3.9 ms。塞得進去
+    的（設定對焦 0.42 ms）照優先權先跑；塞不進去的（改曝光 4.42 ms、拍攝、
+    下載 27 MB DNG 2.5 秒）先跑就會把下一張推遲，畫面頓一下。
+
+    純優先權排序看不出這件事 —— CONTROL 永遠贏，不管它要跑多久。
+    """
+    reset()
+    async with running_worker():
+        w = B.worker
+        # 先餵幾筆樣本，讓 worker 知道這兩類各要多久
+        for _ in range(4):
+            await w.call(lambda: time.sleep(0.0002), cost_key="cheap",
+                         needs_camera=False)
+            await w.call(lambda: time.sleep(0.02), cost_key="slow",
+                         needs_camera=False)
+        assert w.estimated_ms("cheap") < B.FRAME_SLACK_MS, w.estimated_ms("cheap")
+        assert w.estimated_ms("slow") > B.FRAME_SLACK_MS, w.estimated_ms("slow")
+
+        # 同時排入一筆慢的控制工作和一張影格，看誰先跑
+        order = []
+        slow = w.submit(lambda: order.append("slow") or time.sleep(0.02),
+                        priority=B.Priority.CONTROL, cost_key="slow",
+                        needs_camera=False)
+        frame = w.submit(lambda: order.append("frame"),
+                         priority=B.Priority.LIVEVIEW, needs_camera=False)
+        await asyncio.gather(slow, frame)
+        assert order == ["frame", "slow"], \
+            f"慢工作沒有讓路，影格被推遲了：{order}"
+
+        # 便宜的控制工作仍然插隊 —— 它塞得進空檔，讓它等反而白白增加控制延遲
+        order.clear()
+        cheap = w.submit(lambda: order.append("cheap"),
+                         priority=B.Priority.CONTROL, cost_key="cheap",
+                         needs_camera=False)
+        frame = w.submit(lambda: order.append("frame"),
+                         priority=B.Priority.LIVEVIEW, needs_camera=False)
+        await asyncio.gather(cheap, frame)
+        assert order == ["cheap", "frame"], \
+            f"便宜的控制工作被排到影格後面，控制延遲白白變大：{order}"
+    print("✓ 塞不進影格空檔的工作讓路，塞得進的照樣插隊")
+
+
 async def test_readback_is_skipped_only_when_the_mode_is_known():
     """讀回要 0.90 ms，寫入本身只要 0.42 ms —— 確認比動作貴一倍。
 
