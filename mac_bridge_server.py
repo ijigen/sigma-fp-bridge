@@ -229,6 +229,16 @@ class BridgeState:
     released_by_user: bool = False
     reconnect_task: asyncio.Task | None = None
     last_focus_mode: str | None = None  # 顯示 AF/MF/AF_S 等狀態
+    #: 確知相機已經在 MF —— 只有這個成立時才敢跳過寫入後的讀回確認。
+    #:
+    #: 讀回要 0.90 ms，而寫入本身只要 0.42 ms，所以確認比動作貴一倍。跟焦
+    #: 程式以 30/秒 餵位置又完全不看回應（WebSocket 射後不理，它的位置是從
+    #: 影格 metadata 讀的），那些確認純粹是浪費。
+    #:
+    #: 但不能無條件跳過：離開 AF 的第一筆寫入，位置會被相機吞掉，而偵測那件
+    #: 事**只能靠讀回**（見 _set_and_readback）。所以只在已經確認過在 MF 之後
+    #: 才省，任何可能改變模式的動作都把它清掉。
+    known_mf: bool = False
     last_face_eye_af: str | None = None
     last_face_eye_status: str | None = None
     last_focus_area: str | None = None
@@ -647,6 +657,12 @@ def clamp_to_range(position: int) -> tuple[int, bool]:
 _POSITION_TOLERANCE = 24
 
 
+def _set_only(position: int):
+    """只寫，不讀回。呼叫端要確定相機已經在 MF —— 見 state.known_mf。"""
+    set_focus_position(state.camera, position)
+    return None
+
+
 def _set_and_readback(position: int):
     """在 executor 裡跑：設定位置，然後立刻讀回來。
 
@@ -672,7 +688,10 @@ def _set_and_readback(position: int):
         log.warning(f"set 後 readback 失敗：{e}")
         return None
 
+    mode = getattr(getattr(after, "FocusMode", None), "name", None)
     got = getattr(after, "FocusPosition", None)
+    if mode == "MF" and got is not None and abs(got - position) <= _POSITION_TOLERANCE:
+        state.known_mf = True      # 之後同一串寫入可以省掉讀回
     if got is not None and abs(got - position) > _POSITION_TOLERANCE:
         log.debug(f"位置沒寫進去（要 {position}，讀回 {got}）—— 補寫一次")
         set_focus_position(state.camera, position)
@@ -683,7 +702,7 @@ def _set_and_readback(position: int):
     return after
 
 
-async def cam_set_position(position: int) -> SetPositionResult:
+async def cam_set_position(position: int, confirm: bool = True) -> SetPositionResult:
     """設定焦點位置。
 
     coalesce：焦點位置是絕對值而不是增量，所以拖 slider 或 iOS 端高頻餵
@@ -697,8 +716,10 @@ async def cam_set_position(position: int) -> SetPositionResult:
         state.last_focus_position_cmd = target
         state.position_changed_at = time.time()
 
+    # 確知在 MF 而且呼叫端不看結果時，省掉讀回（0.90 ms，比寫入本身還貴）
+    skip = (not confirm) and state.known_mf
     result = await worker.call(
-        lambda: _set_and_readback(target),
+        lambda: (_set_only(target) if skip else _set_and_readback(target)),
         priority=Priority.CONTROL,
         coalesce_key="set_position",
     )
@@ -892,6 +913,7 @@ def _grab_view_frame() -> bytes | None:
 
 async def try_connect_camera() -> bool:
     """嘗試連線到相機，成功回 True。"""
+    state.known_mf = False      # 新的 session，模式未知
     # 開相機也走 worker，免得跟進行中的 transaction 撞在一起
     old = state.camera
     if old is not None:
@@ -1315,7 +1337,9 @@ async def handle_ws_command(req: dict) -> dict | None:
         }
 
     if cmd == "set_position":
-        result = await cam_set_position(int(req["position"]))
+        # 這條路是跟焦程式在用的，30/秒 而且不看回應 —— 已經在 MF 就別付
+        # 那 0.90 ms 的讀回
+        result = await cam_set_position(int(req["position"]), confirm=False)
         return {
             "type": "ack",
             "id": request_id,
@@ -1507,6 +1531,9 @@ async def handle_focus_mode(request: web.Request) -> web.Response:
                     or data.get("face_eye_af") not in (None, "Off")))
 
     def apply_all():
+        # 這裡任何一個動作都可能把相機帶離 MF，而離開 AF 的第一筆寫入位置
+        # 會被吞掉 —— 偵測它只能靠讀回，所以要重新開始確認。
+        state.known_mf = False
         for action in actions:
             action()
         state_after = get_focus_state(state.camera)

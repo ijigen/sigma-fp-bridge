@@ -49,6 +49,9 @@ def reset():
     # 模式會被 refresh_capabilities() 設定，測試之間必須清掉 ——
     # 不然某個測試會繼承前一個的錄影模式，然後被模式閘門擋下。
     B.state.camera_mode = None
+    # 「確知在 MF」不能跨測試沿用 —— 那會讓某個測試繼承前一個的確知，
+    # 於是本該讀回的第一筆被跳過，而測試看起來還是綠的
+    B.state.known_mf = False
     B.state.shutter_unit = None
     B.state.released_camera = None
     B.state.frame_rate = 24.0
@@ -522,6 +525,61 @@ async def test_acquire_does_nothing_when_already_connected():
         after = CAM.count("close_application") + CAM.count("shutdown")
         assert after == before, f"acquire 動了 USB：{after - before} 次關閉"
     print("✓ 已連線時 acquire 不碰 USB")
+
+
+async def test_readback_is_skipped_only_when_the_mode_is_known():
+    """讀回要 0.90 ms，寫入本身只要 0.42 ms —— 確認比動作貴一倍。
+
+    跟焦程式以 30/秒 餵位置又完全不看回應，那些確認純粹是浪費。但不能無條件
+    省：離開 AF 的第一筆寫入位置會被相機吞掉，而偵測那件事只能靠讀回。
+
+    所以規則是「確知在 MF 才省」，而任何可能改變模式的動作都要作廢那個確知。
+    """
+    reset()
+    async with running_worker():
+        runner = web.AppRunner(B.make_app())
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        base = f"http://127.0.0.1:{runner.addresses[0][1]}"
+        try:
+            async with aiohttp.ClientSession() as session:
+                async def set_pos(ws, pos):
+                    """送位置並等到**那一筆**的 ack —— WS 上還有定時廣播，
+                    直接 receive_json 可能收到廣播而讓斷言跑在指令完成之前。"""
+                    await ws.send_json({"cmd": "set_position", "position": pos})
+                    for _ in range(40):
+                        m = await ws.receive_json()
+                        if m.get("type") in ("ack", "error"):
+                            return m
+                    raise AssertionError("沒等到 ack")
+
+                async with session.ws_connect(f"{base}/ws") as ws:
+                    # 剛連上，模式未知 —— 第一筆一定要讀回
+                    before = CAM.count("focus")
+                    await set_pos(ws, 7000)
+                    assert CAM.count("focus") > before, "模式未知時竟然跳過讀回"
+
+                    # 確認過在 MF 之後就不必再讀
+                    before = CAM.count("focus")
+                    await set_pos(ws, 7100)
+                    assert CAM.count("focus") == before, \
+                        "已經確知在 MF 還在讀回，那 0.90 ms 是白付的"
+
+                    # 動過對焦模式之後，確知作廢
+                    await session.post(f"{base}/api/focus/mode", json={"mode": "AF_S"})
+                    before = CAM.count("focus")
+                    await set_pos(ws, 7200)
+                    assert CAM.count("focus") > before, \
+                        "改過對焦模式還敢跳過讀回 —— 那筆位置會被吞掉而沒人發現"
+
+                # HTTP 呼叫端在等結果，永遠要讀回
+                before = CAM.count("focus")
+                await session.post(f"{base}/api/focus", json={"position": 7300})
+                assert CAM.count("focus") > before, "HTTP 也跳過了讀回"
+        finally:
+            await runner.cleanup()
+    print("✓ 只有確知在 MF 才省掉讀回，模式一動就重新確認")
 
 
 async def test_position_still_lands_when_leaving_af():
