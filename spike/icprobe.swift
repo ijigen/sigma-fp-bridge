@@ -100,6 +100,43 @@ final class Probe: NSObject, ICDeviceBrowserDelegate, ICCameraDeviceDelegate {
         }
     }
 
+    // 影格計時
+    var times: [Double] = []
+    var sizes: [Int] = []
+    var pending = 0
+    let total = 60
+
+    func grabFrame() {
+        guard let cam = camera, pending < total else { report(); return }
+        pending += 1
+        let t0 = Date()
+        cam.requestSendPTPCommand(ptpCommand(0x902b), outData: nil) {
+            data, _, error in
+            self.times.append(Date().timeIntervalSince(t0) * 1000)
+            self.sizes.append(data.count)
+            if let error, self.pending == 1 {
+                print("   ✗ \(error.localizedDescription)")
+            }
+            self.grabFrame()
+        }
+    }
+
+    func report() {
+        let t = times.sorted()
+        let bytes = sizes.reduce(0, +)
+        let wall = times.reduce(0, +) / 1000.0
+        print("=== SigmaGetViewFrame ×\(times.count) ===")
+        if !t.isEmpty {
+            print(String(format: "  每張耗時  中位數 %.1f ms  90分位 %.1f  最大 %.1f",
+                         t[t.count/2], t[Int(Double(t.count)*0.9)], t.last!))
+            print(String(format: "  影格大小  平均 %.0f KB", Double(bytes)/Double(sizes.count)/1024))
+            print(String(format: "  連續拉取  %.1f 張/秒  （%.1f MB/s）",
+                         Double(times.count)/wall, Double(bytes)/wall/1_048_576))
+        }
+        camera?.requestCloseSession()
+        done = true
+    }
+
     func run() {
         // 1) 標準指令：先證明通道本身能用
         send("GetDeviceInfo（標準 PTP）", 0x1001) {
@@ -107,8 +144,9 @@ final class Probe: NSObject, ICDeviceBrowserDelegate, ICCameraDeviceDelegate {
             self.send("SigmaConfigApi（vendor）", 0x9035, [0]) {
                 // 3) 真正要的：讀第一組相機設定
                 self.send("SigmaGetCamDataGroup1（vendor）", 0x9012) {
-                    self.camera?.requestCloseSession()
-                    self.done = true
+                    // 4) 大量傳輸 —— 這才是決定值不值得換傳輸層的數字
+                    print("拉 \(self.total) 張 live view 影格計時…\n")
+                    self.grabFrame()
                 }
             }
         }
@@ -117,7 +155,7 @@ final class Probe: NSObject, ICDeviceBrowserDelegate, ICCameraDeviceDelegate {
 
 let probe = Probe()
 probe.start()
-let deadline = Date().addingTimeInterval(20)
+let deadline = Date().addingTimeInterval(90)
 while !probe.done && Date() < deadline {
     RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1))
 }

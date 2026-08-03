@@ -56,11 +56,30 @@ handles bytes and does not care where they came from, so `camera_settings.py`,
 untouched. pyobjc can call ImageCaptureCore, so this does not require rewriting
 in Swift.
 
-Not yet measured, and it decides whether the swap is worth it: throughput and
-latency for the large transfers (a live view frame is ~390 KB against the 21–277
-bytes tested here), and how the asynchronous completion model fits a worker that
-is currently synchronous. Cross-platform support would be lost — ImageCaptureCore
-is macOS only.
+**Throughput is a wash.** 60 consecutive `SigmaGetViewFrame` calls against the
+same camera and scene, the bridge's own throttle removed for the comparison:
+
+| | Per frame | Rate | Frame size | Throughput |
+|---|---|---|---|---|
+| libusb (today) | 30.1 ms | 32.8/s | 624 KB | 20.0 MB/s |
+| ImageCaptureCore | 29.7 ms | 33.1/s | 623 KB | 20.2 MB/s |
+
+Both stop at about 33 frames per second, which is the camera's own ceiling —
+the transport is not the limit, and neither is the language.
+
+So the decision rests entirely elsewhere. It buys: no `sudo`, no libusb, the
+`DYLD_*` problem disappears, and the binary can be signed and notarised as an
+ordinary app, which removes the `chmod` and `xattr` lines too. Installation goes
+from four lines to a double click.
+
+It costs: macOS only (`run_linux.sh` would have to go), bridging a
+completion-block API onto a worker that is currently synchronous, and a
+dependency on pyobjc.
+
+Still unknown: whether ImageCaptureCore's PTP passthrough supports the *out-data*
+direction (`SigmaSetCamDataGroup*`, which is how every setting is written) — only
+in-data commands have been tested. That is the next thing to check, and it is
+decisive: a read-only transport is useless here.
 
 ---
 
