@@ -23,6 +23,11 @@ func ptpCommand(_ opcode: UInt16, _ params: [UInt32] = []) -> Data {
     return d
 }
 
+let ISO_AUTO_OFF = "0008000000"
+let ISO_AUTO_ON  = "0008000100"
+
+func hex2(_ d: Data?, _ limit: Int = 32) -> String { hex(d, limit) }
+
 func hex(_ d: Data?, _ limit: Int = 32) -> String {
     guard let d, !d.isEmpty else { return "（空）" }
     let s = d.prefix(limit).map { String(format: "%02x", $0) }.joined(separator: " ")
@@ -137,7 +142,60 @@ final class Probe: NSObject, ICDeviceBrowserDelegate, ICCameraDeviceDelegate {
         done = true
     }
 
+    /// 送一個帶資料階段的指令（host → camera）。這是這個 bridge 一半的工作：
+    /// 每一個設定的寫入都走這條路，而先前只測過讀取。
+    func sendWithData(_ label: String, _ opcode: UInt16, _ hex: String,
+                      then next: @escaping () -> Void) {
+        guard let cam = camera else { next(); return }
+        var bytes = [UInt8]()
+        var i = hex.startIndex
+        while i < hex.endIndex {
+            let j = hex.index(i, offsetBy: 2)
+            bytes.append(UInt8(hex[i..<j], radix: 16)!)
+            i = j
+        }
+        let payload = Data(bytes)
+        print("→ \(label)  opcode 0x\(String(format: "%04x", opcode))  "
+              + "送出 \(payload.count) bytes: \(hex)")
+        cam.requestSendPTPCommand(ptpCommand(opcode), outData: payload) {
+            data, response, error in
+            if let error {
+                print("   ✗ \(error.localizedDescription)")
+            } else {
+                print("   回應 \(hex2(response, 16))")
+                let code = response.count >= 8
+                    ? UInt16(response[6]) | (UInt16(response[7]) << 8) : 0
+                print("   回應碼 0x\(String(format: "%04x", code))  "
+                      + (code == 0x2001 ? "OK" : "← 不是 OK"))
+            }
+            print("")
+            next()
+        }
+    }
+
+    func writeTest() {
+        // 測 ISOAuto 這個旗標，不測 ISOSpeed —— 相機在 ISO 自動時會自己蓋掉
+        // ISOSpeed（實測它從 32 漂到 43，因為光線變了），寫進去看不出效果。
+        // payload 由本專案自己的編碼器產生（sigma_ptpy.schema.CamDataGroup1）。
+        send("讀 DataGroup1（改之前）", 0x9012) {
+            self.sendWithData("關掉 ISO 自動", 0x9016, ISO_AUTO_OFF) {
+                self.send("讀 DataGroup1（改之後）", 0x9012) {
+                    self.sendWithData("還原 ISO 自動", 0x9016, ISO_AUTO_ON) {
+                        self.send("讀 DataGroup1（還原後）", 0x9012) {
+                            self.camera?.requestCloseSession()
+                            self.done = true
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     func run() {
+        if CommandLine.arguments.contains("write") {
+            send("SigmaConfigApi", 0x9035, [0]) { self.writeTest() }
+            return
+        }
         // 1) 標準指令：先證明通道本身能用
         send("GetDeviceInfo（標準 PTP）", 0x1001) {
             // 2) Sigma 的 API 開關 —— 多數 vendor 指令要先開這個

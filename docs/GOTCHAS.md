@@ -76,10 +76,30 @@ It costs: macOS only (`run_linux.sh` would have to go), bridging a
 completion-block API onto a worker that is currently synchronous, and a
 dependency on pyobjc.
 
-Still unknown: whether ImageCaptureCore's PTP passthrough supports the *out-data*
-direction (`SigmaSetCamDataGroup*`, which is how every setting is written) — only
-in-data commands have been tested. That is the next thing to check, and it is
-decisive: a read-only transport is useless here.
+**Writing works too.** `outData:` carries the data phase, and the camera acts on
+it. Flipping `ISOAuto` through `SigmaSetCamDataGroup1` (0x9016), with the payload
+built by this project's own encoder:
+
+```
+before   ...68 10 00 01 20...   parity af    ISOAuto 1
+after    ...68 10 00 00 20...   parity ae    ISOAuto 0
+restored ...68 10 00 01 20...   parity af    ISOAuto 1
+```
+
+The parity byte moves with the value, so this is the camera's own state, not an
+echo of the request.
+
+One trap worth recording, because it produced a false negative first: the initial
+attempt wrote `ISOSpeed` while the camera was in **ISO Auto**. The command
+returned 0x2001 OK and the read-back never changed — not because the transport
+dropped the write, but because the camera owns that field in auto mode. Its value
+had also drifted on its own between runs (32 → 43) as the light changed, which is
+the clue that was there to be read. Pick a field the camera does not overwrite.
+
+So the transport swap is viable on every axis that was in doubt: reads, bulk
+transfer, writes, and throughput. What remains is engineering, not discovery —
+bridging a completion-block API onto the synchronous worker, and deciding whether
+losing Linux is acceptable.
 
 ---
 
