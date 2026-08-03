@@ -191,7 +191,62 @@ final class Probe: NSObject, ICDeviceBrowserDelegate, ICCameraDeviceDelegate {
         }
     }
 
+    /// 同時丟出去的指令，是排隊還是並行？
+    ///
+    /// 這決定 worker 要不要重寫。現在的優先權佇列存在的理由是「USB 只有一條
+    /// 線」，如果 ImageCaptureCore 自己就會排隊，那個理由不變；如果它能交錯，
+    /// 那麼下載一張 27 MB 的 DNG（實測 2.5 秒）就不會再卡住 live view。
+    func concurrencyTest() {
+        let t0 = Date()
+        func ms() -> Double { Date().timeIntervalSince(t0) * 1000 }
+        guard let cam = camera else { done = true; return }
+
+        var finished = 0
+        func maybeDone() {
+            finished += 1
+            if finished == 2 { self.phase2(t0) }
+        }
+
+        print("同時送出：慢的（GetViewFrame，約 30 ms／623 KB）與快的（DataGroup1，21 bytes）")
+        print(String(format: "  %7.1f ms  送出 慢的", ms()))
+        cam.requestSendPTPCommand(ptpCommand(0x902b), outData: nil) { d, _, e in
+            print(String(format: "  %7.1f ms  ← 慢的回來 (%d bytes)%@",
+                         ms(), d.count, e == nil ? "" : " 錯誤"))
+            maybeDone()
+        }
+        print(String(format: "  %7.1f ms  送出 快的", ms()))
+        cam.requestSendPTPCommand(ptpCommand(0x9012), outData: nil) { d, _, e in
+            print(String(format: "  %7.1f ms  ← 快的回來 (%d bytes)%@",
+                         ms(), d.count, e == nil ? "" : " 錯誤"))
+            maybeDone()
+        }
+    }
+
+    /// 十個一起丟，總時間是「一個的十倍」還是更少？
+    func phase2(_ _unused: Date) {
+        guard let cam = camera else { done = true; return }
+        print("\n十個 GetViewFrame 同時丟出去…")
+        let t0 = Date()
+        var left = 10
+        for _ in 0..<10 {
+            cam.requestSendPTPCommand(ptpCommand(0x902b), outData: nil) { _, _, _ in
+                left -= 1
+                if left == 0 {
+                    let total = Date().timeIntervalSince(t0) * 1000
+                    print(String(format: "  十個總共 %.0f ms → 每個 %.1f ms", total, total/10))
+                    print("  （單獨一個是 29.7 ms。接近 297 ms＝排隊，接近 30 ms＝並行）")
+                    self.camera?.requestCloseSession()
+                    self.done = true
+                }
+            }
+        }
+    }
+
     func run() {
+        if CommandLine.arguments.contains("concurrent") {
+            send("SigmaConfigApi", 0x9035, [0]) { self.concurrencyTest() }
+            return
+        }
         if CommandLine.arguments.contains("write") {
             send("SigmaConfigApi", 0x9035, [0]) { self.writeTest() }
             return

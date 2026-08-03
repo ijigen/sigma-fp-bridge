@@ -96,10 +96,35 @@ dropped the write, but because the camera owns that field in auto mode. Its valu
 had also drifted on its own between runs (32 → 43) as the light changed, which is
 the clue that was there to be read. Pick a field the camera does not overwrite.
 
+**Asynchronous in form, serialised in execution.** The completion-block API does
+not block the caller's thread, but the camera runs one transaction at a time and
+answers strictly first-in-first-out. Issuing a slow command and a fast one in the
+same instant:
+
+```
+  0.0 ms  send slow (GetViewFrame, 595 KB)
+  0.0 ms  send fast (GetCamDataGroup1, 21 bytes)
+ 29.2 ms  ← slow returns
+ 30.4 ms  ← fast returns      it waited behind the slow one
+```
+
+Ten concurrent `GetViewFrame` calls take 296 ms — 29.6 ms each, exactly ten
+times a single one. No overlap at all. This matches PTP itself: transaction IDs
+are sequential and the data phase follows its command, so the protocol has no
+room for two transactions at once.
+
+**Which makes the priority queue more necessary, not less.** ImageCaptureCore
+offers no way to jump the queue. Hand it five frame requests and then a focus
+command, and the focus command waits behind five 623 KB transfers — about
+150 ms. So a transport swap must keep **exactly one command in flight**, with all
+ordering decided by the existing worker before anything is handed over. That is
+what the worker already does; the trap is assuming that an asynchronous API means
+you can simply fire everything at it.
+
 So the transport swap is viable on every axis that was in doubt: reads, bulk
-transfer, writes, and throughput. What remains is engineering, not discovery —
-bridging a completion-block API onto the synchronous worker, and deciding whether
-losing Linux is acceptable.
+transfer, writes, throughput, and concurrency semantics. What remains is
+engineering, not discovery — bridging a completion-block API onto the synchronous
+worker, and deciding whether losing Linux is acceptable.
 
 ---
 
