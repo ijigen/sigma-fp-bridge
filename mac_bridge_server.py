@@ -167,7 +167,12 @@ STATE_DIR = _resolve_state_dir()
 #: 用 SIGMA_LIVEVIEW_INTERVAL 覆寫。
 LIVE_VIEW_INTERVAL_S = float(os.environ.get("SIGMA_LIVEVIEW_INTERVAL", "0.033"))
 STATE_BROADCAST_INTERVAL_S = 0.1  # 10Hz state push to clients
-LIVE_VIEW_STALE_S = 0.25  # 影格請求排隊超過這個時間就放棄——舊畫面沒有播的價值
+#: 影格請求排隊超過這麼久就放棄。
+#:
+#: 正常運作時永遠碰不到：控制指令只要 1 ms，堆不出 250 ms。它只在真的長操作
+#: （下載 27 MB 的 DNG 實測 2.5 秒、拍攝）時觸發，而那時候那張影格確實已經
+#: 過期 —— 不是「影格可以隨便丟」，是「250 ms 前的畫面對預覽和對焦都沒有用」。
+LIVE_VIEW_STALE_S = 0.25
 MJPEG_IDLE_CHECK_S = 1.0  # 沒有新影格時，每隔這麼久確認一次 client 還在不在
 FOCAL_POLL_EVERY = 10  # 每 N 次狀態輪詢才讀一次焦距（焦距很少變，不值得 10Hz 打 USB）
 
@@ -259,11 +264,26 @@ state = BridgeState()
 
 
 class Priority(IntEnum):
-    """數字小的先做。"""
+    """數字小的先做。
 
-    CONTROL = 0    # 使用者的控焦指令 / 連線管理 —— 絕對優先
-    STATUS = 1     # 狀態輪詢
-    LIVEVIEW = 2   # 影格抓取 —— 掉了就掉了，不值得卡住別人
+    這個順序的理由是**排程，不是重要性**。量到的每筆交易成本：
+
+        影格抓取（623 KB）   29.7 ms      ← 佔掉整條線的 89%
+        控制指令              1.0 ms
+        狀態讀取              1.0 ms
+
+    短的先跑，總等待最小：控制先跑讓影格晚 1 ms，影格先跑讓控制晚 30 ms。
+    PTP 一次只能一筆交易，所以這是唯一能調的東西。
+
+    ⚠️ 不要把 LIVEVIEW 排在最後讀成「影格不重要」。它是跟焦 AI 的感測器輸入，
+    掉一張就是掉一次量測。正因為如此才不能讓它去堵一個只要 1 ms 的指令 ——
+    那 30 ms 會回過頭變成對焦誤差。舊註解寫「掉了就掉了」，那是 live view
+    還只是預覽時的說法。
+    """
+
+    CONTROL = 0    # 控焦指令 / 連線管理。1 ms，先跑幾乎不影響別人
+    STATUS = 1     # 狀態輪詢。同樣是 1 ms
+    LIVEVIEW = 2   # 影格抓取。29.7 ms，讓它排在最後是為了不放大別人的延遲
 
 
 #: 單一相機操作的上限。超過就認定 PTP 呼叫回不來了。
