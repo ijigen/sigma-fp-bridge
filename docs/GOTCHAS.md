@@ -34,6 +34,34 @@ Run as root and you win the race. That is the only reason this project uses
 Sometimes `ptpcamerad` is not holding it and an un-elevated run works. Do not
 rely on that — it becomes "sometimes it connects" with no visible cause.
 
+**There is a way not to fight it at all.** `ImageCaptureCore` talks *through*
+`ptpcamerad` instead of racing it, and `ICCameraDevice.requestSendPTPCommand`
+carries arbitrary opcodes — including Sigma's vendor range. Measured, as an
+ordinary user with no `sudo`:
+
+```
+GetDeviceInfo          0x1001   277 bytes   response 0x2001 OK
+SigmaConfigApi         0x9035    79 bytes   response 0x2001 OK
+SigmaGetCamDataGroup1  0x9012    21 bytes   response 0x2001 OK
+```
+
+The last payload decodes through this project's own parser to
+`CurrentLensFocalLength 28.0`, `ISOSpeed 32`, `Aperture 16`, `MediaFreeSpace
+19564` — the real settings, matching the lens actually mounted. The spike is in
+`spike/icprobe.swift`.
+
+What this changes is the **transport**, not the language. The protocol layer
+handles bytes and does not care where they came from, so `camera_settings.py`,
+`sigma_fp_focus.py`, the sigma-ptpy schemas, the tests and the UI would all be
+untouched. pyobjc can call ImageCaptureCore, so this does not require rewriting
+in Swift.
+
+Not yet measured, and it decides whether the swap is worth it: throughput and
+latency for the large transfers (a live view frame is ~390 KB against the 21–277
+bytes tested here), and how the asynchronous completion model fits a worker that
+is currently synchronous. Cross-platform support would be lost — ImageCaptureCore
+is macOS only.
+
 ---
 
 ## 2. `sudo` strips `DYLD_*`
