@@ -439,8 +439,19 @@ afterwards, or nothing moves and it looks like the point did not take.
 ## Live view
 
 `GetViewFrame` (`0x902B`) returns a JPEG. There is no streaming mode: you ask
-for a frame, you get a frame. About **24 fps** is achievable on this body over
-USB 2.0, at roughly 500 KB per frame.
+for a frame, you get a frame. About **24 fps** was measured on this body over
+USB 2.0, at roughly 500 KB per frame; through a Thunderbolt hub it reaches
+**33 fps at 623 KB** (29.7 ms per frame, 20 MB/s), and both transports tested —
+libusb and ImageCaptureCore — land within 0.4 ms of each other, so that ceiling
+is the camera's.
+
+**There is no size or quality control for it.** `ConfigApi` (`0x9035`) declares
+only identity — name `SIGMA fp`, serial, firmware `V91`, API version 1.24 — and
+nothing about the view frame. So a frame costs 29.7 ms of the single PTP line
+whatever else is waiting, which is 89% of the line at 30 fps. Every control
+command therefore waits an average of 15 ms and at worst 30 ms behind the frame
+already in flight. That is structural: PTP has one transaction at a time, and
+the frame cannot be made smaller.
 
 The rate you get is the rate the camera answers at. Sleeping a fixed interval
 *after* the fetch adds to the round-trip rather than bounding it — the

@@ -242,7 +242,46 @@ final class Probe: NSObject, ICDeviceBrowserDelegate, ICCameraDeviceDelegate {
         }
     }
 
+    /// 小指令要多久 —— 決定「每次寫入都讀回」值不值得
+    func smallCommandTiming() {
+        guard let cam = camera else { done = true; return }
+        var times: [Double] = []
+        let n = 40
+        func one(_ left: Int) {
+            if left == 0 {
+                let t = times.sorted()
+                print(String(format: "\nDataGroupFocus 讀取 ×%d  中位數 %.1f ms  最大 %.1f",
+                             t.count, t[t.count/2], t.last!))
+                print(String(format: "  對照：GetViewFrame（623 KB）29.7 ms"))
+                print(String(format: "  AI 以 30/秒 送位置時，光是 readback 就佔掉 %.0f ms/秒",
+                             t[t.count/2] * 30))
+                self.camera?.requestCloseSession(); self.done = true
+                return
+            }
+            let t0 = Date()
+            cam.requestSendPTPCommand(ptpCommand(0x9031), outData: nil) { _, _, _ in
+                times.append(Date().timeIntervalSince(t0) * 1000)
+                one(left - 1)
+            }
+        }
+        one(n)
+    }
+
     func run() {
+        if CommandLine.arguments.contains("config") {
+            guard let cam = camera else { done = true; return }
+            cam.requestSendPTPCommand(ptpCommand(0x9035, [0]), outData: nil) {
+                d, _, _ in
+                print("ConfigApi 完整內容 (\(d.count) bytes):")
+                print(d.map { String(format: "%02x", $0) }.joined())
+                self.camera?.requestCloseSession(); self.done = true
+            }
+            return
+        }
+        if CommandLine.arguments.contains("small") {
+            send("SigmaConfigApi", 0x9035, [0]) { self.smallCommandTiming() }
+            return
+        }
         if CommandLine.arguments.contains("concurrent") {
             send("SigmaConfigApi", 0x9035, [0]) { self.concurrencyTest() }
             return
