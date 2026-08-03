@@ -642,18 +642,45 @@ def clamp_to_range(position: int) -> tuple[int, bool]:
     return clamped, clamped != position
 
 
+#: 讀回的位置離目標多遠才算「沒寫進去」。馬達有量化，差幾個單位是正常的
+#: （實測寫 9000 讀回 8999 / 9005）。
+_POSITION_TOLERANCE = 24
+
+
 def _set_and_readback(position: int):
     """在 executor 裡跑：設定位置，然後立刻讀回來。
 
     兩個動作放同一個 job，中間不會被別的 transaction 插進來，
     readback 讀到的就確實是這次寫入的結果。
+
+    **從 AF 切到 MF 的那一次寫入，位置會被相機忽略。** 實測（起點 AF-S，
+    位置 8999）：
+
+        寫 6500  →  位置 8999，模式從 3 變成 1    ← 只有模式生效
+        寫 9000  →  位置 9005                    ← 已經在 MF，生效
+
+    set_focus_position 一次寫入同時帶 FocusMode=MF 和 FocusPosition，所以
+    離開 AF 之後的第一筆一定丟掉位置。平常看不出來，因為拉滑桿會連送很多
+    筆，第二筆就補上了 —— 但程式化地叫它「去某個位置」就會靜靜地失敗。
+
+    只在讀回真的不符時補寫一次，所以正常情況不多付任何代價。
     """
     set_focus_position(state.camera, position)
     try:
-        return get_focus_state(state.camera)
+        after = get_focus_state(state.camera)
     except Exception as e:  # readback 失敗不該讓整個 set 算失敗
         log.warning(f"set 後 readback 失敗：{e}")
         return None
+
+    got = getattr(after, "FocusPosition", None)
+    if got is not None and abs(got - position) > _POSITION_TOLERANCE:
+        log.debug(f"位置沒寫進去（要 {position}，讀回 {got}）—— 補寫一次")
+        set_focus_position(state.camera, position)
+        try:
+            after = get_focus_state(state.camera)
+        except Exception as e:
+            log.warning(f"補寫後 readback 失敗：{e}")
+    return after
 
 
 async def cam_set_position(position: int) -> SetPositionResult:

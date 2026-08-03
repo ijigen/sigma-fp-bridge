@@ -299,6 +299,35 @@ not from documentation.
 **In CINE the shutter is set by angle.** Writing `ShutterSpeed` in DataGroup1
 is accepted and then silently dropped. Convert: `seconds = angle / (360 × fps)`.
 
+Three corrections to that, all measured:
+
+**`shutter_unit` (movie tag 6) changes what tag 7 holds.** In angle mode (2) it
+is the angle × 10, as documented. In speed mode (1) the numerator is the
+**shutter's APEX code** instead — read back as `(112, 3600)` while DataGroup1
+independently reported code 112 = 1/125. Decoding tag 7 as an angle regardless of
+the unit produces nonsense (11.2°); the bridge currently does this.
+
+**Manual exposure mode is a precondition for setting the shutter at all.** In P
+mode the camera owns it: the write returns 0x2001 and the value never changes.
+The same trap as writing `ISOSpeed` while ISO is on Auto — the command succeeds
+and the field belongs to someone else. `ConfigApi` resets the camera to its
+defaults, so a fresh session is *not* in Manual.
+
+**Frame rate and shutter overwrite each other.** Writing the frame rate coerces
+the shutter to suit it (1/60 became 1/25 after a 29.97 write); writing the
+shutter knocks the frame rate back to 23.98. Six orderings were tried through the
+raw protocol without getting both to stick; the bridge's settings layer manages it
+by sending back the camera's own declared encoding from `CanSetInfo5` rather than
+deriving one (`movie_settings._encode_preferring_camera_form`). Do not hand-roll
+these writes.
+
+⚠️ `CanSetInfo5` declares no capability tag for the shutter (107) or for
+`shutter_unit` (106), so there is no allowed-value list to send back for those
+two — which is why they are the two that resist.
+
+**The shutter APEX table has a hole**: code 100 decodes to `None`, the same class
+of gap as the missing aperture code 101.
+
 ---
 
 ## What the camera says it can do
@@ -433,6 +462,44 @@ takes. Measured in both modes.
 
 Moving the point does not focus. Send `SnapCommand` (`0x901B`) with AF-drive-only
 afterwards, or nothing moves and it looks like the point did not take.
+
+---
+
+## What each command costs
+
+Measured through ImageCaptureCore, 30 calls each, camera in CINE / CinemaDNG /
+FHD. The libusb path lands within 0.4 ms of these, so the numbers are the
+camera's, not the transport's.
+
+| Command | Median | p90 | Returns |
+|---|---|---|---|
+| `SetCamDataGroupFocus` 0x9032 | **0.42 ms** | 0.48 | — |
+| `GetCamCaptStatus` 0x9015 | 0.53 ms | 0.68 | 8 B |
+| `GetDeviceInfo` 0x1001 | 0.59 ms | 1.41 | 277 B |
+| `GetCamDataGroupFocus` 0x9031 | 0.90 ms | 1.15 | 177 B |
+| `GetCamDataGroup1..5` | ~1.0 ms | ~1.6 | 14–21 B |
+| `GetCamDataGroupMovie` 0x9033 | 1.06 ms | 2.26 | 221 B |
+| `GetCamCanSetInfo5` 0x9030 | 1.67 ms | 2.45 | 1311 B |
+| `SetCamDataGroup1` 0x9016 | **4.42 ms** | 5.60 | — |
+| `GetViewFrame` 0x902B | **29.7 ms** | 31.2 | 600–644 KB |
+
+Three things worth taking from this.
+
+**Reads cost the same regardless of size.** 8 bytes and 1439 bytes are both about
+a millisecond, so the cost is per-transaction overhead, not payload.
+
+**Writes are not all alike.** Changing exposure (`SetCamDataGroup1`) takes 4.4 ms
+— ten times a focus write. Driving the lens (`SetCamDataGroupFocus`) is 0.42 ms
+and does not depend on whether the motor actually moves (0.41 ms alternating
+between two positions, 0.42 ms rewriting the same one), so the command returns
+before the motor does.
+
+**A frame is 30× everything else**, which is why the priority queue puts live
+view last: running the 1 ms job first delays the frame by 1 ms, running the frame
+first delays control by 30 ms.
+
+At 30 fps live view plus a focus command and readback every frame, the line needs
+891 + 13 + 27 = **931 ms per second** — tight, but not over.
 
 ---
 

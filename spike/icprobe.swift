@@ -242,6 +242,210 @@ final class Probe: NSObject, ICDeviceBrowserDelegate, ICCameraDeviceDelegate {
         }
     }
 
+    /// 每個指令平均要多久。這決定 worker 怎麼排序才對。
+    struct Op { let code: UInt16; let name: String; let write: String? }
+    let ops: [Op] = [
+        Op(code: 0x1001, name: "GetDeviceInfo（標準）",      write: nil),
+        Op(code: 0x9012, name: "GetCamDataGroup1（曝光）",    write: nil),
+        Op(code: 0x9013, name: "GetCamDataGroup2（解析度）",  write: nil),
+        Op(code: 0x9014, name: "GetCamDataGroup3（色彩）",    write: nil),
+        Op(code: 0x9023, name: "GetCamDataGroup4",           write: nil),
+        Op(code: 0x9027, name: "GetCamDataGroup5",           write: nil),
+        Op(code: 0x9031, name: "GetCamDataGroupFocus",       write: nil),
+        Op(code: 0x9033, name: "GetCamDataGroupMovie",       write: nil),
+        Op(code: 0x9030, name: "GetCamCanSetInfo5（能力）",   write: nil),
+        Op(code: 0x9015, name: "GetCamCaptStatus",           write: nil),
+        Op(code: 0x902b, name: "GetViewFrame（623 KB）",      write: nil),
+        Op(code: 0x9016, name: "SetCamDataGroup1（寫入）",    write: "0008000100"),
+        Op(code: 0x9032, name: "SetCamDataGroupFocus（寫入）", write: nil),
+    ]
+    var results: [(String, [Double], Int)] = []
+
+    /// 依序套用設定，全部完成才開始計時
+    func applySteps(_ steps: [(String, UInt16, String)], _ idx: Int) {
+        if idx >= steps.count {
+            // CanSetInfo5 是相機宣告「我接受哪些值、用什麼編碼」。bridge 成功
+            // 的關鍵就是原封送回這裡面的編碼，而不是自己推導（見
+            // movie_settings._encode_preferring_camera_form）。
+            if let cam = self.camera {
+                cam.requestSendPTPCommand(ptpCommand(0x9030), outData: nil) { d, _, _ in
+                    print("CanSetInfo5 完整 (\(d.count) bytes):")
+                    print(d.map { String(format: "%02x", $0) }.joined())
+                    self.afterCaps()
+                }
+                return
+            }
+            print("設定完成，讀回確認：")
+            send("DataGroup1（曝光）", 0x9012) {
+                guard let cam = self.camera else { self.benchAll(); return }
+                cam.requestSendPTPCommand(ptpCommand(0x9033), outData: nil) { d, _, _ in
+                    print("DataGroupMovie 完整 (\(d.count) bytes):")
+                    print(d.map { String(format: "%02x", $0) }.joined())
+                    self.benchAll()
+                }
+            }
+            return
+        }
+        let (name, code, hexs) = steps[idx]
+        sendWithData("設定 " + name, code, hexs) { self.applySteps(steps, idx + 1) }
+    }
+
+    func afterCaps() {
+        print("設定完成，讀回確認：")
+        send("DataGroup1（曝光）", 0x9012) {
+            guard let cam = self.camera else { self.benchAll(); return }
+            cam.requestSendPTPCommand(ptpCommand(0x9033), outData: nil) { d, _, _ in
+                print("DataGroupMovie 完整 (\(d.count) bytes):")
+                print(d.map { String(format: "%02x", $0) }.joined())
+                self.benchAll()
+            }
+        }
+    }
+
+    /// 對焦控制走不走得通 —— 這是整個 bridge 最重要的寫入路徑。
+    ///
+    /// 照 sigma_fp_focus.set_focus_position 的做法：一次寫入同時關掉三個會
+    /// 搶回焦點的子系統（FocusMode=MF、AFLock=Off、PreConstAF=Off）再帶位置。
+    /// 少關任何一個，寫進去的位置都會被相機自己蓋掉。
+    func focusTest() {
+        let near = "3800000004000000010001000100000001000000020001000100000000000000330001000100000000000000510003000100000064190000"  // 6500
+        let far  = "3800000004000000010001000100000001000000020001000100000000000000330001000100000000000000510003000100000028230000"  // 9000
+        // 先確實切到 AF-S，才問「從 AF 出發的第一筆寫入會不會被吞」
+        sendWithData("切到 AF-S", 0x9032, "1400000001000000010001000100000003000000") {
+        self.settle {
+        self.readFocus("起點（AF-S）") {
+            self.sendWithData("寫入位置 6500（第一筆）", 0x9032, near) {
+                self.settle {
+                    self.readFocus("寫 6500 之後") {
+                        self.sendWithData("寫入位置 9000", 0x9032, far) {
+                            self.settle {
+                                self.readFocus("寫 9000 之後") {
+                                    self.camera?.requestCloseSession(); self.done = true
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        }}
+    }
+
+    /// 設定對焦要多久。分兩種：寫同一個位置（純交易成本，馬達不動）和
+    /// 交替兩個位置（真實使用，馬達要動）。
+    func focusTiming() {
+        let a = "3800000004000000010001000100000001000000020001000100000000000000330001000100000000000000510003000100000064190000"  // 6500
+        let b = "3800000004000000010001000100000001000000020001000100000000000000330001000100000000000000510003000100000098190000"  // 6552
+        func run(_ label: String, alternate: Bool, _ next: @escaping () -> Void) {
+            var times: [Double] = []
+            func one(_ left: Int) {
+                if left == 0 {
+                    let t = times.sorted()
+                    print(String(format: "  %@  中位數 %.2f ms  90分位 %.2f  最大 %.2f",
+                                 label as NSString, t[t.count/2],
+                                 t[Int(Double(t.count)*0.9)], t.last ?? 0))
+                    next(); return
+                }
+                let hexs = alternate ? (left % 2 == 0 ? a : b) : a
+                var bytes = [UInt8](); var i = hexs.startIndex
+                while i < hexs.endIndex {
+                    let j = hexs.index(i, offsetBy: 2)
+                    bytes.append(UInt8(hexs[i..<j], radix: 16)!); i = j
+                }
+                let t0 = Date()
+                self.camera?.requestSendPTPCommand(ptpCommand(0x9032),
+                                                   outData: Data(bytes)) { _, _, _ in
+                    times.append(Date().timeIntervalSince(t0) * 1000)
+                    one(left - 1)
+                }
+            }
+            one(30)
+        }
+        print("SetCamDataGroupFocus（0x9032）：")
+        run("寫同一個位置（馬達不動）", alternate: false) {
+            run("交替兩個位置（馬達要動）", alternate: true) {
+                // 對照：讀一次對焦狀態
+                var rt: [Double] = []
+                func rd(_ left: Int) {
+                    if left == 0 {
+                        let t = rt.sorted()
+                        print(String(format: "  讀回對焦狀態（0x9031）  中位數 %.2f ms", t[t.count/2]))
+                        print(String(format: "\n  → 一次完整的設定對焦（寫＋讀回）約 %.1f ms", 0.0))
+                        self.camera?.requestCloseSession(); self.done = true
+                        return
+                    }
+                    let t0 = Date()
+                    self.camera?.requestSendPTPCommand(ptpCommand(0x9031), outData: nil) { _,_,_ in
+                        rt.append(Date().timeIntervalSince(t0) * 1000); rd(left - 1)
+                    }
+                }
+                rd(30)
+            }
+        }
+    }
+
+    func settle(_ next: @escaping () -> Void) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { next() }
+    }
+
+    func readFocus(_ label: String, then next: @escaping () -> Void) {
+        guard let cam = camera else { next(); return }
+        cam.requestSendPTPCommand(ptpCommand(0x9031), outData: nil) { d, _, _ in
+            print("\(label): \(d.map { String(format: "%02x", $0) }.joined())")
+            next()
+        }
+    }
+
+    func benchAll() {
+        print("每個指令跑 30 次…\n")
+        runOp(0)
+    }
+
+    func runOp(_ idx: Int) {
+        if idx >= ops.count { benchReport(); return }
+        let op = ops[idx]
+        // SetCamDataGroupFocus 沒有安全的無害 payload，跳過寫入只測指令本身
+        if op.code == 0x9032 { runOp(idx + 1); return }
+        var times: [Double] = []
+        var size = 0
+        func one(_ left: Int) {
+            if left == 0 {
+                self.results.append((op.name, times, size))
+                self.runOp(idx + 1)
+                return
+            }
+            let t0 = Date()
+            let payload: Data? = op.write.map { h in
+                var b = [UInt8](); var i = h.startIndex
+                while i < h.endIndex {
+                    let j = h.index(i, offsetBy: 2)
+                    b.append(UInt8(h[i..<j], radix: 16)!); i = j
+                }
+                return Data(b)
+            }
+            self.camera?.requestSendPTPCommand(ptpCommand(op.code), outData: payload) {
+                d, _, _ in
+                times.append(Date().timeIntervalSince(t0) * 1000)
+                size = max(size, d.count)
+                one(left - 1)
+            }
+        }
+        one(30)
+    }
+
+    func benchReport() {
+        print(String(format: "%-30s %9s %9s %9s %10s", "指令", "中位數", "90分位", "最大", "回傳"))
+        for (name, ts, size) in results {
+            let t = ts.sorted()
+            print(String(format: "%-30@ %7.2f ms %7.2f %7.2f %9@",
+                         name as NSString, t[t.count/2],
+                         t[Int(Double(t.count) * 0.9)], t.last ?? 0,
+                         (size > 2048 ? String(format: "%.0f KB", Double(size)/1024)
+                                      : "\(size) B") as NSString))
+        }
+        camera?.requestCloseSession(); done = true
+    }
+
     /// 小指令要多久 —— 決定「每次寫入都讀回」值不值得
     func smallCommandTiming() {
         guard let cam = camera else { done = true; return }
@@ -268,6 +472,41 @@ final class Probe: NSObject, ICDeviceBrowserDelegate, ICCameraDeviceDelegate {
     }
 
     func run() {
+        if CommandLine.arguments.contains("focustime") {
+            send("SigmaConfigApi", 0x9035, [0]) { self.focusTiming() }
+            return
+        }
+        if CommandLine.arguments.contains("focus") {
+            send("SigmaConfigApi", 0x9035, [0]) { self.focusTest() }
+            return
+        }
+        if CommandLine.arguments.contains("bench") {
+            // ConfigApi 會重設設定，所以要在**同一個 session 裡**自己設好，
+            // 透過 bridge 設的東西對這個 session 不算數。
+            //
+            // 順序有講究，而且是反過來的：**寫幀率會把快門改掉**（實測寫在
+            // 快門後面，1/60 變成 1/125），所以幀率要在快門之前。
+            // payload 由專案自己的編碼器產生（movie_settings / CamDataGroup1）。
+            send("SigmaConfigApi", 0x9035, [0]) {
+                self.applySteps([
+                    ("CINE",            0x9034, "1400000001000000010001000100000002000000"),
+                    ("CinemaDNG + FHD", 0x9034, "20000000020000003200010001000000010000003c0001000100000001000000"),
+                    ("快門用速度表示",   0x9034, "1400000001000000060001000100000001000000"),
+                    // 曝光模式一定要先設成 M。ConfigApi 會把設定重設，而相機
+                    // 在 P 模式下自己控制快門 —— 寫進去會被收下然後蓋掉，就跟
+                    // ISO 自動時寫 ISOSpeed 一樣。這是同一個坑踩第二次。
+                    ("曝光模式 M",       0x9017, "0004000400"),
+                    ("ISO 手動",        0x9016, "0008000000"),
+                    ("ISO 100",         0x9016, "0010002000"),
+                    ("29.97p",          0x9034, "1c000000010000003d0005000100000014000000b50b000064000000"),
+                    // 速度模式下快門走影片群組的 tag 7，分子是 APEX 碼（104 = 1/60）。
+                    // DataGroup1 的 ShutterSpeed 在 CINE 下寫進去會被默默丟掉，
+                    // 即使已經切到速度模式也一樣 —— 實測三次都回 1/125。
+                    ("快門 1/60",       0x9034, "1c0000000100000007000500010000001400000068000000100e0000"),
+                ], 0)
+            }
+            return
+        }
         if CommandLine.arguments.contains("config") {
             guard let cam = camera else { done = true; return }
             cam.requestSendPTPCommand(ptpCommand(0x9035, [0]), outData: nil) {
@@ -307,7 +546,7 @@ final class Probe: NSObject, ICDeviceBrowserDelegate, ICCameraDeviceDelegate {
 
 let probe = Probe()
 probe.start()
-let deadline = Date().addingTimeInterval(90)
+let deadline = Date().addingTimeInterval(180)
 while !probe.done && Date() < deadline {
     RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1))
 }

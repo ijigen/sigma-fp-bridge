@@ -524,6 +524,42 @@ async def test_acquire_does_nothing_when_already_connected():
     print("✓ 已連線時 acquire 不碰 USB")
 
 
+async def test_position_still_lands_when_leaving_af():
+    """迴歸：從 AF 切到 MF 的那一筆寫入，位置被相機吞掉。
+
+    set_focus_position 一次寫入同時帶 FocusMode=MF 和 FocusPosition，而相機在
+    那個轉換上只吃模式。實測起點 AF-S、位置 8999 時寫 6500，讀回仍是 8999 而
+    模式變成 MF；再寫一次才生效。
+
+    平常看不出來 —— 拉滑桿會連送很多筆，第二筆就補上了。但程式化地叫它「去
+    某個位置」就會靜靜地失敗，而那正是 focus_ai 在做的事。
+    """
+    reset()
+    async with running_worker():
+        runner = web.AppRunner(B.make_app())
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        base = f"http://127.0.0.1:{runner.addresses[0][1]}"
+        try:
+            async with aiohttp.ClientSession() as session:
+                await session.post(f"{base}/api/focus/mode", json={"mode": "AF_S"})
+                body = await (await session.post(
+                    f"{base}/api/focus", json={"position": 7200})).json()
+                assert abs(CAM.position - 7200) <= 24, \
+                    f"離開 AF 後第一次設位置沒生效：{CAM.position}"
+                assert abs(body["position"] - 7200) <= 24, body
+
+                # 已經在 MF 就不該多付那一次補寫
+                before = CAM.count("set")
+                await session.post(f"{base}/api/focus", json={"position": 7600})
+                assert CAM.count("set") == before + 1, "已經在 MF 還補寫"
+                assert abs(CAM.position - 7600) <= 24, CAM.position
+        finally:
+            await runner.cleanup()
+    print("✓ 離開 AF 之後設位置仍然到得了，且不多付交易")
+
+
 async def test_choosing_a_focus_target_makes_the_camera_focus():
     """迴歸：選了對焦目標，鏡頭不動。
 

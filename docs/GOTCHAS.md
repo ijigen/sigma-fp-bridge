@@ -128,6 +128,28 @@ worker, and deciding whether losing Linux is acceptable.
 
 ---
 
+## 1b. Leaving AF eats the first position you write
+
+`set_focus_position` writes `FocusMode=MF`, `AFLock=Off`, `PreConstAF=Off` and
+`FocusPosition` in one transaction — it has to, or the camera takes focus back.
+But on the transaction that *changes* the mode out of AF, the camera applies the
+mode and ignores the position. Measured, starting from AF-S at position 8999:
+
+```
+write 6500  →  reads back 8999, mode 3 → 1     position swallowed
+write 9000  →  reads back 9005                 applied, already in MF
+```
+
+Dragging a slider hides this: the second of many updates lands. Telling it once
+to go somewhere does not — it returns success and the lens never moves, which is
+exactly what a focus-pulling client does.
+
+The fix is in `_set_and_readback`: compare the readback against the target and
+write once more if it did not take. Only the failing case pays, and a focus write
+is 0.42 ms, so the retry is cheap.
+
+---
+
 ## 2. `sudo` strips `DYLD_*`
 
 ```

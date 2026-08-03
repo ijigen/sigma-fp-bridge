@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import sys
 import time
+
+from sigma_ptpy.enum import FocusMode as _FocusMode
 import types
 from pathlib import Path
 
@@ -82,7 +84,10 @@ class FakeCamera:
         self.media_free_space = 19366
         #: 對焦模式 / 臉眼偵測 / 區域 / 對焦點
         # 實機任何時候都回報得出對焦座標（開機就是正中央），不會是 None
-        self.focus_settings: dict = {"DMFPos": (340, 512)}
+        # 起始狀態給 MF —— 沒有模式時 set_focus_position 會以為剛從 AF 過來
+        # 而多補一次寫入，那會讓不相干的測試（例如合併）多出一筆
+        self.focus_settings: dict = {"DMFPos": (340, 512),
+                                     "FocusMode": _FocusMode.MF}
         #: 相機宣告接受的列舉值。照實機：色彩模式有 16 個，其中 13~16 是
         #: sigma-ptpy 的 enum 不認得的（fp 的 Off / Teal and Orange 之類）。
         #: 相機宣告的對焦選項。實機 600 = [MF, AF_C, AF_S]，沒有 AF(2)。
@@ -149,7 +154,7 @@ class FakeCamera:
         self.calls.clear()
         self.idle_after_reads = 0
         self.focus_range = (5974, 11116)
-        self.focus_settings = {"DMFPos": (340, 512)}
+        self.focus_settings = {"DMFPos": (340, 512), "FocusMode": _FocusMode.MF}
         self.focal_length = 28
         self.api_mode = True
         self.usb_claimed = True
@@ -424,12 +429,18 @@ def install(camera: FakeCamera | None = None) -> FakeCamera:
     def set_focus_position(c, position):
         # 忠實反映真機：為了不讓相機搶回焦點，這裡會強制切到 MF。
         # 「拉過滑桿就回不去 AF」的成因就在這裡，要能被測出來。
+        #
+        # 而且**從 AF 切到 MF 的那一筆，位置會被相機忽略**。實測起點 AF-S、
+        # 位置 8999 時寫 6500，讀回仍是 8999 而模式變成 MF；再寫一次才生效。
+        # 假相機照做，不然「叫它去某個位置卻靜靜地沒去」測不出來。
         from sigma_ptpy.enum import FocusMode, PreConstAF
         c._tick("set")
-        c.position = position
         c.set_log.append(position)
+        was_af = getattr(c.focus_settings.get("FocusMode"), "name", None) != "MF"
         c.focus_settings["FocusMode"] = FocusMode.MF
         c.focus_settings["PreConstAF"] = PreConstAF.Off
+        if not was_af:
+            c.position = position
 
     def read_capabilities(c):
         c._tick("capabilities")
