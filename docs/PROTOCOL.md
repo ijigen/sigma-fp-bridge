@@ -90,10 +90,11 @@ implementation.
 
 ```
 offset  size  field
-0       1     header        arbitrary, used for parity
-1       2     FieldPresent  big-endian bitmask
+0       1     header        on reads: byte count of the two rows below
+                            on writes: 0 is accepted
+1       2     FieldPresent  bitmask — see below
 3       ...   the present fields, in the schema's fixed order
-last    1     parity
+last    1     parity        sum of every preceding byte, mod 256
 ```
 
 `FieldPresent` says which fields follow. **The fields are not tagged** — they
@@ -101,7 +102,34 @@ appear in a fixed order and you work out which is which by walking the bitmask.
 Set a bit to include that field in a write; leave it clear and the camera keeps
 its current value.
 
-Note `FieldPresent` is **big-endian** while the values inside are little-endian.
+**The first byte of the mask carries fields 1–8, the second carries 9–16, least
+significant bit first.** Equivalently: a little-endian uint16 where bit *n* is
+the *n*-th field of the schema.
+
+An earlier version of this section called the mask **big-endian**. It is not, and
+a read settles it: a payload whose mask is `ff 7f` decodes to exactly fifteen
+fields. Little-endian makes that bits 0–14, contiguous, which is what "the camera
+sent everything it has" looks like. Big-endian would make it bits 0–6 and 8–15 —
+a hole at bit 7, claiming the eighth field is absent while a sixteenth field that
+does not exist is present.
+
+Verified encodings, one field at a time and then together:
+
+```
+ISOAuto  only    00  08 00  00      00
+ISOSpeed only    00  10 00  28      00
+both             00  18 00  00 28   00
+                 ↑   ↑      ↑       ↑
+            header  mask   values  one parity, always last
+```
+
+The masks OR together and the values queue up behind them in bit order. There is
+only ever **one** parity byte, so two payloads do not concatenate — reading the
+tails as separate units is the mistake this example exists to prevent.
+
+Parity is a plain checksum: every byte before it, summed, mod 256. Two reads
+confirm it (`0xaf`, `0xe9`). Writes from sigma-ptpy send `0x00` instead and the
+camera accepts them, so it is only load-bearing in the read direction.
 
 ### IFD — everything else
 
