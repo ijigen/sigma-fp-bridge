@@ -503,6 +503,181 @@ At 30 fps live view plus a focus command and readback every frame, the line need
 
 ---
 
+## Every setting, and where its legal values come from
+
+Generated from `camera_settings.SETTINGS` and `movie_settings.MOVIE_SETTINGS` —
+if this table and the code disagree, the code is right.
+
+**DataGroup 1–5** (bitmask encoding, opcodes 0x9012–0x9028):
+
+| Setting | Group | Field | Type | Enum / converter | Writable |
+|---|---|---|---|---|---|
+| `aperture` | 1 | `Aperture` | apex | APEX converter | yes |
+| `exposure_compensation` | 1 | `ExpComp` | apex | APEX converter | yes |
+| `iso` | 1 | `ISOSpeed` | apex | APEX converter | yes |
+| `iso_auto` | 1 | `ISOAuto` | enum | ISOAuto | yes |
+| `shutter_speed` | 1 | `ShutterSpeed` | apex | APEX converter | yes |
+| `drive_mode` | 2 | `DriveMode` | enum | DriveMode | yes |
+| `exposure_mode` | 2 | `ExposureMode` | enum | ExposureMode | yes |
+| `image_quality` | 2 | `ImageQuality` | enum | ImageQuality | yes |
+| `metering_mode` | 2 | `AEMeteringMode` | enum | AEMeteringMode | yes |
+| `resolution` | 2 | `Resolution` | enum | Resolution | yes |
+| `white_balance` | 2 | `WhiteBalance` | enum | WhiteBalance | yes |
+| `color_mode` | 3 | `ColorMode` | enum | FpColorMode | yes |
+| `color_space` | 3 | `ColorSpace` | enum | ColorSpace | yes |
+| `dest_to_save` | 3 | `DestToSave` | enum | DestToSave | yes |
+| `cont_shoot_speed` | 4 | `ContShootSpeed` | enum | ContShootSpeed | yes |
+| `dc_crop_mode` | 4 | `DCCropMode` | enum | DCCropMode | yes |
+| `dng_quality` | 4 | `DNGQuality` | enum | DNGQuality | yes |
+| `electronic_stabilization` | 4 | `EImageStab` | enum | EImageStab | yes |
+| `fill_light` | 4 | `FillLight` | int | — | yes |
+| `hdr` | 4 | `HDR` | enum | HDR | yes |
+| `high_iso_ext` | 4 | `HighISOExt` | enum | HighISOExt | yes |
+| `loc_chromatic_aberration` | 4 | `LOCChromaticAberration` | enum | LOCChromaticAberration | yes |
+| `loc_diffraction` | 4 | `LOCDiffraction` | enum | LOCDiffraction | yes |
+| `loc_distortion` | 4 | `LOCDistortion` | enum | LOCDistortion | yes |
+| `loc_vignetting` | 4 | `LOCVignetting` | enum | LOCVignetting | yes |
+| `aspect_ratio` | 5 | `AspectRatio` | enum | AspectRatio | yes |
+| `color_temp` | 5 | `ColorTemp` | int | — | yes |
+| `interval_timer_frames` | 5 | `IntervalTimerFrame` | int | — | yes |
+| `interval_timer_seconds` | 5 | `IntervalTimerSecond` | int | — | yes |
+| `tone_effect` | 5 | `ToneEffect` | enum | ToneEffect | yes |
+
+**DataGroupMovie** (IFD encoding, 0x9033 / 0x9034):
+
+| Setting | Tag | Capability tag | Type | Meaning |
+|---|---|---|---|---|
+| `capture_mode` | 1 | 101 | UInt8 | int |
+| `shutter_unit` | 6 | 106 | UInt8 | int |
+| `shutter_angle` | 7 | 107 | URational | angle |
+| `audio_record` | 10 | 110 | UInt8 | int |
+| `voice_channels` | 11 | 111 | UInt8 | int |
+| `gain_adjust_method` | 12 | 112 | Int8 | int |
+| `manual_gain_ev` | 13 | 113 | Int8 | int |
+| `wind_noise_canceller` | 14 | 114 | UInt8 | int |
+| `record_format` | 50 | 150 | UInt8 | int |
+| `cinema_dng_quality` | 51 | 151 | UInt8 | int |
+| `mov_image_quality` | 52 | 152 | UInt8 | int |
+| `movie_resolution` | 60 | 160 | UInt8 | int |
+| `frame_rate` | 61 | 161 | URational | rational |
+
+Legal values come from `GetCamCanSetInfo5` (0x9030), where **the capability tag
+is the movie tag plus 100**. Two settings have no capability tag at all —
+`shutter_unit` (106) and the shutter (107) — so for those there is no declared
+list, and `movie_settings.FALLBACK_CHOICES` supplies `[1, 2]` for
+`shutter_unit` and `capture_mode` from observation instead.
+
+---
+
+## Settings that change other settings
+
+Writing one field can move another. Everything below was observed on the camera;
+where it was not, it says so. Read this before hand-rolling any write sequence —
+six orderings were tried through the raw protocol before the pattern was clear.
+
+### Verified
+
+| Writing | Also changes | Control that showed it |
+|---|---|---|
+| `capture_mode` (STILL/CINE) | `shutter_unit`, and the whole capability set | Capability lists swap wholesale; noted in `movie_settings` |
+| `record_format` (CinemaDNG/MOV) | `cinema_dng_quality` | Camera adjusts it itself; read back after writing |
+| `frame_rate` | shutter | Wrote 29.97 after setting 1/60; shutter became 1/25 |
+| shutter | `frame_rate` | Wrote shutter through movie tag 7; frame rate fell back to 23.98 |
+| `shutter_unit` | what movie tag 7 *means* | In angle mode tag 7 is angle×10; in speed mode its numerator is the shutter's APEX code — read back `(112, 3600)` while DataGroup1 independently said code 112 = 1/125 |
+| lens change | focus range, capabilities | 45mm travel 5974–11116, 28mm travel 3168–14296 |
+| `ConfigApi` (0x9035) | resets settings to defaults | A fresh session is not in Manual exposure even if the body was |
+
+### Preconditions — the write returns 0x2001 and nothing happens
+
+| Field | Only writable when | What it looks like otherwise |
+|---|---|---|
+| `shutter_speed` | exposure mode is **Manual** (or S) | Returns OK, value never changes |
+| `ISOSpeed` | `iso_auto` is **Manual** | Returns OK; the value even drifts on its own (32 → 43) as the light changes |
+| `shutter_speed` in DataGroup1 | **STILL** mode | In CINE it is accepted and dropped; the shutter lives in movie tag 7 |
+| `FocusArea`, `FaceEyeAF` | an **AF** mode | MF ignores the write and reports OnePointSelection |
+| `FocusPosition` | already in **MF** | The write that *changes* mode out of AF applies the mode and swallows the position |
+
+The shared shape: **the camera owns a field whenever something else is set to
+automatic**, and it says OK anyway. Always read back when a write matters.
+
+### Not verified
+
+- Whether `movie_resolution` (UHD/FHD) restricts the available frame rates. The
+  test is one command: read `CanSetInfo5` tag 161 under each resolution and
+  compare the declared lists.
+- Whether `frame_rate` restricts the available shutter values. `CanSetInfo5`
+  declares no tag for the shutter (107) or for `shutter_unit` (106), so there is
+  no list to compare — which is also why those two are the ones that resist
+  hand-rolled writes.
+
+---
+
+## Call sequences that matter
+
+Taken from what the bridge actually does, not from the SDK docs.
+
+### Connecting
+
+```
+SigmaPTPy()                  open the USB device
+  cam.session().__enter__()  open the PTP session
+  ConfigApi          0x9035  open the vendor API   ← resets settings to defaults
+read focus range             GetCamCanSetInfo5 → travel, point sizes, step
+read capabilities            CanSetInfo5 + DataGroup1..5 + DataGroupMovie
+```
+
+`ConfigApi` is not optional: vendor opcodes before it are not answered. It also
+locks the body controls, and it resets the settings — so anything configured on
+the camera's own menu is gone once a session opens. Configure *inside* the
+session.
+
+Closing is the mirror: `CloseApplication` (0x902F), then the session, then USB.
+Skipping it leaves the body locked.
+
+### Driving focus manually
+
+```
+SetCamDataGroupFocus 0x9032  FocusMode=MF, AFLock=Off, PreConstAF=Off, FocusPosition
+GetCamDataGroupFocus 0x9031  read back
+  position did not land? → write again   (only when leaving AF; see GOTCHAS 1b)
+```
+
+All four fields go in **one** transaction. Any of the three switches left on and
+the camera takes focus back: `PreConstAF` defaults to On and will override the
+position within a frame or two.
+
+### Handing focus back to the camera
+
+```
+SetCamDataGroupFocus 0x9032  FocusMode=AF_S (PreConstAF as wanted)
+SetCamDataGroupFocus 0x9032  FaceEyeAF / FocusArea / DMFPos as wanted
+SnapCommand          0x901B  AFDriveOnly   ← without this nothing moves
+```
+
+Changing the target is not enough. The settings land, the camera reports it can
+see a face, and the lens stays where it was — the AF engine only runs when
+something triggers it. Every change of target needs the trigger.
+
+### Changing settings
+
+```
+GetCamCanSetInfo5    0x9030  what the camera says it accepts, in its own encoding
+SetCamDataGroup1..5  0x9016/17/18/24/28   bitmask groups
+SetCamDataGroupMovie 0x9034  IFD, sparse — untouched tags are left alone
+read back                    always
+```
+
+Send back **the camera's own encoding** from the capability list rather than
+deriving one (`movie_settings._encode_preferring_camera_form`). Hand-derived
+encodings are where the resistant writes come from: the frame rate is declared as
+`(2997, 100)`, and sending an equivalent-but-different rational is not the same
+thing to the camera.
+
+Order, when several settings change together: **mode first, format second,
+frame rate third, shutter last.** The earlier ones move the later ones.
+
+---
+
 ## Live view
 
 `GetViewFrame` (`0x902B`) returns a JPEG. There is no streaming mode: you ask
