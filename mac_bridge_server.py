@@ -239,6 +239,21 @@ class BridgeState:
     #: 事**只能靠讀回**（見 _set_and_readback）。所以只在已經確認過在 MF 之後
     #: 才省，任何可能改變模式的動作都把它清掉。
     known_mf: bool = False
+    #: 影格迴圈的統計。「相機沒給」和「我們排隊太久放棄了」從外面看一模一樣，
+    #: 而修法完全相反 —— 前者改不了，後者是自己丟的。分開數才知道是哪一個。
+    lv_published: int = 0
+    lv_expired: int = 0        # 排隊超過 LIVE_VIEW_STALE_S，沒送 USB
+    lv_empty: int = 0          # 送了 USB 但相機沒給影格
+    lv_error: int = 0
+    #: 抓影格失敗時是什麼例外。這條路徑先前只寫 debug 日誌並睡 200 ms，
+    #: 於是「掉影格」看起來像相機的行為 —— 實際上 16 次例外就是 3.2 秒不抓。
+    lv_error_kinds: dict = field(default_factory=dict)
+    #: 對焦位置：真的送上 USB 幾次、被更新的指令蓋掉幾次。
+    #:
+    #: 合併只在「還在排隊」時生效，而佇列幾乎不積（寫入 0.42 ms，下一筆
+    #: 33 ms 後才來），所以幾乎每一筆都會送出去。要知道實際比例只能數。
+    pos_written: int = 0
+    pos_superseded: int = 0
     last_face_eye_af: str | None = None
     last_face_eye_status: str | None = None
     last_focus_area: str | None = None
@@ -724,8 +739,10 @@ async def cam_set_position(position: int, confirm: bool = True) -> SetPositionRe
         coalesce_key="set_position",
     )
     if isinstance(result, JobSkipped):
+        state.pos_superseded += 1
         log.debug(f"set_position({target}) 被較新的指令取代")
         return SetPositionResult(position, target, applied=False, clamped=clamped)
+    state.pos_written += 1
     if result is not None:
         log.info(
             f"set_position({target}) → readback: "
@@ -906,9 +923,26 @@ async def cam_apply_settings(changes: dict) -> dict:
 
 
 def _grab_view_frame() -> bytes | None:
-    """在 executor 裡跑：sigma-ptpy 回傳 ViewFrame 物件，要取 .Data。"""
-    frame = state.camera.get_view_frame()
-    return frame.Data if frame is not None else None
+    """在 executor 裡跑：sigma-ptpy 回傳 ViewFrame 物件，要取 .Data。
+
+    **相機沒有影格時不是錯誤。** sigma-ptpy 的文件寫著：能準備好 LiveView 就
+    傳影像，「否則傳的資料代表找不到目標影像」。那種回應解析出來的物件沒有
+    .Data，於是 AttributeError —— 而先前那個例外會走到 `except Exception`，
+    睡 200 毫秒。
+
+    實測那個 sleep 就是「對焦時掉影格」的全部成因：對焦寫入 10/秒 時，15 秒內
+    17 次例外 × 200 ms = 3.4 秒不抓，而掉的正好是 105 張（3.5 秒份）。不是相機
+    扣住影格，是我們自己停下來。
+
+    AttributeError 可能在這裡丟，也可能在 sigma-ptpy 的 __recv 裡（它也讀
+    response.Data），所以在這一層擋。回 None 之後迴圈只會走正常的節流，
+    下一輪立刻再問一次。
+    """
+    try:
+        frame = state.camera.get_view_frame()
+    except AttributeError:
+        return None                      # 相機說：這次沒有影格
+    return getattr(frame, "Data", None) if frame is not None else None
 
 
 async def try_connect_camera() -> bool:
@@ -1090,14 +1124,21 @@ async def liveview_loop():
             await asyncio.sleep(0.2)
             continue
         except Exception as e:
-            log.debug(f"live view 取得失敗：{e}")
+            state.lv_error += 1
+            kind = f"{type(e).__name__}: {str(e)[:80]}"
+            state.lv_error_kinds[kind] = state.lv_error_kinds.get(kind, 0) + 1
+            log.warning(f"live view 取得失敗（第 {state.lv_error} 次）：{kind}")
             await asyncio.sleep(0.2)
             continue
 
         if isinstance(result, JobSkipped):
+            state.lv_expired += 1
             continue  # 排太久，直接抓下一張新的
         if result:
+            state.lv_published += 1
             frames.publish(result)
+        else:
+            state.lv_empty += 1      # 相機沒給
 
         # 節流，不是延遲。先前這裡直接 sleep(LIVE_VIEW_INTERVAL_S)，那是加在
         # 取得時間**之後** —— 每輪變成「PTP 時間 + 40ms」，而不是「至少間隔
@@ -1152,6 +1193,18 @@ async def broadcast_state(extra: dict | None = None) -> None:
         "continuous_af": state.last_continuous_af,
         "focal_length_mm": state.last_lens_focal_mm,
         "focus_range": list(state.focus_range) if state.focus_range else None,
+        # 影格去哪了 —— 讓「相機沒給」和「我們放棄了」分得開
+        "liveview_counts": {
+            "published": state.lv_published,
+            "expired": state.lv_expired,
+            "empty": state.lv_empty,
+            "error": state.lv_error,
+            "error_kinds": dict(state.lv_error_kinds),
+        },
+        "focus_write_counts": {
+            "written": state.pos_written,
+            "superseded": state.pos_superseded,
+        },
         "frame_rate": state.frame_rate,
         "active_lens_id": state.active_lens_id,
     }
@@ -1219,6 +1272,18 @@ async def handle_ws(request: web.Request) -> web.WebSocketResponse:
         "connected": state.camera_connected,
         "active_lens_id": state.active_lens_id,
         "focus_range": list(state.focus_range) if state.focus_range else None,
+        # 影格去哪了 —— 讓「相機沒給」和「我們放棄了」分得開
+        "liveview_counts": {
+            "published": state.lv_published,
+            "expired": state.lv_expired,
+            "empty": state.lv_empty,
+            "error": state.lv_error,
+            "error_kinds": dict(state.lv_error_kinds),
+        },
+        "focus_write_counts": {
+            "written": state.pos_written,
+            "superseded": state.pos_superseded,
+        },
     }))
 
     try:
@@ -1391,6 +1456,18 @@ async def handle_status(request: web.Request) -> web.Response:
         "focus_state": state.last_focus_state,
         "focal_length_mm": state.last_lens_focal_mm,
         "focus_range": list(state.focus_range) if state.focus_range else None,
+        # 影格去哪了 —— 讓「相機沒給」和「我們放棄了」分得開
+        "liveview_counts": {
+            "published": state.lv_published,
+            "expired": state.lv_expired,
+            "empty": state.lv_empty,
+            "error": state.lv_error,
+            "error_kinds": dict(state.lv_error_kinds),
+        },
+        "focus_write_counts": {
+            "written": state.pos_written,
+            "superseded": state.pos_superseded,
+        },
         "active_lens_id": state.active_lens_id,
         "ws_clients": len(state.ws_clients),
     })

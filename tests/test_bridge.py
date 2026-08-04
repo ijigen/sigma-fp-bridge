@@ -527,6 +527,43 @@ async def test_acquire_does_nothing_when_already_connected():
     print("✓ 已連線時 acquire 不碰 USB")
 
 
+async def test_a_frameless_reply_is_not_treated_as_a_failure():
+    """迴歸：相機說「這次沒有影格」，我們卻停下來 200 毫秒。
+
+    sigma-ptpy 的文件寫著：能準備好 LiveView 就傳影像，否則傳的資料代表
+    「找不到目標影像」。那種回應解析出來沒有 .Data，於是 AttributeError，
+    而例外處理睡 200 ms。
+
+    實測那就是「對焦時掉影格」的全部成因：對焦寫入 10/秒 時，15 秒內 17 次
+    例外 × 200 ms = 3.4 秒不抓，掉的正好是 105 張。不是相機扣住影格。
+    """
+    reset()
+    original = CAM.get_view_frame          # 換掉之後一定要還原，
+    try:                                   # 不然後面讀影格的測試會空等到逾時
+        class Frameless:
+            """沒有 Data 的回應 —— 相機說這次沒影格。"""
+
+        CAM.get_view_frame = lambda: Frameless()
+        assert B._grab_view_frame() is None, "沒有影格時應該回 None，不是丟例外"
+
+        class Exploding:
+            @property
+            def Data(self):
+                raise AttributeError("Data")   # sigma-ptpy 內部丟的情況
+
+        CAM.get_view_frame = lambda: Exploding()
+        assert B._grab_view_frame() is None, "例外在下層丟出時也要擋住"
+
+        class Good:
+            Data = b"jpeg"
+
+        CAM.get_view_frame = lambda: Good()
+        assert B._grab_view_frame() == b"jpeg"
+    finally:
+        CAM.get_view_frame = original
+    print("✓ 相機回「沒有影格」不算失敗，不會觸發退避")
+
+
 async def test_readback_is_skipped_only_when_the_mode_is_known():
     """讀回要 0.90 ms，寫入本身只要 0.42 ms —— 確認比動作貴一倍。
 
