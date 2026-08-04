@@ -659,6 +659,57 @@ re-metering. A gap between runs was read as a change within one.
 No case has been seen where the camera takes back a written ISO. If it happens,
 it needs a different provocation than any tried here.
 
+### The full dependency map
+
+Every setting with two or more choices was swept: change it, then diff **all**
+other values and **all** other choice lists. Run in Manual exposure with Manual
+ISO so the camera is not re-metering underneath, and preceded by a null control
+— snapshot twice while changing nothing — which came back empty, so anything the
+sweep reports is caused by the write.
+
+**Restrictions — X changes what Y is allowed to be:**
+
+| Setting | Restricts |
+|---|---|
+| `capture_mode` | eighteen lists; STILL and CINE are different instruments |
+| `record_format` | `frame_rate`, `cinema_dng_quality`, `mov_image_quality` |
+| `movie_resolution` | `frame_rate` |
+| `shutter_unit` | which of `shutter_angle` / `shutter_speed` has a list at all |
+| `exposure_mode` | `exposure_compensation`; and who owns shutter and aperture |
+| `electronic_stabilization` | **`iso`: 100–25600 becomes 100–6400 when on** |
+
+The stabiliser one has a physical reading: EIS crops and adds processing, and the
+sensor readout modes that reach 12800 and 25600 are not available in that state.
+
+**Coercions — X changes Y's value:**
+
+| Setting | Changes |
+|---|---|
+| `exposure_mode` | `shutter_angle`, `shutter_speed` |
+| `iso_auto` | `iso` |
+| `shutter_unit` | `shutter_speed` |
+| `capture_mode` | `aspect_ratio`, `resolution`, `shutter_speed`, `shutter_unit`, `iso` |
+| `movie_resolution`, `record_format` | `frame_rate`, when the current rate is no longer legal |
+
+**Not a dependency: `exposure_compensation` in Manual is a meter reading.**
+
+It appeared to move with twelve different settings, which is what a dependency
+looks like from a diff. It is not one. In Manual the field reports the deviation
+between the metered exposure and the one dialled in — the needle. Closing the
+aperture drives it negative, raising ISO drives it back:
+
+```
+f/1.4 ISO 125   −3.30
+f/2.0 ISO 125   −4.00      stop down → more negative
+f/2.8 ISO 125   −4.30      clamped near the end of the range
+f/2.8 ISO 200   −4.00      ISO up → back toward zero
+f/2.8 ISO 400   −3.30
+```
+
+Anything that changes exposure moves it. Reading that as "twelve settings depend
+on each other" would have been wrong in a way no amount of care with the
+measurement would catch — only knowing what the field means catches it.
+
 ### Not verified
 
 - Whether the camera eventually overrides a written ISO while `iso_auto` is Auto.
