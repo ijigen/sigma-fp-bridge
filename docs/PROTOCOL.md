@@ -324,16 +324,33 @@ Tags are decimal:
 Tags 10–14 and 62 were identified through the relationship in the next section,
 not from documentation.
 
-**In CINE the shutter is set by angle.** Writing `ShutterSpeed` in DataGroup1
-is accepted and then silently dropped. Convert: `seconds = angle / (360 × fps)`.
+**In CINE, `shutter_unit` (movie tag 6) decides which shutter field is live.**
+Measured in CINE with Manual exposure, writing a value taken from the camera's
+own declared list:
 
-Three corrections to that, all measured:
+| `shutter_unit` | `shutter_speed` | `shutter_angle` |
+|---|---|---|
+| 1 — speed | 61 choices, writes land | no list |
+| 2 — angle | no list | 18 choices, writes land |
 
-**`shutter_unit` (movie tag 6) changes what tag 7 holds.** In angle mode (2) it
-is the angle × 10, as documented. In speed mode (1) the numerator is the
-**shutter's APEX code** instead — read back as `(112, 3600)` while DataGroup1
-independently reported code 112 = 1/125. Decoding tag 7 as an angle regardless of
-the unit produces nonsense (11.2°); the bridge currently does this.
+An earlier version of this section said the shutter is *always* set by angle in
+CINE and that `ShutterSpeed` in DataGroup1 is silently dropped. That is only true
+in angle mode. In speed mode DataGroup1 carries the shutter exactly as it does in
+STILL.
+
+The claim came from comparing STILL against CINE and seeing `shutter_speed` offer
+61 choices in one and none in the other — but `shutter_unit` was in angle mode on
+the CINE side. Two variables moved and the result was credited to the wrong one.
+
+**No list is not the same as not writable.** They fail identically from the
+outside: the write returns 0x2001 and nothing happens. Check which field has a
+list before deciding a write is being refused.
+
+**`shutter_unit` also changes what tag 7 holds.** In angle mode it is the
+angle × 10. In speed mode the numerator is the **shutter's APEX code** — read back
+as `(112, 3600)` while DataGroup1 independently reported code 112 = 1/125.
+Decoding tag 7 as an angle regardless of the unit produces nonsense (11.2°); the
+bridge currently does this.
 
 **Manual (or Shutter Priority) is a precondition for setting the shutter at
 all.** In P or A mode the camera owns it: the write returns 0x2001 and the value
@@ -763,10 +780,18 @@ read focus range             GetCamCanSetInfo5 → travel, point sizes, step
 read capabilities            CanSetInfo5 + DataGroup1..5 + DataGroupMovie
 ```
 
-`ConfigApi` is not optional: vendor opcodes before it are not answered. It also
-locks the body controls, and it resets the settings — so anything configured on
-the camera's own menu is gone once a session opens. Configure *inside* the
-session.
+`ConfigApi` is not optional: vendor opcodes before it are not answered, and it
+locks the body controls.
+
+**Settings live inside the session.** When it closes, the camera returns to the
+values on its own menus, so every connection has to configure again. Calling
+`ConfigApi` a second time *within* a session resets nothing — six fields were
+watched across a repeat call and none moved — so the reset people describe is
+what happens on close, not on open.
+
+This is worth holding onto because it makes cross-session comparisons
+meaningless: two probe runs reporting different ISOs look like the camera
+re-metering, and are actually just the session boundary.
 
 Closing is the mirror: `CloseApplication` (0x902F), then the session, then USB.
 Skipping it leaves the body locked.
