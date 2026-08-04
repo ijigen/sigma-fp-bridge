@@ -154,6 +154,31 @@ offset  size  field
               does not fit in four bytes
 ```
 
+Focus geometry lives here, and the range is the part that matters most:
+
+| Tag | Holds | On this body |
+|---|---|---|
+| 658 | **focus position range** | 45mm `5974–11116`, 28mm `3168–14296` |
+| 612 | canvas | `682 × 1024` |
+| 613 | where the box may land | `y 85–597 · x 96–928` |
+| 614 / 615 | how many box sizes, and their dimensions | `3` → `128 · 64 · 32` |
+| 616 | movement step | `32 × 16` under OnePointSelection |
+
+The range is per lens and the two measured bodies do not even share a domain, so
+any hardcoded position constant breaks on a lens change. The bridge re-reads it
+on connect, on regaining control, and whenever the once-a-second focal-length
+poll notices a different lens.
+
+Box sizes and step follow the **focus area**, not the lens: OnePointSelection
+declares three sizes with a 32×16 step, MultiAutoFocusPoints declares four much
+larger ones with a step of 0 and pins the coordinate to the centre — writing
+`[200, 300]` there reads back `[340, 512]`. Reading sizes while in multi-point
+and drawing them is how a focus marker ends up covering half the frame.
+
+One reading of the step came back `64 × 112`, under a focus area that was not
+checked first, and nine subsequent reads were all `32 × 16`. Recorded because it
+happened, not because it is a rule.
+
 **Tags in the SDK documentation are decimal, not hexadecimal.** This costs an
 afternoon if you assume otherwise: every tag you look up lands on a plausible
 but wrong field, and the camera answers plausibly to all of them.
