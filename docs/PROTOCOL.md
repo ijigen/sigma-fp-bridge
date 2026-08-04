@@ -307,11 +307,11 @@ is the angle × 10, as documented. In speed mode (1) the numerator is the
 independently reported code 112 = 1/125. Decoding tag 7 as an angle regardless of
 the unit produces nonsense (11.2°); the bridge currently does this.
 
-**Manual exposure mode is a precondition for setting the shutter at all.** In P
-mode the camera owns it: the write returns 0x2001 and the value never changes.
-The same trap as writing `ISOSpeed` while ISO is on Auto — the command succeeds
-and the field belongs to someone else. `ConfigApi` resets the camera to its
-defaults, so a fresh session is *not* in Manual.
+**Manual (or Shutter Priority) is a precondition for setting the shutter at
+all.** In P or A mode the camera owns it: the write returns 0x2001 and the value
+never changes. See the exposure-mode table below for which field each mode
+leaves to you. `ConfigApi` resets the camera to its defaults, so a fresh session
+is *not* in Manual — configure inside the session.
 
 **Frame rate and shutter overwrite each other.** Writing the frame rate coerces
 the shutter to suit it (1/60 became 1/25 after a 29.97 write); writing the
@@ -575,40 +575,98 @@ Writing one field can move another. Everything below was observed on the camera;
 where it was not, it says so. Read this before hand-rolling any write sequence —
 six orderings were tried through the raw protocol before the pattern was clear.
 
-### Verified
+### What restricts what
 
-| Writing | Also changes | Control that showed it |
-|---|---|---|
-| `capture_mode` (STILL/CINE) | `shutter_unit`, and the whole capability set | Capability lists swap wholesale; noted in `movie_settings` |
-| `record_format` (CinemaDNG/MOV) | `cinema_dng_quality` | Camera adjusts it itself; read back after writing |
-| `frame_rate` | shutter | Wrote 29.97 after setting 1/60; shutter became 1/25 |
-| shutter | `frame_rate` | Wrote shutter through movie tag 7; frame rate fell back to 23.98 |
-| `shutter_unit` | what movie tag 7 *means* | In angle mode tag 7 is angle×10; in speed mode its numerator is the shutter's APEX code — read back `(112, 3600)` while DataGroup1 independently said code 112 = 1/125 |
-| lens change | focus range, capabilities | 45mm travel 5974–11116, 28mm travel 3168–14296 |
-| `ConfigApi` (0x9035) | resets settings to defaults | A fresh session is not in Manual exposure even if the body was |
+Measured by writing each setting and reading the camera's declared choice lists
+back. The schema endpoint re-reads capabilities before answering, so these lists
+are live, not cached.
 
-### Preconditions — the write returns 0x2001 and nothing happens
+**Recording format and resolution each restrict the frame rate, and they stack:**
 
-| Field | Only writable when | What it looks like otherwise |
-|---|---|---|
-| `shutter_speed` | exposure mode is **Manual** (or S) | Returns OK, value never changes |
-| `ISOSpeed` | `iso_auto` is **Manual** | Returns OK; the value even drifts on its own (32 → 43) as the light changes |
-| `shutter_speed` in DataGroup1 | **STILL** mode | In CINE it is accepted and dropped; the shutter lives in movie tag 7 |
-| `FocusArea`, `FaceEyeAF` | an **AF** mode | MF ignores the write and reports OnePointSelection |
-| `FocusPosition` | already in **MF** | The write that *changes* mode out of AF applies the mode and swallows the position |
+| Format | Resolution | Frame rates offered | DNG bit depth |
+|---|---|---|---|
+| CinemaDNG | FHD | 23.98, 25, 29.97, 50, 59.94 | 12 / 10 / 8 |
+| CinemaDNG | UHD | 23.98, 25 | **not adjustable** |
+| MOV | FHD | 23.98, 25, 29.97, 50, 59.94, **100, 111.98** | 12 / 10 / 8 |
+| MOV | UHD | 23.98, 25, 29.97 | 12 / 10 / 8 |
 
-The shared shape: **the camera owns a field whenever something else is set to
-automatic**, and it says OK anyway. Always read back when a write matters.
+UHD is stricter than FHD, CinemaDNG is stricter than MOV, and the two combine —
+CinemaDNG at UHD leaves only 23.98 and 25. The high-speed rates exist only in
+MOV at FHD. (MOV still reports a DNG bit depth; it means nothing in that format.)
+
+**Choosing a rate that the next mode cannot offer loses it.** Set 59.94 at FHD,
+switch to UHD, and the camera does not fall back to the nearest legal rate
+(29.97) — it drops to 23.98.
+
+**STILL ↔ CINE swaps the whole instrument.** Eighteen capability lists change:
+
+```
+STILL only   aspect_ratio(7) color_space(3) drive_mode(4) hdr(6) image_quality(5)
+             resolution(3) dng_quality(2) tone_effect(2) high_iso_ext(3)
+             cont_shoot_speed(3)   shutter_speed(61)
+CINE only    frame_rate(5) movie_resolution(2) record_format(2)
+             cinema_dng_quality(3) shutter_unit(2)
+both, differ exposure_compensation 19 → 31,  shutter_angle 18 → 10
+```
+
+The camera also rewrites five values on the way across: `aspect_ratio`
+(16:9 → 3:2), `resolution`, `shutter_speed`, `shutter_unit` (2 → 1) and, with ISO
+on auto, the ISO itself.
+
+`shutter_speed` offering **61 choices in STILL and none in CINE** is the cleanest
+statement of the rule that cost the most time to find: in CINE the shutter is not
+in DataGroup1 at all, and the camera does not even claim it is.
+
+**Exposure mode decides who owns the shutter and the aperture.** Tested by
+writing a value taken from the camera's own list, in CINE:
+
+| Exposure mode | shutter | aperture | ISO |
+|---|---|---|---|
+| Manual | ✓ | ✓ | ✓ |
+| ShutterPriority | ✓ | ✗ | ✓ |
+| AperturePriority | ✗ | ✓ | ✓ |
+| ProgramAuto | ✗ | ✗ | ✓ |
+
+Exactly what the mode names promise. Writes to a field the camera owns return
+0x2001 and change nothing.
+
+**`shutter_unit` decides which shutter field has a list at all.** In angle mode
+`shutter_angle` has choices and `shutter_speed` has none; in speed mode it is the
+other way round. *No list* and *not writable* are different failures, and
+confusing them is why hand-rolled shutter writes kept failing — they were aimed
+at the field that had no list.
+
+### Corrected: ISO is not owned by the camera
+
+An earlier version of this document said `ISOSpeed` is only writable when
+`iso_auto` is Manual, and that the camera overrides it otherwise. **Both claims
+are wrong.** Writing ISO 400 landed and stayed in all four combinations of
+exposure mode × ISO auto, including after forcing a full stop of exposure change
+by moving the shutter angle — which would have made an active auto-ISO recompute:
+
+| Exposure mode | `iso_auto` | after write | after 8 s | after forced re-meter |
+|---|---|---|---|---|
+| ProgramAuto | Auto | 400 | 400 | — |
+| ProgramAuto | Manual | 400 | 400 | — |
+| Manual | Auto | 400 | 400 | 400 |
+| Manual | Manual | 400 | 400 | 400 |
+
+What the earlier claim actually rested on was an ISO of 32 in one probe run and
+43 in the next. Those were **two different sessions**, and `ConfigApi` resets the
+settings when a session opens — so that difference is the reset, not the camera
+re-metering. A gap between runs was read as a change within one.
+
+No case has been seen where the camera takes back a written ISO. If it happens,
+it needs a different provocation than any tried here.
 
 ### Not verified
 
-- Whether `movie_resolution` (UHD/FHD) restricts the available frame rates. The
-  test is one command: read `CanSetInfo5` tag 161 under each resolution and
-  compare the declared lists.
+- Whether the camera eventually overrides a written ISO while `iso_auto` is Auto.
+  Four seconds of stable light was not enough to provoke it, and there is no way
+  to force a metering change on demand from here.
 - Whether `frame_rate` restricts the available shutter values. `CanSetInfo5`
   declares no tag for the shutter (107) or for `shutter_unit` (106), so there is
-  no list to compare — which is also why those two are the ones that resist
-  hand-rolled writes.
+  no list to compare.
 
 ---
 
